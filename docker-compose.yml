@@ -1,0 +1,67 @@
+services:
+  simulator:
+    build:
+      context: .
+      args:
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+    environment:
+      - DISPLAY=:99
+    command: ["bash", "-c", "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && exec bash"]
+    stdin_open: true
+    tty: true
+
+  simulator-visual:
+    build:
+      context: .
+      args:
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+    profiles: ["visual"]
+    environment:
+      - DISPLAY=${DISPLAY}
+      - XAUTHORITY=/root/.Xauthority
+      - SDL_AUDIODRIVER=pulseaudio
+      - PULSE_SERVER=unix:${XDG_RUNTIME_DIR}/pulse/native
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - ${HOME}/.Xauthority:/root/.Xauthority:ro
+      - ${XDG_RUNTIME_DIR}/pulse:${XDG_RUNTIME_DIR}/pulse:rw
+    network_mode: host
+    stdin_open: true
+    tty: true
+
+  # Windows 11 + WSL2 + Docker Desktop. Run from within a WSL2 distro's shell
+  # (WSLg exports DISPLAY/WAYLAND_DISPLAY/PULSE_SERVER there already) - not
+  # verified against a real Windows machine, see README.
+  simulator-visual-wsl:
+    build:
+      context: .
+      args:
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+    profiles: ["wsl"]
+    environment:
+      - DISPLAY=${DISPLAY}
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
+      - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
+      - PULSE_SERVER=${PULSE_SERVER}
+      - SDL_AUDIODRIVER=pulseaudio
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /mnt/wslg:/mnt/wslg
+    stdin_open: true
+    tty: true
+
+  # Universal fallback: no host display/audio integration of any kind, works
+  # identically on Linux/Windows/macOS via Docker Desktop's normal port
+  # publishing. Video over noVNC in a browser, audio as an MP3 stream.
+  simulator-vnc:
+    build:
+      context: .
+      args:
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+    profiles: ["vnc"]
+    command: ["bash", "/workspace/scripts/run-vnc.sh"]
+    ports:
+      - "6080:6080"
+      - "8000:8000"
+    stdin_open: true
+    tty: true
