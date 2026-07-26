@@ -2,7 +2,7 @@
 
 An MCP server that lets an AI agent play and debug a [Playdate](https://play.date)
 game running in the desktop Simulator: screenshots, button/crank input, game
-state, logs, and save data — for playtesting, debugging, and level design.
+state, logs, and save data for playtesting, debugging, and level design.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full vision and checkpoint
 plan.
