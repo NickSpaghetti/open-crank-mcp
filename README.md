@@ -10,8 +10,9 @@ See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full plan and checkpoints.
 
 ## Status
 
-Checkpoint 1 done: repo and container scaffolding. No server or harness code
-yet.
+Checkpoint 4 done: harnesses, Go server core, and MCP tool registrations
+all work. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for exactly what's
+built and what's left.
 
 ## Requirements
 
@@ -99,18 +100,51 @@ plus a PulseAudio-over-TCP bridge, is real ongoing complexity and slow.
 
 ## Wiring a game into the harness
 
-Not built yet (Checkpoint 2).
+There's no package manager for Playdate projects. `pdc` only ever
+compiles what's physically under your own `Source/` directory, and
+CMake's `add_library`/`add_executable` need locally-relative source
+paths. So integrating either harness is a two-step copy-then-call, not
+just a call:
 
-- Lua games: one `import` line and one per-frame call in `main.lua`.
-- C games: one `#include` and two calls (init and one per-frame) in the
-  `eventHandler`/update callback. C games build through the SDK's own CMake
-  support (`cmake -S . -B build && cmake --build build`, which invokes `pdc`
-  itself as a post-build step). The image already has `cmake` and
-  `build-essential`. No ARM toolchain needed, since this project only
-  targets the Simulator, never real hardware.
-- Hybrid C+Lua games (C for hot loops, Lua for UI, an officially supported
-  pattern) can use the Lua harness alone, since a real Lua VM is still
-  running.
+**Lua games:**
+1. Copy [`lua/mcp_harness.lua`](lua/mcp_harness.lua) into your project's
+   `Source/` directory.
+2. In `main.lua`: `import "mcp_harness"`, then call `mcp.update()` once
+   per frame, normally from `playdate.update()`. See
+   [`lua/test-fixture/Source/main.lua`](lua/test-fixture/Source/main.lua)
+   for a minimal, complete example.
+
+**C games:**
+1. Copy [`c-harness/mcp_harness.h`](c-harness/mcp_harness.h) and
+   [`c-harness/mcp_harness.c`](c-harness/mcp_harness.c) into your
+   project, and add `mcp_harness.c` to your CMakeLists.txt's source list
+   (alongside your own `.c` files, in the same `add_library`/
+   `add_executable` call).
+2. In your `eventHandler`: `#include "mcp_harness.h"`, call
+   `mcp_harness_init(pd)` once on `kEventInit`, and call
+   `mcp_harness_update(pd)` once per frame from your update callback. See
+   [`c-harness/test/fixture-game/`](c-harness/test/fixture-game/) for a
+   minimal, complete example. Note its `src/mcp_harness.{h,c}` are copied
+   in at test time by `internal/contracttest`, not committed there
+   permanently. Copy from the canonical `c-harness/` location instead.
+3. A C game must call `mcp_get_button_state`/`mcp_get_crank_angle`/
+   `mcp_get_crank_change`/`mcp_get_crank_docked` instead of
+   `pd->system->getButtonState`/etc. directly for input overrides to take
+   effect. `pd->system` is genuinely write-protected in memory in the
+   real Simulator, so unlike Lua's harness (which can transparently
+   monkey-patch the mutable `playdate` table), C can't intercept those
+   calls at the source. See the design note in
+   [`c-harness/mcp_harness.h`](c-harness/mcp_harness.h) for why.
+
+Either way, the game builds through the SDK's own CMake support
+(`cmake -S . -B build && cmake --build build`, which invokes `pdc` itself
+as a post-build step) or plain `pdc` for Lua-only projects. The image
+already has `cmake` and `build-essential`. No ARM toolchain needed, since
+this project only targets the Simulator, never real hardware.
+
+**Hybrid C+Lua games** (C for hot loops, Lua for UI, an officially
+supported pattern) can use the Lua harness alone, since a real Lua VM is
+still running.
 
 ## License
 
