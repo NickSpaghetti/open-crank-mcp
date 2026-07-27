@@ -1,0 +1,19 @@
+name: Weekly SDK Sweep
+
+on:
+  schedule:
+    # Sunday 9PM EST = Monday 2AM UTC. GitHub Actions cron always runs in
+    # UTC and doesn't observe DST, so this stays 9PM EST (not EDT) year-round.
+    - cron: '0 2 * * 1'
+  workflow_dispatch: {}
+
+jobs:
+  sdk-contract-check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk_version: ['3.1.1', 'latest']
+    steps:
+      - uses: actions/checkout@v7
+      - run: make sdk-contract-check PLAYDATE_SDK_VERSION=${{ matrix.sdk_version }}

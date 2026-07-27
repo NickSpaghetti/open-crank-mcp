@@ -1,4 +1,29 @@
-FROM ubuntu:24.04
+FROM ubuntu:24.04 AS c-harness-test
+
+ARG PLAYDATE_SDK_VERSION=3.1.1
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    tar \
+    gcc \
+    libc6-dev \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PLAYDATE_SDK_PATH=/opt/playdate-sdk
+RUN curl -fsSL "https://download.panic.com/playdate_sdk/Linux/PlaydateSDK-${PLAYDATE_SDK_VERSION}.tar.gz" -o /tmp/playdate-sdk.tar.gz \
+    && mkdir -p "${PLAYDATE_SDK_PATH}" \
+    && tar -xzf /tmp/playdate-sdk.tar.gz --strip-components=1 -C "${PLAYDATE_SDK_PATH}" \
+       "PlaydateSDK-${PLAYDATE_SDK_VERSION}/C_API" \
+    && rm /tmp/playdate-sdk.tar.gz
+
+WORKDIR /workspace
+COPY c-harness/ ./c-harness/
+COPY scripts/run-c-harness-tests.sh ./scripts/run-c-harness-tests.sh
+
+FROM ubuntu:24.04 AS simulator
 
 ARG PLAYDATE_SDK_VERSION=3.1.1
 ARG GO_VERSION=1.26.5
