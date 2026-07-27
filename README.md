@@ -216,6 +216,12 @@ just a call:
    captures both into `mcp/game_logs.json` automatically; read it back
    with the `get_game_logs` tool rather than `get_logs` (which only sees
    the Simulator process's own OS-level output).
+4. `press_button` synthesizes real button-down/up edges, so
+   `buttonJustPressed`/`buttonJustReleased` and the SDK's
+   `AButtonDown`/`leftButtonDown`/etc callbacks all fire correctly from
+   an MCP-driven press, not just `buttonIsPressed`'s "currently held"
+   bit. `AButtonHeld`/`BButtonHeld` (fired after a continuous 1-second
+   hold) are a separate mechanism and aren't synthesized.
 
 **C games:**
 1. Copy [`c-harness/mcp_harness.h`](c-harness/mcp_harness.h) and
@@ -238,6 +244,10 @@ just a call:
    monkey-patch the mutable `playdate` table), C can't intercept those
    calls at the source. See the design note in
    [`c-harness/mcp_harness.h`](c-harness/mcp_harness.h) for why.
+4. `mcp_get_button_state`'s `pushed`/`released` outputs synthesize real
+   edges from an active override, not just the `current` "currently
+   held" bit - so a game reading `pushed & kButtonA` for a one-shot
+   action (fire, jump) works correctly from an MCP-driven press.
 
 Either way, the game builds through the SDK's own CMake support
 (`cmake -S . -B build && cmake --build build`, which invokes `pdc` itself
@@ -248,32 +258,6 @@ this project only targets the Simulator, never real hardware.
 **Hybrid C+Lua games** (C for hot loops, Lua for UI, an officially
 supported pattern) can use the Lua harness alone, since a real Lua VM is
 still running.
-
-### Verified against real games, not just the fixtures above
-
-The steps above were proven end-to-end against two of the Playdate SDK's
-own bundled examples (not committed into this repo - copy them from your
-own SDK install to try this yourself):
-
-- **`Examples/Asheteroids`** (Lua) - a real Asteroids clone whose controls
-  (turn, thrust, shoot) are implemented entirely through the SDK's
-  button-down/up callbacks (`playdate.leftButtonDown()`,
-  `upButtonDown()`, `BButtonDown()`, etc - "the following functions in
-  your script when input events occur" per the SDK docs), not polling.
-  Wiring in `mcp_harness.lua` and driving it with `press_button` moved
-  the ship's angle, changed its velocity under thrust, and spawned a real
-  bullet sprite - all three controls, confirmed via `get_game_state`/
-  `list_entities` after real MCP tool calls.
-- **`C_API/Examples/Sprite Game`** - a substantial pure-C shooter (551
-  lines). Movement already polled `buttonIsPressed` correctly before any
-  of this; firing needed the `pushed`-bitmask fix, confirmed by watching
-  a real bullet sprite appear via `list_entities` immediately after a
-  `press_button` call.
-
-`AButtonHeld`/`BButtonHeld` (fired after a continuous 1-second hold) are
-a separate mechanism from the up/down edges above and aren't synthesized
-- neither example needed them, and it's called out here rather than
-implied to work.
 
 ## License
 
