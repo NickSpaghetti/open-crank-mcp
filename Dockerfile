@@ -74,6 +74,13 @@ COPY go.mod ./
 RUN go mod download || true
 COPY . .
 
+# Built once here rather than left to `go run .` at connection time - a
+# fresh `--rm` container has no persistent build cache, so `go run .`
+# recompiles from scratch (~7-8s) on every single connection, which is
+# real, noticeable latency/flakiness for anything driving this as an MCP
+# server over stdio (e.g. another project's .mcp.json).
+RUN go build -o /usr/local/bin/open-crank-mcp .
+
 ENV DISPLAY=:99
 # No audio device inside the container. SDL2 (used by PlaydateSimulator)
 # needs an explicit driver or it refuses to start.
