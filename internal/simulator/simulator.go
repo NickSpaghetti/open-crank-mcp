@@ -50,6 +50,7 @@ func Launch(binPath, pdxPath string, extraArgs ...string) (*Simulator, error) {
 		args = extraArgs
 	}
 	cmd := exec.Command(binPath, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	output := &syncBuffer{}
 	cmd.Stdout = output
@@ -62,12 +63,16 @@ func Launch(binPath, pdxPath string, extraArgs ...string) (*Simulator, error) {
 	return &Simulator{cmd: cmd, output: output}, nil
 }
 
-// Stop sends SIGKILL. PlaydateSimulator doesn't exit on SIGTERM.
+// Stop sends SIGKILL to the whole process group. PlaydateSimulator doesn't
+// exit on SIGTERM. Killing the whole group (not just cmd.Process) matters
+// because some shells fork rather than exec the final command in a `-c`
+// script, leaving an orphaned grandchild that would otherwise keep
+// stdout/stderr's pipe open and Wait() blocked until it exits on its own.
 func (s *Simulator) Stop() error {
 	if s.cmd.Process == nil {
 		return nil
 	}
-	if err := s.cmd.Process.Signal(syscall.SIGKILL); err != nil {
+	if err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL); err != nil {
 		return fmt.Errorf("killing simulator: %w", err)
 	}
 	return nil

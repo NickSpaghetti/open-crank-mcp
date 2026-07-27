@@ -122,6 +122,33 @@ func TestWaitForResponseReadsAndDeletes(t *testing.T) {
 	}
 }
 
+func TestWaitForResponseToleratesEmptyFileMidWrite(t *testing.T) {
+	dir := t.TempDir()
+	mcpDir := filepath.Join(dir, "mcp")
+	if err := os.MkdirAll(mcpDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	responsePath := filepath.Join(mcpDir, "response.json")
+
+	// Simulate a non-atomic writer (as every real harness is): the file
+	// exists but is empty for a moment before its content lands.
+	if err := os.WriteFile(responsePath, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = os.WriteFile(responsePath, []byte(`{"id":"1","status":"ok"}`), 0o644)
+	}()
+
+	resp, err := WaitForResponse(dir, 2*time.Second)
+	if err != nil {
+		t.Fatalf("WaitForResponse: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Fatalf("resp = %v, want status=ok", resp)
+	}
+}
+
 func TestWaitForResponseMalformedJSONStillDeletesFile(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
