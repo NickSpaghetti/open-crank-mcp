@@ -55,6 +55,9 @@ jobs:
               - 'lua/**'
               - 'internal/harness/**'
               - 'internal/simulator/**'
+              - 'internal/build/**'
+              - 'internal/screenshot/**'
+              - 'internal/contracttest/**'
       # The job always runs so this required check always resolves. A
       # workflow-level `paths:` trigger would instead leave it permanently
       # pending, and merges blocked, on PRs that don't touch these paths.

@@ -7,13 +7,16 @@ package contracttest
 
 import (
 	"bytes"
+	"image/color"
+	"image/png"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/NickSpaghetti/open-crank-mcp/internal/build"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
+	"github.com/NickSpaghetti/open-crank-mcp/internal/screenshot"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
 )
 
@@ -47,7 +50,7 @@ func TestSDKContract(t *testing.T) {
 	}
 
 	cPdx := buildCFixture(t, repoRoot)
-	luaPdx := buildLuaFixture(t, repoRoot, sdkPath)
+	luaPdx := buildLuaFixture(t, repoRoot)
 
 	t.Run("C harness", func(t *testing.T) {
 		runContractCheck(t, sdkPath, cPdx, "dev.open-crank-mcp.contractcheck")
@@ -124,24 +127,25 @@ func buildCFixture(t *testing.T, repoRoot string) string {
 	copyFile(t, filepath.Join(repoRoot, "c-harness", "mcp_harness.h"), filepath.Join(srcDir, "mcp_harness.h"))
 	copyFile(t, filepath.Join(repoRoot, "c-harness", "mcp_harness.c"), filepath.Join(srcDir, "mcp_harness.c"))
 
-	runCommand(t, fixtureDir, "cmake", "-S", ".", "-B", "build")
-	runCommand(t, fixtureDir, "cmake", "--build", "build")
-
-	return filepath.Join(fixtureDir, "mcp_contract_check.pdx")
+	result, err := build.Build(fixtureDir)
+	if err != nil {
+		t.Fatalf("build.Build: %v\n%s", err, result.Output)
+	}
+	return result.PdxPath
 }
 
-func buildLuaFixture(t *testing.T, repoRoot, sdkPath string) string {
+func buildLuaFixture(t *testing.T, repoRoot string) string {
 	t.Helper()
 	fixtureDir := filepath.Join(repoRoot, "lua", "test-fixture")
 	sourceDir := filepath.Join(fixtureDir, "Source")
 
 	copyFile(t, filepath.Join(repoRoot, "lua", "mcp_harness.lua"), filepath.Join(sourceDir, "mcp_harness.lua"))
 
-	pdxPath := filepath.Join(fixtureDir, "mcp_contract_check_lua.pdx")
-	pdcBin := filepath.Join(sdkPath, "bin", "pdc")
-	runCommand(t, repoRoot, pdcBin, "-sdkpath", sdkPath, sourceDir, pdxPath)
-
-	return pdxPath
+	result, err := build.Build(fixtureDir)
+	if err != nil {
+		t.Fatalf("build.Build: %v\n%s", err, result.Output)
+	}
+	return result.PdxPath
 }
 
 func mustSend(t *testing.T, dataDir string, cmd map[string]any) {
@@ -180,16 +184,41 @@ func assertStateField(t *testing.T, resp map[string]any, field string, want any)
 	}
 }
 
+// assertRawScreenshot checks both the raw dump's size and, decoded, its
+// content. The fixture clears its display to kColorBlack at init and never
+// draws anything else, so the decoded image should be entirely black. This
+// is what pins down internal/screenshot's undocumented bit polarity against
+// the real Simulator, not just self-consistent synthetic input.
 func assertRawScreenshot(t *testing.T, dataDir string) {
 	t.Helper()
 	path := filepath.Join(dataDir, "mcp", "screenshot.raw")
-	info, err := os.Stat(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Errorf("expected raw screenshot at %s: %v", path, err)
 		return
 	}
-	if info.Size() != rawScreenshotSize {
-		t.Errorf("raw screenshot is %d bytes, want %d (LCD_ROWS*LCD_ROWSIZE)", info.Size(), rawScreenshotSize)
+	if int64(len(raw)) != rawScreenshotSize {
+		t.Errorf("raw screenshot is %d bytes, want %d (LCD_ROWS*LCD_ROWSIZE)", len(raw), rawScreenshotSize)
+		return
+	}
+
+	pngBytes, err := screenshot.DecodeRawToPNG(raw)
+	if err != nil {
+		t.Errorf("DecodeRawToPNG: %v", err)
+		return
+	}
+	img, err := png.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		t.Fatalf("png.Decode: %v", err)
+	}
+	bounds := img.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			c := color.GrayModel.Convert(img.At(x, y)).(color.Gray)
+			if c.Y != 0 {
+				t.Fatalf("pixel (%d,%d) = %d, want 0 (black). The fixture clears to kColorBlack and never draws anything else.", x, y, c.Y)
+			}
+		}
 	}
 }
 
@@ -207,16 +236,6 @@ func assertPNGScreenshot(t *testing.T, dataDir string) {
 			got = got[:len(pngMagic)]
 		}
 		t.Errorf("png screenshot at %s does not start with the PNG magic number, got %x", path, got)
-	}
-}
-
-func runCommand(t *testing.T, dir, name string, args ...string) {
-	t.Helper()
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s %v: %v\n%s", name, args, err, out)
 	}
 }
 
