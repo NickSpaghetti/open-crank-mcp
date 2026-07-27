@@ -149,3 +149,62 @@ C, unlike Lua), so `get_logs` already correctly captures C-side print
 debugging. An unhandled C error is a process crash, not a silent freeze -
 already observable via `get_status`/`stop_simulator` showing the process
 gone.
+
+## `setup`'s C teardown had a build-success-but-runtime-broken trap
+
+The first version of `teardown` for C projects deleted `mcp_harness.h`/
+`.c` and stripped `CMakeLists.txt`'s `src/mcp_harness.c` entry
+unconditionally. `CMakeLists.txt` can't use marker comments the way Lua/C
+source files do (a CMake `#` comment runs to end of line, so one placed
+mid-argument-list would comment out the rest of that call), so there was
+no way for `teardown` to tell whether that entry was something it added
+or something a human wrote by hand.
+
+Found by running `teardown` against a copy of missile-command's C port
+(hand-wired before this tool existed, so its harness references predate
+any marker) and then rebuilding: the build **succeeded** - GCC links a
+`SHARED` library with undefined symbols by default (no
+`-Wl,-z,defs`/`--no-undefined`), so a missing `mcp_harness_init`/`_update`
+reference doesn't fail at compile time - but launching the resulting
+`.pdx` and calling `get_status` showed `harness_reachable: false`, and
+every harness-dependent tool (`get_game_state`, `list_entities`) timed
+out. A silent, build-clean runtime break, only visible by actually
+launching the build and making a real MCP tool call against it, not by
+checking `build_game`'s exit code.
+
+**Fixed**: `teardownC` now does a read-only scan first
+(`cHasUnmarkedHarnessReference` in `internal/setup/c.go`) across every
+`.c` file for any harness reference - `#include`, `mcp_harness_init(`,
+`mcp_harness_update(`, or any `mcp_get_*` input call - sitting outside a
+marker block. If it finds one anywhere, `teardown` becomes a complete
+no-op: `CMakeLists.txt`, every marker block, and the harness files are
+all left untouched, rather than attempting a partial removal that could
+land in this same inconsistent state.
+
+## `setup` wired the harness in but never touched a C game's own input calls
+
+Even after `mcp_harness_init`/`mcp_harness_update` were correctly wired
+into a game's `eventHandler`/update callback, a C game's actual gameplay
+code still called `pd->system->getButtonState`/`getCrankAngle`/etc.
+directly, unmodified. Since `pd->system` is write-protected in memory in
+the real Simulator, an active `press_button`/`set_crank` override can
+only take effect through the `mcp_get_*` wrapper functions in
+`mcp_harness.h` - never by intercepting `pd->system` itself.
+
+Found by running `setup` against a fresh, otherwise-untouched copy of
+the SDK's own "Sprite Game" example and driving it with `press_button`:
+`get_status` reported `harness_reachable: true` and background entities
+(enemy planes) animated normally, but the player entity never moved at
+all - proving the harness/game-loop wiring worked while input overrides
+silently did nothing, because nothing had ever replaced the game's own
+raw SDK calls.
+
+**Fixed**: `patchInputCalls` in `internal/setup/c.go` rewrites
+`pd->system->getButtonState(...)` / `getCrankAngle()` / `getCrankChange()`
+/ `isCrankDocked()` to their `mcp_get_*` equivalents, project-wide (not
+just in the eventHandler/update-callback files, since input-reading code
+can live anywhere). This substitution can't be marker-wrapped (same
+constraint as `CMakeLists.txt` - it happens mid-expression, not as a
+whole inserted line), so it's never reversed by `teardown` - see above.
+Confirmed after the fix by re-running the same Sprite Game test:
+`press_button` now moves the player entity correctly.

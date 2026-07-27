@@ -208,21 +208,66 @@ function mcp.registerState(fn)
     stateFn = fn
 end
 
--- Games call this once instead of assigning playdate.update themselves.
--- xpcall guarantees mcp.update() (the harness's own command-polling loop)
--- always runs after the game's frame logic, whether or not that logic
--- threw - so an uncaught error in the game's own code can no longer
--- freeze get_game_state/get_screenshot/list_entities along with it. The
+-- Shared by mcp.run() and the auto-wrap below: xpcall guarantees
+-- mcp.update() (the harness's own command-polling loop) always runs
+-- after the game's frame logic, whether or not that logic threw - so an
+-- uncaught error in the game's own code can no longer freeze
+-- get_game_state/get_screenshot/list_entities along with it. The
 -- traceback lands in the same game_logs.json channel as print() output.
--- Calling mcp.update() manually (the older pattern) still works for
--- backward compatibility, it just doesn't get this protection.
-function mcp.run(gameUpdateFn)
-    playdate.update = function()
-        local ok, err = xpcall(gameUpdateFn, debug.traceback)
+local function wrapUpdate(fn)
+    return function()
+        local ok, err = xpcall(fn, debug.traceback)
         if not ok then
             appendGameLog("error", err)
         end
         mcp.update()
+    end
+end
+
+-- Games can call this once instead of relying on the auto-wrap below,
+-- to be explicit about it. rawset bypasses the __newindex hook below
+-- deliberately - this is already the fully-wrapped function, wrapping it
+-- again would call mcp.update() twice a frame for no benefit.
+function mcp.run(gameUpdateFn)
+    rawset(playdate, "update", wrapUpdate(gameUpdateFn))
+end
+
+-- Auto-wrap, order-independent: a game calling mcp.registerState() (or
+-- any other mcp.* function) needs "import mcp_harness" to come *before*
+-- that call, but wrapping whatever playdate.update already exists only
+-- works if the import comes *after* the game assigns it - those two
+-- requirements can't both be satisfied by import placement alone. A
+-- __newindex hook on the playdate table sidesteps the conflict entirely:
+-- it intercepts the *assignment* itself, whenever and wherever it
+-- happens, so "import mcp_harness" can go anywhere - typically first,
+-- alongside a game's other CoreLibs imports, so mcp.registerState() etc.
+-- work normally throughout the rest of the file.
+
+-- Covers the rare case playdate.update already has a value at the point
+-- this file is imported (nothing else in the SDK sets one by default,
+-- but be defensive). Once raw-set here, the key exists on the table, so
+-- __newindex below won't fire again for it specifically - fine, since
+-- games don't normally reassign playdate.update more than once.
+if rawget(playdate, "update") then
+    rawset(playdate, "update", wrapUpdate(rawget(playdate, "update")))
+end
+
+local playdateMeta = getmetatable(playdate)
+if not playdateMeta then
+    playdateMeta = {}
+    setmetatable(playdate, playdateMeta)
+end
+local previousNewIndex = playdateMeta.__newindex
+playdateMeta.__newindex = function(t, k, v)
+    if k == "update" and type(v) == "function" then
+        v = wrapUpdate(v)
+    end
+    if type(previousNewIndex) == "function" then
+        previousNewIndex(t, k, v)
+    elseif type(previousNewIndex) == "table" then
+        rawset(previousNewIndex, k, v)
+    else
+        rawset(t, k, v)
     end
 end
 
