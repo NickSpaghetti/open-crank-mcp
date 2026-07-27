@@ -208,3 +208,118 @@ constraint as `CMakeLists.txt` - it happens mid-expression, not as a
 whole inserted line), so it's never reversed by `teardown` - see above.
 Confirmed after the fix by re-running the same Sprite Game test:
 `press_button` now moves the player entity correctly.
+
+## The 10ms IPC poll interval wasn't the real latency bottleneck - the Simulator's frame rate was
+
+`docs/ROADMAP.md` always described the Go-side poll interval in
+`internal/harness/ipc.go` (`WaitForFile`/`WaitForDir`/the empty-file retry
+in `WaitForResponse`) as "fast enough relative to the Simulator's own
+frame rate (~30-50fps)" - a stated assumption, never actually measured
+against a real game.
+
+Stress-tested by driving 300 back-to-back `press_button`/`get_game_state`
+round trips (no artificial delay between calls) against three real,
+otherwise-unrelated games: the SDK's own `Asheteroids` (Lua), and both
+ports of the user's own `missile-command` (Lua and C). All three - despite
+being different languages, different codebases, different gameplay -
+converged on nearly identical numbers at the old 10ms interval: median
+~32ms, p95 ~42ms, ~30.2 calls/sec. That consistency across three unrelated
+games is itself the signal: it's not something about any one game's code,
+it's the Simulator's own frame period. None of the three games (nor this
+project's own harnesses or fixtures) ever calls
+`playdate.display.setRefreshRate(...)`, so all three run at whatever the
+Simulator's built-in default is - empirically ~30fps (~33ms/frame) based
+on these numbers, confirming the low end of the ROADMAP's old "~30-50fps"
+guess. `mcp.update()` (Lua) / `mcp_harness_update()` (C) only ever check
+for a new command once per frame, so that frame period is a hard floor no
+amount of Go-side poll tuning can cross.
+
+**First change**: lowered the interval from 10ms to 1ms (a single
+`pollInterval` constant in `internal/harness/ipc.go`, previously duplicated
+as three separate magic-number `time.Sleep` calls) and re-ran the identical
+stress test against all three games. The median didn't move (still
+frame-bound, ~33ms) - expected, since the floor is the frame period, not
+this interval - but the tail measurably tightened: p95 dropped from ~42ms
+to ~34ms consistently across all three games, by removing polling-detection
+delay that used to occasionally stack on top of the frame wait.
+
+**Second change, going further**: even at 1ms, the Go side was still
+waking up on a timer and calling `stat()` to ask "yet?" regardless of
+whether anything had actually changed - correct, but wasteful compared to
+just being woken up by the kernel the instant the file actually appears.
+`internal/harness/ipc.go`'s `WaitForFile`/`WaitForDir`/`WaitForResponse`
+now share one `awaitPath` helper built on inotify (via the
+`github.com/fsnotify/fsnotify` dependency) instead of a poll loop: arm a
+watch on the target's parent directory, re-check once to close the
+watch-arming race, then block on `watcher.Events` until a matching event
+fires or the deadline passes. `WaitForResponse`'s "empty-file mid-write"
+tolerance still works the same way, just expressed as its `check` function
+requiring non-empty content rather than mere existence - a `Create` event
+firing before the write lands now correctly falls through to waiting for
+the following `Write` event instead of busy-spinning on "the file exists
+but is empty." Re-running the identical stress test showed latency
+statistically unchanged (still frame-bound, ~33ms median) - expected, this
+change targets wasted CPU wakeups while waiting, not the frame-period
+floor, which no IPC-side change can cross. Zero malformed/dropped responses
+across all three games at either the 10ms poll, the 1ms poll, or the
+inotify-based wait (600 round trips per game, per approach).
+
+One real behavior change worth noting: `WaitForDir`/`WaitForFile` now
+require their target's parent directory to already exist to arm a watch on
+it (inotify watches a directory, not a not-yet-existing path). The one
+caller that could hit this before the parent exists - waiting for the
+Simulator's data directory to first create `mcp/` - falls back to a short
+bootstrap poll (`newWatcherForExistingDir`) purely for that one-time race;
+the actual per-tool-call hot path (`WaitForResponse` waiting on
+`mcp/response.json`) never needs it, since `SendCommand` already creates
+`mcp/` itself before every wait. The stress driver itself isn't committed
+(built around the same uncommitted SDK-example/user-project fixtures every
+other piece of manual verification in this project uses), so these numbers
+are the record of it.
+
+## Concurrent tool calls could cross-talk on the harness's shared IPC files - fixed
+
+While answering a question about whether the IPC wait (above) should be
+blocking or async, tracing through the MCP go-sdk itself
+(`go-sdk@v1.6.1/mcp/server.go:1445`) turned up something more important
+than that question: every tool call except `initialize` is dispatched
+**concurrently** by the SDK's own request handler (`jsonrpc2.Async(ctx)`,
+confirmed against `internal/jsonrpc2/conn.go`'s `handleAsync`) - it does
+not serialize tool calls for us. Nothing in JSON-RPC prevents a client
+from sending a second tool call before the first one's response arrives.
+
+But the harness protocol (`docs/ROADMAP.md`'s IPC section) is
+fixed-filename, single-outstanding-request: one `mcp/command.json` /
+`mcp/response.json` pair per simulator, and `get_screenshot` reads a
+second fixed path afterward (`mcp/screenshot.png` in
+`lua/mcp_harness.lua:397`, `mcp/screenshot.raw` in
+`c-harness/mcp_harness.c:459/465`). `internal/tools/server.go`'s
+`roundTrip` only held its mutex for the brief `dataDir`/`nextID` read, not
+across the actual `SendCommand`/`WaitForResponse` exchange - so two
+concurrent tool calls could genuinely race on those shared files.
+
+Confirmed against real games, not just a synthetic test: firing 10
+concurrent `get_screenshot` calls against a freshly-wired Asheteroids,
+missile-command (Lua), and missile-command (C) all showed the exact same
+symptom - all 10 requests came back with **identical** image bytes, when
+the game state is visibly changing at ~30fps and 10 real, distinct frames
+were expected. A concurrent `press_button`/`get_game_state` batch
+separately produced outright timeouts (one call's response silently
+consumed by another, leaving the first waiting until `responseTimeout`).
+A Go-level regression test (`internal/tools/concurrency_test.go`,
+`TestRoundTripConcurrentCallsDoNotCrossTalk`) reproduced the same
+cross-talk and timeouts 10/10 runs against a looping fake harness that
+echoes each command's own `id` back.
+
+**Fixed**: a dedicated `harnessMu sync.Mutex` on `Server`
+(`internal/tools/server.go`) now serializes every interaction with the
+harness's shared channel, not just the struct-field read `s.mu` already
+guarded. `roundTrip` locks `harnessMu` for its own duration; `getScreenshot`
+(`internal/tools/screenshot.go`) locks it itself around its *entire* body
+(round trip plus the fixed-path file read afterward) via an unexported
+`roundTripLocked`, since the screenshot race needed the critical section
+extended past the round trip itself, not just covering it. Confirmed fixed
+both ways: the Go test now passes 20/20 runs under `-race`, and re-running
+the same concurrent batch against all three real games produced 10/10
+distinct screenshots and zero timeouts, where before it was 1/10 distinct
+and multiple timeouts.

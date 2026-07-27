@@ -81,3 +81,44 @@ func startFakeHarness(t *testing.T, dataDir string, resp map[string]any) {
 		}
 	}()
 }
+
+// startEchoingFakeHarness continuously watches dataDir/mcp/command.json and,
+// for each one seen, echoes its "id" field back as response.json before
+// deleting the command file - unlike startFakeHarness's single canned
+// response, this handles many command/response cycles, needed to exercise
+// concurrent roundTrip calls against the same fixed filenames. A short sleep
+// before writing the response widens the window a missing lock would need to
+// actually race in. Runs until the test finishes.
+func startEchoingFakeHarness(t *testing.T, dataDir string) {
+	t.Helper()
+	mcpDir := filepath.Join(dataDir, "mcp")
+	cmdPath := filepath.Join(mcpDir, "command.json")
+	respPath := filepath.Join(mcpDir, "response.json")
+
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			b, err := os.ReadFile(cmdPath)
+			if err != nil || len(b) == 0 {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			var cmd map[string]any
+			if err := json.Unmarshal(b, &cmd); err != nil {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			_ = os.Remove(cmdPath)
+			time.Sleep(time.Millisecond)
+			respBytes, _ := json.Marshal(map[string]any{"status": "ok", "id": cmd["id"]})
+			_ = os.WriteFile(respPath, respBytes, 0o644)
+		}
+	}()
+}

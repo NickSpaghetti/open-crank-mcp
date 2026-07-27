@@ -3,6 +3,7 @@ module github.com/NickSpaghetti/open-crank-mcp
 go 1.26.5
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 )

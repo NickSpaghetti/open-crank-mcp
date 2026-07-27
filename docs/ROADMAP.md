@@ -383,14 +383,23 @@ Tools exposed:
   file access to `Disk/Data/<bundleID>/`. No harness round-trip needed.
 - `get_status()`: simulator running? bundleID? harness reachable?
 
-IPC mechanism: the Go side writes a fixed `mcp/command.json`, then polls
-(short ticker, every 10ms) for a fixed `mcp/response.json` to appear, reads
-and deletes it. This is a synchronous, one-request-at-a-time protocol -
-fixed filenames rather than per-request ones, with the `id` field *inside*
-the JSON correlating a response to the request that produced it (so a
-stale leftover response from a previous run is easy to detect and ignore).
-Simple, cross-platform, fast enough relative to the Simulator's own frame
-rate (~30-50fps).
+IPC mechanism: the Go side writes a fixed `mcp/command.json`, then waits
+for a fixed `mcp/response.json` to appear, reads and deletes it. This is a
+synchronous, one-request-at-a-time protocol - fixed filenames rather than
+per-request ones, with the `id` field *inside* the JSON correlating a
+response to the request that produced it (so a stale leftover response
+from a previous run is easy to detect and ignore). Simple, cross-platform,
+and no longer just assumed fast enough relative to the Simulator's own
+frame rate - actually stress-tested against three real games (see
+`docs/GOTCHAS.md`), which found the Simulator's own ~30fps frame period,
+not the wait mechanism, is what dominates round-trip latency. The wait
+itself (`internal/harness/ipc.go`'s `WaitForFile`/`WaitForDir`/
+`WaitForResponse`) is inotify-based (via `github.com/fsnotify/fsnotify`),
+not a poll loop - it was a 100ms poll, tightened to 10ms, then to 1ms, then
+replaced with blocking on a real filesystem notification, none of which
+moved the median (still frame-bound, ~33ms) since none of them can cross
+that floor, but each step removed wasted CPU wakeups/detection delay spent
+asking "yet?" instead of being told.
 
 ## Checkpoints
 
