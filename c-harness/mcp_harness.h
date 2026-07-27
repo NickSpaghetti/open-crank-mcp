@@ -11,7 +11,8 @@ typedef enum {
     MCP_CMD_RELEASE,
     MCP_CMD_CRANK,
     MCP_CMD_STATE,
-    MCP_CMD_PING
+    MCP_CMD_PING,
+    MCP_CMD_ENTITIES
 } McpCommandType;
 
 typedef struct {
@@ -34,6 +35,14 @@ typedef struct {
     int height;
     int row_bytes;
     char state[4096];
+    /* Raw JSON array string, built by mcp_build_entities_json. Empty means
+       "not requested", matching how an empty state means the same thing. */
+    char entities[8192];
+    /* Always false for this harness: querySpritesInRect (the only bulk
+       sprite query the C API has) only matches sprites with a collide
+       rect set, so this can never be a complete list the way Lua's
+       getAllSprites() is. See mcp_build_entities_json. */
+    int entities_complete;
 } McpResponse;
 
 typedef struct {
@@ -86,6 +95,12 @@ int mcp_button_index(PDButtons button);
 void mcp_harness_init(PlaydateAPI *pd);
 void mcp_harness_update(PlaydateAPI *pd);
 void mcp_harness_register_state(const char *(*fn)(void));
+
+/* Builds a JSON array of every sprite querySpritesInRect finds over the
+   full screen rect (only sprites with a collide rect set - see the
+   entities_complete comment on McpResponse) into out. Returns the
+   written length, or -1 if it didn't fit. */
+int mcp_build_entities_json(PlaydateAPI *pd, char *out, size_t out_len);
 
 void mcp_get_button_state(PlaydateAPI *pd, PDButtons *current, PDButtons *pushed, PDButtons *released);
 float mcp_get_crank_angle(PlaydateAPI *pd);

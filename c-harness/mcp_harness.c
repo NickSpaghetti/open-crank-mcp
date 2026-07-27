@@ -195,6 +195,7 @@ static McpCommandType mcp_command_type_from_string(const char *s)
     if (strcmp(s, "crank") == 0)      return MCP_CMD_CRANK;
     if (strcmp(s, "state") == 0)      return MCP_CMD_STATE;
     if (strcmp(s, "ping") == 0)       return MCP_CMD_PING;
+    if (strcmp(s, "entities") == 0)   return MCP_CMD_ENTITIES;
     return MCP_CMD_UNKNOWN;
 }
 
@@ -259,21 +260,16 @@ int mcp_format_response(const McpResponse *r, char *buf, size_t buflen)
     if (mcp_json_escape_string(r->path, path_esc, sizeof(path_esc)) < 0) return -1;
 
     const char *format_str = (r->path[0] == '\0') ? "none" : (r->is_raw_screenshot ? "raw" : "png");
+    const char *state_json = (r->state[0] == '\0') ? "null" : r->state;
+    const char *entities_json = (r->entities[0] == '\0') ? "null" : r->entities;
 
-    int n;
-    if (r->state[0] == '\0') {
-        n = snprintf(buf, buflen,
-            "{\"id\":\"%s\",\"status\":\"%s\",\"error\":\"%s\",\"format\":\"%s\","
-            "\"path\":\"%s\",\"width\":%d,\"height\":%d,\"row_bytes\":%d,\"state\":null}",
-            id_esc, r->ok ? "ok" : "error", error_esc, format_str,
-            path_esc, r->width, r->height, r->row_bytes);
-    } else {
-        n = snprintf(buf, buflen,
-            "{\"id\":\"%s\",\"status\":\"%s\",\"error\":\"%s\",\"format\":\"%s\","
-            "\"path\":\"%s\",\"width\":%d,\"height\":%d,\"row_bytes\":%d,\"state\":%s}",
-            id_esc, r->ok ? "ok" : "error", error_esc, format_str,
-            path_esc, r->width, r->height, r->row_bytes, r->state);
-    }
+    int n = snprintf(buf, buflen,
+        "{\"id\":\"%s\",\"status\":\"%s\",\"error\":\"%s\",\"format\":\"%s\","
+        "\"path\":\"%s\",\"width\":%d,\"height\":%d,\"row_bytes\":%d,\"state\":%s,"
+        "\"entities\":%s,\"entities_complete\":%s}",
+        id_esc, r->ok ? "ok" : "error", error_esc, format_str,
+        path_esc, r->width, r->height, r->row_bytes, state_json,
+        entities_json, r->entities_complete ? "true" : "false");
     if (n < 0 || (size_t)n >= buflen) return -1;
     return n;
 }
@@ -316,6 +312,40 @@ void mcp_harness_init(PlaydateAPI *pd)
 void mcp_harness_register_state(const char *(*fn)(void))
 {
     g_state_fn = fn;
+}
+
+int mcp_build_entities_json(PlaydateAPI *pd, char *out, size_t out_len)
+{
+    int count = 0;
+    LCDSprite **sprites = pd->sprite->querySpritesInRect(0, 0, LCD_COLUMNS, LCD_ROWS, &count);
+
+    size_t o = 0;
+    if (out_len < 2) return -1;
+    out[o++] = '[';
+
+    for (int i = 0; i < count; i++) {
+        LCDSprite *s = sprites[i];
+        PDRect bounds = pd->sprite->getBounds(s);
+        uint8_t tag = pd->sprite->getTag(s);
+        int16_t z = pd->sprite->getZIndex(s);
+        int visible = pd->sprite->isVisible(s);
+
+        char entry[192];
+        int n = snprintf(entry, sizeof(entry),
+            "%s{\"tag\":%d,\"class_name\":\"\",\"x\":%.2f,\"y\":%.2f,"
+            "\"width\":%.2f,\"height\":%.2f,\"z_index\":%d,\"visible\":%s}",
+            (i == 0) ? "" : ",", (int)tag, (double)bounds.x, (double)bounds.y,
+            (double)bounds.width, (double)bounds.height, (int)z,
+            visible ? "true" : "false");
+        if (n < 0 || (size_t)n >= sizeof(entry)) return -1;
+        if (o + (size_t)n >= out_len - 1) return -1;
+        memcpy(out + o, entry, (size_t)n);
+        o += (size_t)n;
+    }
+
+    out[o++] = ']';
+    out[o] = '\0';
+    return (int)o;
 }
 
 void mcp_harness_update(PlaydateAPI *pd)
@@ -375,6 +405,20 @@ void mcp_harness_update(PlaydateAPI *pd)
                 }
                 resp.ok = 1;
                 break;
+            case MCP_CMD_ENTITIES: {
+                int n_entities = mcp_build_entities_json(pd, resp.entities, sizeof(resp.entities));
+                if (n_entities < 0) {
+                    resp.ok = 0;
+                    strncpy(resp.error, "entities list did not fit", sizeof(resp.error) - 1);
+                } else {
+                    resp.ok = 1;
+                }
+                /* Always false: querySpritesInRect only matches sprites
+                   with a collide rect set, so this is never a complete
+                   list the way Lua's getAllSprites() is. */
+                resp.entities_complete = 0;
+                break;
+            }
             case MCP_CMD_SCREENSHOT: {
                 uint8_t *frame = pd->graphics->getDisplayFrame();
                 if (frame) {
@@ -407,7 +451,7 @@ void mcp_harness_update(PlaydateAPI *pd)
 
     pd->file->unlink("mcp/command.json", 0);
 
-    char out_buf[4608];
+    char out_buf[13312]; /* room for the fixed fields plus state[4096] and entities[8192] */
     int len = mcp_format_response(&resp, out_buf, sizeof(out_buf));
     if (len > 0) {
         SDFile *rf = pd->file->open("mcp/response.json", kFileWrite);

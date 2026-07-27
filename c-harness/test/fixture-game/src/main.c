@@ -34,6 +34,22 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg)
         mcp_harness_init(pd);
         mcp_harness_register_state(report_state);
         pd->system->setUpdateCallback(update, NULL);
+
+        /* One sprite with a collide rect, one without - so the entities
+           command's querySpritesInRect approximation has something real
+           to differ on: the collidable one should show up, the decorative
+           one should not. */
+        LCDSprite *collidable = pd->sprite->newSprite();
+        pd->sprite->setSize(collidable, 16, 16);
+        pd->sprite->moveTo(collidable, 50, 60);
+        PDRect collideRect = {0, 0, 16, 16};
+        pd->sprite->setCollideRect(collidable, collideRect);
+        pd->sprite->addSprite(collidable);
+
+        LCDSprite *decorative = pd->sprite->newSprite();
+        pd->sprite->setSize(decorative, 8, 8);
+        pd->sprite->moveTo(decorative, 100, 120);
+        pd->sprite->addSprite(decorative);
     }
     return 0;
 }

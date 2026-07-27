@@ -80,6 +80,31 @@ func TestStopKillsRunningProcess(t *testing.T) {
 	}
 }
 
+func TestOutputIsSafeToReadWhileProcessIsRunning(t *testing.T) {
+	sim, err := Launch("sh", "-c", "while true; do echo tick; done")
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	defer func() {
+		_ = sim.Stop()
+		_ = sim.Wait()
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			_ = sim.Output()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading Output() concurrently with a running process did not complete within 5s")
+	}
+}
+
 func TestStopAfterProcessAlreadyExitedDoesNotError(t *testing.T) {
 	sim, err := Launch("sh", "-c", "true")
 	if err != nil {
