@@ -13,7 +13,14 @@ import (
 type GetScreenshotInput struct{}
 
 func (s *Server) getScreenshot(_ context.Context, _ *mcp.CallToolRequest, _ GetScreenshotInput) (*mcp.CallToolResult, any, error) {
-	resp, err := s.roundTrip(map[string]any{"type": "screenshot"})
+	// Held across the round trip AND the file read below: the screenshot
+	// path (mcp/screenshot.png|raw) is fixed, not per-request, so a second
+	// concurrent get_screenshot call could otherwise overwrite it between
+	// this call's round trip returning and its own os.ReadFile.
+	s.harnessMu.Lock()
+	defer s.harnessMu.Unlock()
+
+	resp, err := s.roundTripLocked(map[string]any{"type": "screenshot"})
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
 		return result, nil, wrapErr

@@ -46,14 +46,26 @@ var errNotRunning = errors.New("simulator not running - call launch_simulator fi
 // calls - which simulator (if any) is running, its data directory, and a
 // counter for correlating harness command IDs. Guarded by mu since it
 // outlives any single tool call.
+//
+// harnessMu is a separate lock serializing any interaction with the
+// harness's shared, fixed-filename IPC channel (mcp/command.json,
+// mcp/response.json, and any fixed path a response references, e.g.
+// mcp/screenshot.png|raw). The MCP go-sdk dispatches tool calls
+// concurrently by default (jsonrpc2.Async, called for every request but
+// "initialize"), but this protocol supports exactly one outstanding
+// request at a time - without this lock, two concurrent calls can read
+// back each other's responses, or one get_screenshot call can overwrite
+// the fixed screenshot file before another has read it. Always acquired
+// before mu, never after, so there's no lock-ordering risk between them.
 type Server struct {
-	mu       sync.Mutex
-	sdkPath  string
-	sim      *simulator.Simulator
-	pdxPath  string
-	dataDir  string
-	bundleID string
-	nextID   int
+	mu        sync.Mutex
+	harnessMu sync.Mutex
+	sdkPath   string
+	sim       *simulator.Simulator
+	pdxPath   string
+	dataDir   string
+	bundleID  string
+	nextID    int
 }
 
 // NewServer reads PLAYDATE_SDK_PATH from the environment, matching every
@@ -95,6 +107,16 @@ func (s *Server) requireDataDir() (string, error) {
 // roundTrip sends cmd through the harness and waits for its response.
 // Adds a unique id to cmd, overwriting any caller-supplied one.
 func (s *Server) roundTrip(cmd map[string]any) (map[string]any, error) {
+	s.harnessMu.Lock()
+	defer s.harnessMu.Unlock()
+	return s.roundTripLocked(cmd)
+}
+
+// roundTripLocked is roundTrip's body, assuming the caller already holds
+// harnessMu. Used directly by handlers (getScreenshot) that need to
+// extend the critical section past the round trip itself, to also cover
+// a subsequent read of a fixed path the response references.
+func (s *Server) roundTripLocked(cmd map[string]any) (map[string]any, error) {
 	s.mu.Lock()
 	if s.sim == nil {
 		s.mu.Unlock()
