@@ -129,6 +129,20 @@ func asBool(v any) bool {
 // RegisterAll wires every tool onto server.
 func RegisterAll(server *mcp.Server, s *Server) {
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "setup",
+		Description: "Wires the MCP harness into a game project: copies mcp_harness.lua (Lua) or mcp_harness.{h,c} " +
+			"(C) in and patches main.lua/CMakeLists.txt/the eventHandler file to call it. Auto-detects Lua, C, or " +
+			"hybrid C+Lua (hybrid only needs the Lua harness - a real Lua VM still drives the update loop) unless " +
+			"language is given explicitly. Safe to re-run. For C, some steps may not be confidently automatable " +
+			"(e.g. finding the right PlaydateAPI pointer inside your update callback) - check manual_steps in the " +
+			"response for anything left to do by hand.",
+	}, s.setupHarness)
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "teardown",
+		Description: "Reverses setup: removes the copied harness file(s) and strips everything setup patched into main.lua/CMakeLists.txt/the eventHandler file.",
+	}, s.teardownHarness)
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "build_game",
 		Description: "Detects a game's project type (C or Lua) and builds it into a .pdx. Returns compile errors and warnings either way.",
 	}, s.buildGame)

@@ -188,7 +188,55 @@ globally) - the same `mcpServers`/`command`/`args` shape as Claude Code:
 }
 ```
 
-## Wiring a game into the harness
+## Setting up a game
+
+Once the server is connected (see above), the fastest way to wire the
+harness into a game is the `setup` tool: call it with `source_dir`
+pointing at your project, and it detects whether the project is Lua, C,
+or a hybrid of both, then copies the harness file(s) in and patches
+`main.lua`/`CMakeLists.txt`/your `eventHandler` for you - no manual glue
+code for most projects. Pass `language` (`"lua"|"c"|"hybrid"`) to
+override detection on the rare project it guesses wrong.
+
+`setup` reports exactly what it did: `files_copied`, `files_patched`, and
+(C only) `manual_steps` for anything it found but couldn't safely
+automate - e.g. no confidently-identifiable `PlaydateAPI*` variable
+reachable from your update callback - rather than guessing. It's
+idempotent: re-running it against an already-set-up project is always
+safe, and each already-current file is reported as unchanged.
+
+The paired `teardown` tool reverses this: strips exactly what `setup`
+added and removes the copied harness files. It's deliberately
+conservative - if it finds any harness reference (an `#include`, a
+`mcp_harness_init`/`_update` call, or, for C, any `mcp_get_*` input call)
+that it can't confidently attribute to its own insertion, it leaves the
+whole project untouched rather than risk a partial, inconsistent
+teardown. In practice this means:
+
+- A project hand-wired before `setup` ever touched it (or edited by hand
+  since) makes `teardown` a full no-op.
+- For C, `setup` also rewrites your own `pd->system->getButtonState`/
+  `getCrankAngle`/`getCrankChange`/`isCrankDocked` calls in place to
+  their `mcp_get_*` equivalents (`pd->system` is write-protected in the
+  real Simulator, so overrides can only take effect through those
+  wrapper functions - see below). That rewrite can't be marked or
+  reversed the way a whole-line insertion can, so once `setup` has
+  touched a C project's input calls, `teardown` for it is permanent from
+  then on - it becomes a no-op rather than leaving input calls pointing
+  at wrapper functions that no longer exist.
+- `CMakeLists.txt` can't use marker comments at all (a CMake `#` comment
+  runs to end of line, so one placed mid-argument-list would comment out
+  the rest of that call) - its `src/mcp_harness.c` source entry is
+  recognized by exact text instead.
+
+Both tools work purely on the filesystem. No simulator needs to be
+running, and neither touches anything outside `source_dir`.
+
+## Wiring a game into the harness by hand
+
+`setup` (above) automates everything below for most projects. What
+follows is what it does under the hood - useful for understanding the
+wiring, resolving a `manual_steps` entry, or wiring a game up yourself.
 
 There's no package manager for Playdate projects. `pdc` only ever
 compiles what's physically under your own `Source/` directory, and
