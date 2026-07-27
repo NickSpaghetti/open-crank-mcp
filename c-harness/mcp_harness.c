@@ -69,27 +69,57 @@ void mcp_override_expire(McpOverrideState *ov, long now_ms)
     }
 }
 
+void mcp_override_update_edges(McpOverrideState *ov, PDButtons real_current)
+{
+    ov->pending_pushed = 0;
+    ov->pending_released = 0;
+    for (int i = 0; i < 6; i++) {
+        int active_now = ov->button_override_active[i];
+        int effective = active_now ? ov->button_override_value[i] : ((real_current & kButtonBits[i]) != 0);
+
+        if (active_now || ov->override_was_active_last_frame[i]) {
+            if (effective && !ov->last_effective_pressed[i]) {
+                ov->pending_pushed |= kButtonBits[i];
+            } else if (!effective && ov->last_effective_pressed[i]) {
+                ov->pending_released |= kButtonBits[i];
+            }
+        }
+        ov->last_effective_pressed[i] = effective;
+        ov->override_was_active_last_frame[i] = active_now;
+    }
+}
+
 void mcp_override_get_button_state(const McpOverrideState *ov,
                                     PDButtons real_current, PDButtons real_pushed, PDButtons real_released,
                                     PDButtons *out_current, PDButtons *out_pushed, PDButtons *out_released)
 {
     PDButtons current = real_current;
+    PDButtons pushed = real_pushed;
+    PDButtons released = real_released;
     for (int i = 0; i < 6; i++) {
-        if (!ov->button_override_active[i]) continue;
-        if (ov->button_override_value[i]) {
-            current |= kButtonBits[i];
-        } else {
-            current &= ~kButtonBits[i];
+        if (ov->button_override_active[i]) {
+            if (ov->button_override_value[i]) {
+                current |= kButtonBits[i];
+            } else {
+                current &= ~kButtonBits[i];
+            }
+        }
+        /* An overridden (or just-was-overridden) button's real
+           pushed/released bit is meaningless - no real hardware edge
+           caused it - so use the synthetic edge from
+           mcp_override_update_edges instead. Untouched buttons pass
+           their real bits through unchanged. */
+        if (ov->button_override_active[i] || ov->override_was_active_last_frame[i]) {
+            pushed &= ~kButtonBits[i];
+            released &= ~kButtonBits[i];
         }
     }
-    /* Pushed/released one-shot edge events are passed through unmodified.
-       Faking precise edges would need to track the previous frame's
-       override value per button; not done here, only "currently held"
-       is overridden. Revisit if a game actually needs edge-accurate
-       overrides. */
+    pushed |= ov->pending_pushed;
+    released |= ov->pending_released;
+
     *out_current = current;
-    *out_pushed = real_pushed;
-    *out_released = real_released;
+    *out_pushed = pushed;
+    *out_released = released;
 }
 
 float mcp_override_get_crank_angle(const McpOverrideState *ov, float real_angle)
@@ -352,6 +382,10 @@ void mcp_harness_update(PlaydateAPI *pd)
 {
     long now_ms = (long)pd->system->getCurrentTimeMilliseconds();
     mcp_override_expire(&g_override, now_ms);
+
+    PDButtons real_current;
+    pd->system->getButtonState(&real_current, NULL, NULL);
+    mcp_override_update_edges(&g_override, real_current);
 
     FileStat st;
     if (pd->file->stat("mcp/command.json", &st) != 0) {

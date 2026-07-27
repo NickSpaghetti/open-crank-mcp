@@ -66,19 +66,34 @@ func SendCommand(dataDir string, cmd map[string]any) error {
 // response doesn't wedge the next poll cycle.
 func WaitForResponse(dataDir string, timeout time.Duration) (map[string]any, error) {
 	path := filepath.Join(dataDir, "mcp", "response.json")
-	if err := WaitForFile(path, timeout); err != nil {
-		return nil, err
-	}
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return nil, fmt.Errorf("timed out after %s waiting for file %s", timeout, path)
+		}
+		if err := WaitForFile(path, remaining); err != nil {
+			return nil, err
+		}
 
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", path, err)
-	}
-	_ = os.Remove(path)
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", path, err)
+		}
+		if len(b) == 0 {
+			// Every harness (Lua, C, and the Go test fake) writes this file
+			// non-atomically - create/truncate, then write the content - so
+			// a poll can land in that gap and see it empty. Keep waiting
+			// instead of treating that as a parse failure.
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		_ = os.Remove(path)
 
-	var resp map[string]any
-	if err := json.Unmarshal(b, &resp); err != nil {
-		return nil, fmt.Errorf("parsing response %q: %w", string(b), err)
+		var resp map[string]any
+		if err := json.Unmarshal(b, &resp); err != nil {
+			return nil, fmt.Errorf("parsing response %q: %w", string(b), err)
+		}
+		return resp, nil
 	}
-	return resp, nil
 }

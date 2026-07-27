@@ -7,6 +7,7 @@ package contracttest
 
 import (
 	"bytes"
+	"encoding/json"
 	"image/color"
 	"image/png"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/screenshot"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
+	"github.com/NickSpaghetti/open-crank-mcp/internal/tools"
 )
 
 const (
@@ -59,16 +61,16 @@ func TestSDKContract(t *testing.T) {
 		// collidable one should show up here, and entities_complete must
 		// be false - proving the approximation's documented limitation is
 		// real, not just a design note.
-		runContractCheck(t, sdkPath, cPdx, "dev.open-crank-mcp.contractcheck", 1, false)
+		runContractCheck(t, sdkPath, cPdx, "dev.open-crank-mcp.contractcheck", 1, false, false)
 	})
 	t.Run("Lua harness", func(t *testing.T) {
 		// getAllSprites() is a true, complete enumeration - both the
 		// fixture's sprites should show up regardless of collide rects.
-		runContractCheck(t, sdkPath, luaPdx, "dev.open-crank-mcp.contractchecklua", 2, true)
+		runContractCheck(t, sdkPath, luaPdx, "dev.open-crank-mcp.contractchecklua", 2, true, true)
 	})
 }
 
-func runContractCheck(t *testing.T, sdkPath, pdxPath, bundleID string, wantEntityCount int, wantEntitiesComplete bool) {
+func runContractCheck(t *testing.T, sdkPath, pdxPath, bundleID string, wantEntityCount int, wantEntitiesComplete, checkGameLogs bool) {
 	t.Helper()
 	dataDir := filepath.Join(sdkPath, "Disk", "Data", bundleID)
 	defer os.RemoveAll(dataDir)
@@ -100,6 +102,23 @@ func runContractCheck(t *testing.T, sdkPath, pdxPath, bundleID string, wantEntit
 
 	mustSend(t, dataDir, map[string]any{"id": "4", "type": "release", "button": "a", "duration_ms": 10000})
 	mustReceive(t, dataDir)
+
+	// a_down_count/a_up_count are persistent counters, not the raw
+	// pushed/released bits (which are one-frame-only and this query is a
+	// separate round trip from the press/release that caused them, so it
+	// usually lands several frames later) - proving press_button now
+	// synthesizes a real edge, not just "currently held", in both
+	// harnesses. See mcp_override_update_edges (C) / updateButtonEdges
+	// (Lua). A short sleep first guarantees this query itself doesn't
+	// land on the exact same frame the release's edge first appears -
+	// the C fixture's own counter increments after mcp_harness_update
+	// returns, so report_state (invoked from inside that same call) would
+	// otherwise sometimes read the counter one increment too early.
+	time.Sleep(300 * time.Millisecond)
+	mustSend(t, dataDir, map[string]any{"id": "4b", "type": "state"})
+	resp = mustReceive(t, dataDir)
+	assertStateField(t, resp, "a_down_count", float64(1))
+	assertStateField(t, resp, "a_up_count", float64(1))
 
 	mustSend(t, dataDir, map[string]any{
 		"id": "5", "type": "crank",
@@ -136,6 +155,66 @@ func runContractCheck(t *testing.T, sdkPath, pdxPath, bundleID string, wantEntit
 	if len(entities) != wantEntityCount {
 		t.Fatalf("entities has %d entries, want %d: %v", len(entities), wantEntityCount, entities)
 	}
+
+	if checkGameLogs {
+		checkGameLogsContract(t, dataDir)
+	}
+}
+
+// checkGameLogsContract exercises get_game_logs against the real Lua fixture
+// (lua/test-fixture/Source/main.lua): a print() call at init should already
+// be captured, and triggering the fixture's deliberate error (via the
+// "crank" command with its magic sentinel angle) should both surface a
+// traceback AND prove mcp.run() kept the harness alive - the whole point of
+// this fix, not just the log text. Reads mcp/game_logs.json directly, the
+// same direct-file-access path get_game_logs itself uses (see
+// internal/tools/gamelogs.go), rather than going through a command/response
+// round trip.
+func checkGameLogsContract(t *testing.T, dataDir string) {
+	t.Helper()
+	logsPath := filepath.Join(dataDir, "mcp", "game_logs.json")
+
+	entries := waitForGameLogEntry(t, logsPath, "print", "fixture print line")
+	if entries == nil {
+		t.Fatalf("game_logs.json never contained the fixture's print() line")
+	}
+
+	mustSend(t, dataDir, map[string]any{
+		"id": "9", "type": "crank",
+		"crank_angle": 999999.0, "crank_delta": 0.0, "crank_docked": false, "duration_ms": 10000,
+	})
+	mustReceive(t, dataDir)
+
+	if waitForGameLogEntry(t, logsPath, "error", "deliberate fixture error") == nil {
+		t.Fatalf("game_logs.json never contained the fixture's deliberate error traceback")
+	}
+
+	// The real assertion: the harness's own polling loop must still be
+	// alive after that uncaught error, not frozen along with the game's
+	// own broken frame logic.
+	mustSend(t, dataDir, map[string]any{"id": "10", "type": "ping"})
+	resp := mustReceive(t, dataDir)
+	assertEqual(t, resp, "status", "ok")
+}
+
+func waitForGameLogEntry(t *testing.T, path, wantType, wantMessageContains string) []tools.GameLogEntry {
+	t.Helper()
+	deadline := time.Now().Add(mcpDirTimeout)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(path)
+		if err == nil {
+			var entries []tools.GameLogEntry
+			if err := json.Unmarshal(b, &entries); err == nil {
+				for _, e := range entries {
+					if e.Type == wantType && bytes.Contains([]byte(e.Message), []byte(wantMessageContains)) {
+						return entries
+					}
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return nil
 }
 
 func buildCFixture(t *testing.T, repoRoot string) string {

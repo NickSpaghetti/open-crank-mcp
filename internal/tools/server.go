@@ -5,14 +5,38 @@ package tools
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// readSaveDataOutputSchema overrides the auto-inferred schema for
+// ReadSaveDataOutput. Its Data field is `any` (a save file's shape isn't
+// known ahead of time), which the default inference renders as the JSON
+// Schema value `true` (spec-legal - "any value is valid" - but rejected
+// by at least one real MCP client's stricter schema validator, which
+// failed its entire tools/list fetch over this single property).
+// jsonschema-go collapses any all-empty schema to `true` as a shorthand
+// (see its Schema.MarshalJSON), so an empty override doesn't avoid this -
+// the override needs some real content, hence the description, to stay
+// a schema object.
+func readSaveDataOutputSchema() *jsonschema.Schema {
+	s, err := jsonschema.For[ReadSaveDataOutput](&jsonschema.ForOptions{
+		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
+			reflect.TypeFor[any](): {Description: "arbitrary JSON value read from the save file"},
+		},
+	})
+	if err != nil {
+		panic(fmt.Sprintf("inferring ReadSaveDataOutput schema: %v", err))
+	}
+	return s
+}
 
 const responseTimeout = 5 * time.Second
 
@@ -128,8 +152,13 @@ func RegisterAll(server *mcp.Server, s *Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "get_logs",
-		Description: "Returns the simulator's buffered stdout/stderr - where print() output and Lua tracebacks land.",
+		Description: "Returns the Simulator process's own buffered stdout/stderr (GTK warnings, startup messages, and the like). Does NOT include a Lua game's print() output or tracebacks - use get_game_logs for those.",
 	}, s.getLogs)
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "get_game_logs",
+		Description: "Returns a Lua game's own print() output and unhandled-error tracebacks, captured by the harness (lua/mcp_harness.lua) since PlaydateSimulator's Lua console never reaches real stdout/stderr. Requires the game to use the harness's print()/mcp.run() capture - see the Lua harness README section. Not applicable to C games.",
+	}, s.getGameLogs)
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "press_button",
@@ -158,8 +187,9 @@ func RegisterAll(server *mcp.Server, s *Server) {
 	}, s.listEntities)
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "read_save_data",
-		Description: "Reads a JSON save file from the game's data directory. Omit filename to list available files instead.",
+		Name:         "read_save_data",
+		Description:  "Reads a JSON save file from the game's data directory. Omit filename to list available files instead.",
+		OutputSchema: readSaveDataOutputSchema(),
 	}, s.readSaveData)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "write_save_data",
