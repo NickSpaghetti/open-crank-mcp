@@ -29,9 +29,9 @@ services:
     stdin_open: true
     tty: true
 
-  # Windows 11 + WSL2 + Docker Desktop. Run from within a WSL2 distro's shell
-  # (WSLg exports DISPLAY/WAYLAND_DISPLAY/PULSE_SERVER there already) - not
-  # verified against a real Windows machine, see README.
+  # Windows 11 + WSL2 + Docker Desktop. Run from inside a WSL2 distro's shell.
+  # WSLg exports DISPLAY/WAYLAND_DISPLAY/PULSE_SERVER there already. Untested
+  # against a real Windows machine, see README.
   simulator-visual-wsl:
     build:
       context: .
@@ -50,8 +50,8 @@ services:
     stdin_open: true
     tty: true
 
-  # Universal fallback: no host display/audio integration of any kind, works
-  # identically on Linux/Windows/macOS via Docker Desktop's normal port
+  # Universal fallback. No host display or audio integration. Works the same
+  # on Linux, Windows, and macOS through Docker Desktop's normal port
   # publishing. Video over noVNC in a browser, audio as an MP3 stream.
   simulator-vnc:
     build:

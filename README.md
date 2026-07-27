@@ -1,20 +1,22 @@
 # open-crank-mcp
 
-An MCP server that lets an AI agent play and debug a [Playdate](https://play.date)
-game running in the desktop Simulator: screenshots, button/crank input, game
-state, logs, and save data for playtesting, debugging, and level design.
+An MCP server for the Playdate Simulator. Lets an AI agent see the screen,
+press buttons, turn the crank, and read game state and logs, so it can
+playtest and debug a game instead of only reading source code.
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full vision and checkpoint
-plan.
+Works with Lua, C, or a mix of both.
+
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full plan and checkpoints.
 
 ## Status
 
-Checkpoint 1: repo and container scaffolding. No server or harness logic yet.
+Checkpoint 1 done: repo and container scaffolding. No server or harness code
+yet.
 
 ## Requirements
 
 - Docker
-- A Playdate account to accept the [Playdate SDK license](https://play.date/dev/sdk-license/) (the image fetches the SDK itself, see below)
+- A Playdate account, to accept the [Playdate SDK license](https://play.date/dev/sdk-license/). The image fetches the SDK itself, see below.
 
 ## Building
 
@@ -22,17 +24,16 @@ Checkpoint 1: repo and container scaffolding. No server or harness logic yet.
 make build
 ```
 
-The `Dockerfile` downloads the Playdate SDK directly from Panic's own
-download server (`download.panic.com`) at build time, pinned to a specific
-version via the `PLAYDATE_SDK_VERSION` build arg (see `Makefile`). This repo
-never bundles or redistributes any SDK files itself — only a Dockerfile that
-fetches them on your machine, under your own acceptance of Panic's SDK
-license.
+The `Dockerfile` downloads the Playdate SDK from Panic's own download server
+(`download.panic.com`) at build time, pinned to a version via the
+`PLAYDATE_SDK_VERSION` build arg. This repo never bundles or redistributes
+SDK files. Only the Dockerfile, which fetches them on your machine under
+your own acceptance of Panic's SDK license.
 
-**Do not publish a built image** (Docker Hub, GHCR, or any other registry).
-Doing so would redistribute Panic's SDK to everyone who pulls it, which the
-[Playdate SDK License](https://play.date/dev/sdk-license/) does not permit.
-Build locally; don't push the image anywhere.
+**Don't publish a built image** to Docker Hub, GHCR, or anywhere else. That
+would redistribute Panic's SDK to everyone who pulls it, which the
+[Playdate SDK License](https://play.date/dev/sdk-license/) doesn't allow.
+Build locally. Don't push the image anywhere.
 
 ## Running
 
@@ -40,16 +41,16 @@ Build locally; don't push the image anywhere.
 make up
 ```
 
-Runs the Simulator headlessly under Xvfb by default — no display required,
-and audio uses SDL2's `dummy` driver (no consumer needs real sound in
-headless/automated use). Screenshots are captured through the Playdate Lua
-API's real framebuffer, not a window capture, so headless mode is sufficient
-for every tool this server exposes.
+Runs the Simulator headlessly under Xvfb by default. No display required.
+Audio uses SDL2's `dummy` driver, since nothing needs real sound in
+headless/automated use. Screenshots come from the Playdate API's real
+framebuffer, not a window capture. Headless mode covers every tool this
+server exposes.
 
-For a visual, sighted spot-check with real audio, there are three profiles —
-pick the one matching how you're running Docker. All of them are strictly
-optional; nothing here is required for the MCP server's own tools, which
-only ever use the headless path above.
+For a visual, sighted spot check with real audio, there are three profiles.
+Pick the one that matches how you run Docker. All three are optional.
+Nothing here is required for the MCP server's own tools, which only use the
+headless path above.
 
 ### Linux (native X11/XWayland)
 
@@ -57,11 +58,11 @@ only ever use the headless path above.
 make up-visual
 ```
 
-Forwards your host's X11 socket so the Simulator window is visible, and
-routes audio to your host's PulseAudio/PipeWire server so you can actually
-hear it. Needs an X11 auth cookie for your display, which
-`scripts/ensure-xauth.sh` generates automatically the first time (creates or
-reuses `~/.Xauthority` via `xauth generate`) — no manual `xhost` step needed.
+Forwards your host's X11 socket, so the Simulator window shows up, and
+routes audio to your host's PulseAudio/PipeWire server, so you can hear it.
+Needs an X11 auth cookie for your display. `scripts/ensure-xauth.sh`
+generates one automatically the first time (creates or reuses
+`~/.Xauthority` via `xauth generate`). No manual `xhost` step.
 
 ### Windows 11 (WSL2 + Docker Desktop)
 
@@ -69,41 +70,51 @@ reuses `~/.Xauthority` via `xauth generate`) — no manual `xhost` step needed.
 make up-visual-wsl
 ```
 
-Run this from inside a WSL2 distro's shell (not PowerShell directly) —
-Windows 11's WSLg already exposes a display and a PulseAudio-compatible
-audio socket at `/mnt/wslg` for exactly this purpose, and this profile just
-mounts them through. **This profile is built from documented WSLg
-integration patterns but has not been verified against a real Windows
-machine** — there's no Windows/WSL2 environment available to test it in.
-If it doesn't work as-is, the mounts/env vars in the
-`simulator-visual-wsl` service in `docker-compose.yml` are the place to
-adjust.
+Run this from inside a WSL2 distro's shell, not PowerShell. Windows 11's
+WSLg already exposes a display and a PulseAudio-compatible audio socket at
+`/mnt/wslg` for this. This profile mounts them through.
 
-### Any OS — universal fallback (VNC + audio stream)
+Untested against a real Windows machine. Built from documented WSLg
+integration patterns; no Windows/WSL2 environment available to test
+against. If it doesn't work, the mounts and env vars in the
+`simulator-visual-wsl` service in `docker-compose.yml` are the place to fix
+it.
+
+### Any OS, universal fallback (VNC + audio stream)
 
 ```
 make up-vnc
 ```
 
-No host display/audio integration of any kind — works identically on
-Linux, Windows, and macOS via Docker Desktop's normal port publishing, at
-the cost of needing a browser tab instead of a native window. Open
-`http://localhost:6080/vnc.html` for video (noVNC), and
-`http://localhost:8000/stream.mp3` for audio (any player or a browser tab).
-Fully self-contained: the container runs its own PulseAudio daemon with a
-null sink, `x11vnc` bridges the Xvfb display, and `ffmpeg` re-streams the
-null sink's monitor as MP3. This is the one to reach for on macOS, where
-the native alternative (XQuartz + a PulseAudio-over-TCP bridge) is real
-ongoing complexity and notably slower.
+No host display or audio integration at all. Works the same on Linux,
+Windows, and macOS through Docker Desktop's normal port publishing.
+Trade-off: a browser tab instead of a native window. Open
+`http://localhost:6080/vnc.html` for video, `http://localhost:8000/stream.mp3`
+for audio.
+
+Fully self-contained. The container runs its own PulseAudio daemon with a
+null sink, `x11vnc` bridges the Xvfb display, `ffmpeg` re-streams the null
+sink's monitor as MP3. Use this on macOS. The native alternative, XQuartz
+plus a PulseAudio-over-TCP bridge, is real ongoing complexity and slow.
 
 ## Wiring a game into the harness
 
-Not yet implemented (Checkpoint 2). Will require adding one `import` line and
-one per-frame call to your game's `main.lua`.
+Not built yet (Checkpoint 2).
+
+- Lua games: one `import` line and one per-frame call in `main.lua`.
+- C games: one `#include` and two calls (init and one per-frame) in the
+  `eventHandler`/update callback. C games build through the SDK's own CMake
+  support (`cmake -S . -B build && cmake --build build`, which invokes `pdc`
+  itself as a post-build step). The image already has `cmake` and
+  `build-essential`. No ARM toolchain needed, since this project only
+  targets the Simulator, never real hardware.
+- Hybrid C+Lua games (C for hot loops, Lua for UI, an officially supported
+  pattern) can use the Lua harness alone, since a real Lua VM is still
+  running.
 
 ## License
 
-This project's own code is MIT-licensed (see `LICENSE`). The Playdate SDK
-itself is licensed separately by Panic, Inc. — see
-[the Playdate SDK License](https://play.date/dev/sdk-license/). This project
-is not affiliated with or endorsed by Panic.
+This project's own code is MIT (see `LICENSE`). The Playdate SDK is
+licensed separately by Panic, Inc., see the
+[Playdate SDK License](https://play.date/dev/sdk-license/). Not affiliated
+with or endorsed by Panic.

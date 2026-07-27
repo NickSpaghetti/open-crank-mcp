@@ -26,6 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pulseaudio \
     pulseaudio-utils \
     ffmpeg \
+    build-essential \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz \
@@ -33,8 +35,8 @@ RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go
     && rm /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Fetched from Panic's own server during each user's local build, never baked
-# into a published image - see README.md.
+# Fetched from Panic's server on each user's own build. Never baked into a
+# published image, see README.
 ENV PLAYDATE_SDK_PATH=/opt/playdate-sdk
 RUN curl -fsSL "https://download.panic.com/playdate_sdk/Linux/PlaydateSDK-${PLAYDATE_SDK_VERSION}.tar.gz" -o /tmp/playdate-sdk.tar.gz \
     && mkdir -p "${PLAYDATE_SDK_PATH}" \
@@ -48,7 +50,7 @@ RUN go mod download || true
 COPY . .
 
 ENV DISPLAY=:99
-# No real audio device inside the container; SDL2 (used by PlaydateSimulator)
-# needs an explicit driver or it refuses to start entirely.
+# No audio device inside the container. SDL2 (used by PlaydateSimulator)
+# needs an explicit driver or it refuses to start.
 ENV SDL_AUDIODRIVER=dummy
 CMD ["bash"]
