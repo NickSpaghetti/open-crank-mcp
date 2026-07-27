@@ -1,0 +1,4 @@
+name=MCP Contract Check
+author=open-crank-mcp
+description=Minimal fixture game for SDK contract verification
+bundleID=dev.open-crank-mcp.contractcheck

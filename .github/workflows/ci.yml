@@ -30,6 +30,37 @@ jobs:
           go-version-file: go.mod
       - run: go test ./...
 
+  test-c-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make test-c-harness
+
+  smoke-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make smoke-check
+
+  sdk-contract-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            harness:
+              - 'c-harness/**'
+              - 'lua/**'
+              - 'internal/harness/**'
+              - 'internal/simulator/**'
+      # The job always runs so this required check always resolves. A
+      # workflow-level `paths:` trigger would instead leave it permanently
+      # pending, and merges blocked, on PRs that don't touch these paths.
+      - if: steps.filter.outputs.harness == 'true'
+        run: make sdk-contract-check
+
   mutation-test:
     runs-on: ubuntu-latest
     steps:
