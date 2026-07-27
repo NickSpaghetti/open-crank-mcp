@@ -21,3 +21,7 @@ unleash:
     # Docker environment. Verified for real via `make smoke-check` instead.
     # Its one pure function (checkForErrors) has its own unit test.
     - "cmd/smoke-check/main.go"
+    # Real cmake/pdc orchestration, same reasoning as above. Verified for
+    # real via `make sdk-contract-check`. The pure detection/glob logic
+    # lives in detect.go instead, and stays fully covered.
+    - "internal/build/exec.go"

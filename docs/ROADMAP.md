@@ -340,10 +340,12 @@ wherever it reads input, for overrides to actually take effect.
 open-crank-mcp/
   go.mod
   main.go
-  internal/simulator/   # process management: pdc/cmake build, launch/stop PlaydateSimulator, log capture
+  internal/simulator/   # process management: launch/stop PlaydateSimulator, log capture
   internal/harness/      # file-based IPC client talking to either harness, protocol is language-agnostic
+  internal/build/         # project-type detection (C vs Lua), cmake/pdc build step
+  internal/screenshot/    # raw framebuffer dump to PNG decoder, for the C harness's screenshot format
   internal/tools/        # MCP tool registrations (github.com/modelcontextprotocol/go-sdk/mcp)
-  internal/contracttest/ # internal/simulator + internal/harness driven against a real PlaydateSimulator (go test, skipped without PLAYDATE_SDK_PATH)
+  internal/contracttest/ # internal/simulator + internal/harness + internal/build + internal/screenshot driven against a real PlaydateSimulator (go test, skipped without PLAYDATE_SDK_PATH)
   cmd/smoke-check/       # environment-health check: SDK shared libs resolve, pdc runs, Simulator launches cleanly under Xvfb
   lua/mcp_harness.lua
   lua/test-fixture/      # minimal fixture game for internal/contracttest
@@ -438,10 +440,18 @@ rate (~30-50fps).
   (`.github/workflows/weekly.yml`, Sunday 9PM EST, matrix over the pinned
   SDK version and Panic's `latest` alias, catching upstream SDK drift even
   when nothing in this repo changed).
-- [ ] **Checkpoint 3**: Go server core. `internal/simulator` and
-  `internal/harness` already exist (see Scripts rewrite above). Remaining
-  work is project-type detection and the `pdc`/`cmake` build step, plus the
-  raw-framebuffer-to-PNG decoder.
+- [x] **Checkpoint 3**: Go server core. `internal/simulator` and
+  `internal/harness` already existed (see Scripts rewrite above).
+  `internal/build` adds project-type detection (`CMakeLists.txt` means C,
+  `Source/main.lua` means Lua) and the `cmake`/`pdc` build step for each.
+  `internal/screenshot` decodes the C harness's raw framebuffer dump
+  (400x240, 1 bit per pixel, MSB-first, 52-byte row stride) into a PNG.
+  The bit-to-color polarity isn't documented anywhere in the SDK, so it's
+  pinned empirically: the C fixture now clears its display to
+  `kColorBlack` at init, and `internal/contracttest` decodes its raw
+  screenshot and asserts every pixel is black against the real Simulator.
+  `internal/contracttest` also now builds both fixtures through
+  `internal/build.Build` instead of its own bespoke cmake/pdc calls.
 - [ ] **Checkpoint 4**: MCP tool registrations (`internal/tools`) wiring
   everything together via `github.com/modelcontextprotocol/go-sdk/mcp`.
 - [ ] **Checkpoint 5**: End-to-end verification. Build one of the SDK's Lua

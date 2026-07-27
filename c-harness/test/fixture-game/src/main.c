@@ -30,6 +30,7 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg)
     (void)arg;
     if (event == kEventInit) {
         g_pd = pd;
+        pd->graphics->clear(kColorBlack);
         mcp_harness_init(pd);
         mcp_harness_register_state(report_state);
         pd->system->setUpdateCallback(update, NULL);
