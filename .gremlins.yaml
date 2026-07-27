@@ -25,3 +25,15 @@ unleash:
     # real via `make sdk-contract-check`. The pure detection/glob logic
     # lives in detect.go instead, and stays fully covered.
     - "internal/build/exec.go"
+    # build_game needs a real cmake/pdc toolchain to build anything real;
+    # the pure detection logic it calls into is already covered above.
+    - "internal/tools/build.go"
+    # launch_simulator needs a real .pdx's pdxinfo and a real launchable
+    # binary. Every other simulator-lifecycle tool (stop/restart/status)
+    # is fully unit-tested using a trivial stand-in process, the same
+    # pattern internal/simulator's own tests use.
+    - "internal/tools/launch.go"
+    # Startup glue: reads an env var and wires the MCP server together.
+    # internal/tools.RegisterAll (called from here) has its own test
+    # confirming every tool's schema is valid.
+    - "main.go"

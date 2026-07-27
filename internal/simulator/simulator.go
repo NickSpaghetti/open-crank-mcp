@@ -5,13 +5,34 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"sync"
 	"syscall"
 )
 
 // Simulator is a running PlaydateSimulator child process.
 type Simulator struct {
 	cmd    *exec.Cmd
-	output *bytes.Buffer
+	output *syncBuffer
+}
+
+// syncBuffer guards a bytes.Buffer with a mutex so Output() can be read
+// safely while the process is still writing to it, not just after Wait()
+// has returned.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
 }
 
 // Launch starts binPath (PlaydateSimulator) against pdxPath. Any extraArgs
@@ -30,15 +51,15 @@ func Launch(binPath, pdxPath string, extraArgs ...string) (*Simulator, error) {
 	}
 	cmd := exec.Command(binPath, args...)
 
-	var output bytes.Buffer
-	cmd.Stdout = &output
-	cmd.Stderr = &output
+	output := &syncBuffer{}
+	cmd.Stdout = output
+	cmd.Stderr = output
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("launching simulator: %w", err)
 	}
 
-	return &Simulator{cmd: cmd, output: &output}, nil
+	return &Simulator{cmd: cmd, output: output}, nil
 }
 
 // Stop sends SIGKILL. PlaydateSimulator doesn't exit on SIGTERM.
@@ -58,10 +79,8 @@ func (s *Simulator) Wait() error {
 	return s.cmd.Wait()
 }
 
-// Output returns the combined stdout+stderr captured so far. Only safe to
-// call after Wait() has returned - reading concurrently with a still-running
-// process races with the internal copy goroutines os/exec starts for a
-// non-*os.File Stdout/Stderr.
+// Output returns the combined stdout+stderr captured so far. Safe to call
+// at any time, including while the process is still running.
 func (s *Simulator) Output() string {
 	return s.output.String()
 }

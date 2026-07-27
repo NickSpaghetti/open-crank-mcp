@@ -129,7 +129,32 @@ local function emptyResponse()
         height = 0,
         row_bytes = 0,
         state = nil,
+        entities = nil,
+        entities_complete = false,
     }
+end
+
+-- getAllSprites() is a true, complete enumeration of the display list -
+-- unlike the C harness's querySpritesInRect approximation, this never
+-- misses a sprite regardless of whether it has a collide rect set.
+local function listEntities()
+    local entities = {}
+    for _, s in ipairs(playdate.graphics.sprite.getAllSprites()) do
+        local x, y, width, height = s:getBounds()
+        table.insert(entities, {
+            tag = s:getTag(),
+            -- className is never nil, even for a plain, non-subclassed
+            -- sprite - that case reports the base class name "Sprite".
+            class_name = s.className,
+            x = x,
+            y = y,
+            width = width,
+            height = height,
+            z_index = s:getZIndex(),
+            visible = s:isVisible(),
+        })
+    end
+    return entities
 end
 
 function mcp.update()
@@ -197,6 +222,10 @@ function mcp.update()
             resp.path = relPath
             resp.width = 400
             resp.height = 240
+        elseif t == "entities" then
+            resp.status = "ok"
+            resp.entities = listEntities()
+            resp.entities_complete = true
         else
             resp.error = "unknown command type"
         end

@@ -53,14 +53,22 @@ func TestSDKContract(t *testing.T) {
 	luaPdx := buildLuaFixture(t, repoRoot)
 
 	t.Run("C harness", func(t *testing.T) {
-		runContractCheck(t, sdkPath, cPdx, "dev.open-crank-mcp.contractcheck")
+		// The fixture creates one sprite with a collide rect and one
+		// without. querySpritesInRect (the C API's only bulk sprite query)
+		// only matches sprites with a collide rect set, so only the
+		// collidable one should show up here, and entities_complete must
+		// be false - proving the approximation's documented limitation is
+		// real, not just a design note.
+		runContractCheck(t, sdkPath, cPdx, "dev.open-crank-mcp.contractcheck", 1, false)
 	})
 	t.Run("Lua harness", func(t *testing.T) {
-		runContractCheck(t, sdkPath, luaPdx, "dev.open-crank-mcp.contractchecklua")
+		// getAllSprites() is a true, complete enumeration - both the
+		// fixture's sprites should show up regardless of collide rects.
+		runContractCheck(t, sdkPath, luaPdx, "dev.open-crank-mcp.contractchecklua", 2, true)
 	})
 }
 
-func runContractCheck(t *testing.T, sdkPath, pdxPath, bundleID string) {
+func runContractCheck(t *testing.T, sdkPath, pdxPath, bundleID string, wantEntityCount int, wantEntitiesComplete bool) {
 	t.Helper()
 	dataDir := filepath.Join(sdkPath, "Disk", "Data", bundleID)
 	defer os.RemoveAll(dataDir)
@@ -116,6 +124,17 @@ func runContractCheck(t *testing.T, sdkPath, pdxPath, bundleID string) {
 		assertPNGScreenshot(t, dataDir)
 	default:
 		t.Errorf("response had neither raw nor png format: %v", resp)
+	}
+
+	mustSend(t, dataDir, map[string]any{"id": "8", "type": "entities"})
+	resp = mustReceive(t, dataDir)
+	assertEqual(t, resp, "entities_complete", wantEntitiesComplete)
+	entities, ok := resp["entities"].([]any)
+	if !ok {
+		t.Fatalf(`response["entities"] is not an array: %v (full response: %v)`, resp["entities"], resp)
+	}
+	if len(entities) != wantEntityCount {
+		t.Fatalf("entities has %d entries, want %d: %v", len(entities), wantEntityCount, entities)
 	}
 }
 

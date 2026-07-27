@@ -1,7 +1,27 @@
 package main
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/NickSpaghetti/open-crank-mcp/internal/tools"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
 
 func main() {
-	fmt.Println("open-crank-mcp: scaffolding only, server not yet implemented")
+	sdkPath := os.Getenv("PLAYDATE_SDK_PATH")
+	if sdkPath == "" {
+		fmt.Fprintln(os.Stderr, "PLAYDATE_SDK_PATH is not set")
+		os.Exit(1)
+	}
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "open-crank-mcp"}, nil)
+	tools.RegisterAll(server, tools.NewServer(sdkPath))
+
+	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		log.Printf("server failed: %v", err)
+		os.Exit(1)
+	}
 }

@@ -22,7 +22,7 @@ func WaitForFile(path string, timeout time.Duration) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s waiting for file %s", timeout, path)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -37,7 +37,7 @@ func WaitForDir(path string, timeout time.Duration) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out after %s waiting for directory %s", timeout, path)
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

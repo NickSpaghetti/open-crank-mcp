@@ -452,8 +452,31 @@ rate (~30-50fps).
   screenshot and asserts every pixel is black against the real Simulator.
   `internal/contracttest` also now builds both fixtures through
   `internal/build.Build` instead of its own bespoke cmake/pdc calls.
-- [ ] **Checkpoint 4**: MCP tool registrations (`internal/tools`) wiring
-  everything together via `github.com/modelcontextprotocol/go-sdk/mcp`.
+- [x] **Checkpoint 4**: MCP tool registrations (`internal/tools`) wiring
+  everything together via `github.com/modelcontextprotocol/go-sdk/mcp` (the
+  project's first external dependency, pinned to v1.6.1). All nine tools
+  from the design above are live: `build_game`, `launch_simulator`,
+  `stop_simulator`, `restart_simulator`, `get_status`, `get_logs`,
+  `press_button`, `set_crank`, `get_screenshot`, `get_game_state`,
+  `read_save_data`, `write_save_data`. Plus one more, requested alongside
+  this checkpoint: `list_entities`, listing sprites currently in the
+  display list. Lua's `playdate.graphics.sprite.getAllSprites()` gives a
+  true, complete enumeration; the C API has no equivalent, so it falls
+  back to `querySpritesInRect` over the full screen rect, which only
+  matches sprites with a collision rect set. Verified against the SDK's
+  own bundled `Sprite Game` example (harness wired in via a scratch copy,
+  not committed): background/parallax/explosion sprites, none of which set
+  a collide rect, were correctly absent; player and enemy planes, which
+  do, correctly showed up. Every response carries a `complete` field so a
+  caller can tell a full list from the approximation.
+
+  Two fixes landed alongside the new tools: `Simulator.Output()` was only
+  documented as safe to call after `Wait()` returns, which is fine for the
+  existing smoke-check/contracttest callers (they always stop the process
+  first) but not for `get_logs` reading a still-running simulator. It's
+  now backed by a mutex-guarded buffer instead, proven race-free under
+  `go test -race`. `internal/harness`'s poll interval was 100ms; tightened to
+  10ms, matching what `docs/ROADMAP.md` always said the design should be.
 - [ ] **Checkpoint 5**: End-to-end verification. Build one of the SDK's Lua
   `Examples/` and one of its C `Examples/` (both with the matching harness
   wired in), run each through the full containerized stack, confirm every
