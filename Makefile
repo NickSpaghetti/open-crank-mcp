@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc down smoke-check go-build go-test
+.PHONY: build up up-visual up-visual-wsl up-vnc down shell smoke-check go-build go-test
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -20,6 +20,9 @@ up-vnc: build
 
 down:
 	docker compose --profile visual --profile wsl --profile vnc down
+
+shell: build
+	docker compose run --rm simulator /bin/bash
 
 smoke-check: build
 	docker compose run --rm simulator bash /workspace/scripts/smoke-check.sh
