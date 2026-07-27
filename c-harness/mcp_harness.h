@@ -54,6 +54,11 @@ typedef struct {
     float crank_override_delta;
     int crank_override_docked;
     long crank_override_expires_at_ms;
+    /* Edge tracking for mcp_override_update_edges - see its definition. */
+    int last_effective_pressed[6];
+    int override_was_active_last_frame[6];
+    PDButtons pending_pushed;
+    PDButtons pending_released;
 } McpOverrideState;
 
 /* Pure logic: no PlaydateAPI dependency, directly unit-testable. */
@@ -67,6 +72,19 @@ void mcp_override_apply_press(McpOverrideState *ov, PDButtons button, int durati
 void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms);
 void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta, int docked, int duration_ms, long now_ms);
 void mcp_override_expire(McpOverrideState *ov, long now_ms);
+
+/* Computes this frame's pending_pushed/pending_released from the override
+   state and the real current button bitmask, comparing against last
+   frame's effective (override-or-real) pressed state per button. Call
+   once per frame, after mcp_override_expire and before any new
+   press/release command is applied - so a fresh command's edge only
+   shows up starting the *next* frame's call, not the same frame it
+   arrived on (predictable latency, avoids depending on read-order within
+   a frame). Buttons never touched by an override are left alone: their
+   real pushed/released bits pass through mcp_override_get_button_state
+   unchanged, so there's no risk of double-firing a real edge the SDK
+   already reported on its own. */
+void mcp_override_update_edges(McpOverrideState *ov, PDButtons real_current);
 
 void mcp_override_get_button_state(const McpOverrideState *ov,
                                     PDButtons real_current, PDButtons real_pushed, PDButtons real_released,

@@ -98,6 +98,96 @@ null sink, `x11vnc` bridges the Xvfb display, `ffmpeg` re-streams the null
 sink's monitor as MP3. Use this on macOS. The native alternative, XQuartz
 plus a PulseAudio-over-TCP bridge, is real ongoing complexity and slow.
 
+## Connecting from Claude Code, OpenCode, and Cursor
+
+All three speak the same underlying MCP transport, so the command is
+identical everywhere - only the config file's shape differs. This starts
+Xvfb, then runs the server itself over stdio inside the container built
+above, with your game's directory bind-mounted so `build_game`/
+`launch_simulator` can see it:
+
+```
+docker compose -f /absolute/path/to/open-crank-mcp/docker-compose.yml \
+  run --rm -T \
+  -v /absolute/path/to/your-game:/your-game \
+  simulator bash -c \
+  "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
+```
+
+`-T` disables pseudo-TTY allocation - required for stdio JSON-RPC, a real
+TTY corrupts the framing. `PLAYDATE_SDK_VERSION` in the image, and both
+absolute paths, are the only things you need to adjust per-machine.
+
+**Claude Code**: a `.mcp.json` at your game project's root:
+
+```json
+{
+  "mcpServers": {
+    "open-crank-mcp": {
+      "command": "docker",
+      "args": [
+        "compose", "-f", "/absolute/path/to/open-crank-mcp/docker-compose.yml",
+        "run", "--rm", "-T",
+        "-v", "/absolute/path/to/your-game:/your-game",
+        "simulator", "bash", "-c",
+        "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
+      ]
+    }
+  }
+}
+```
+
+Or register it without a file, via `claude mcp add`:
+
+```
+claude mcp add open-crank-mcp -- docker compose -f /absolute/path/to/open-crank-mcp/docker-compose.yml run --rm -T -v /absolute/path/to/your-game:/your-game simulator bash -c "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
+```
+
+**OpenCode**: the `mcp` key in `opencode.jsonc`/`opencode.json` (project
+config, or `~/.config/opencode/opencode.jsonc` for global), matching
+`McpLocalConfig`'s shape (`type`/`command`/`environment`) from
+`@opencode-ai/sdk`:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "open-crank-mcp": {
+      "type": "local",
+      "command": [
+        "docker", "compose", "-f", "/absolute/path/to/open-crank-mcp/docker-compose.yml",
+        "run", "--rm", "-T",
+        "-v", "/absolute/path/to/your-game:/your-game",
+        "simulator", "bash", "-c",
+        "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
+      ]
+    }
+  }
+}
+```
+
+Or `opencode mcp add open-crank-mcp` interactively.
+
+**Cursor**: `.cursor/mcp.json` in your game project (or `~/.cursor/mcp.json`
+globally) - the same `mcpServers`/`command`/`args` shape as Claude Code:
+
+```json
+{
+  "mcpServers": {
+    "open-crank-mcp": {
+      "command": "docker",
+      "args": [
+        "compose", "-f", "/absolute/path/to/open-crank-mcp/docker-compose.yml",
+        "run", "--rm", "-T",
+        "-v", "/absolute/path/to/your-game:/your-game",
+        "simulator", "bash", "-c",
+        "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
+      ]
+    }
+  }
+}
+```
+
 ## Wiring a game into the harness
 
 There's no package manager for Playdate projects. `pdc` only ever
@@ -109,10 +199,23 @@ just a call:
 **Lua games:**
 1. Copy [`lua/mcp_harness.lua`](lua/mcp_harness.lua) into your project's
    `Source/` directory.
-2. In `main.lua`: `import "mcp_harness"`, then call `mcp.update()` once
-   per frame, normally from `playdate.update()`. See
+2. In `main.lua`: `import "mcp_harness"`, write your per-frame logic as a
+   plain function, and pass it to `mcp.run(yourUpdateFn)` once - instead
+   of assigning `playdate.update` yourself. This is what makes
+   `get_game_logs` (see below) actually reliable: `mcp.run` wraps your
+   function in `xpcall`, so the harness's own command polling keeps
+   running every frame even if your code throws, instead of the whole
+   update loop freezing silently. See
    [`lua/test-fixture/Source/main.lua`](lua/test-fixture/Source/main.lua)
-   for a minimal, complete example.
+   for a minimal, complete example. (Manually assigning `playdate.update`
+   and calling `mcp.update()` yourself each frame still works, for
+   backward compatibility, but doesn't get this protection.)
+3. Lua `print()` output and unhandled-error tracebacks never reach the
+   Simulator's real stdout/stderr - a platform limitation, not a bug in
+   this project, see [`docs/GOTCHAS.md`](docs/GOTCHAS.md). `mcp.run`
+   captures both into `mcp/game_logs.json` automatically; read it back
+   with the `get_game_logs` tool rather than `get_logs` (which only sees
+   the Simulator process's own OS-level output).
 
 **C games:**
 1. Copy [`c-harness/mcp_harness.h`](c-harness/mcp_harness.h) and
@@ -145,6 +248,32 @@ this project only targets the Simulator, never real hardware.
 **Hybrid C+Lua games** (C for hot loops, Lua for UI, an officially
 supported pattern) can use the Lua harness alone, since a real Lua VM is
 still running.
+
+### Verified against real games, not just the fixtures above
+
+The steps above were proven end-to-end against two of the Playdate SDK's
+own bundled examples (not committed into this repo - copy them from your
+own SDK install to try this yourself):
+
+- **`Examples/Asheteroids`** (Lua) - a real Asteroids clone whose controls
+  (turn, thrust, shoot) are implemented entirely through the SDK's
+  button-down/up callbacks (`playdate.leftButtonDown()`,
+  `upButtonDown()`, `BButtonDown()`, etc - "the following functions in
+  your script when input events occur" per the SDK docs), not polling.
+  Wiring in `mcp_harness.lua` and driving it with `press_button` moved
+  the ship's angle, changed its velocity under thrust, and spawned a real
+  bullet sprite - all three controls, confirmed via `get_game_state`/
+  `list_entities` after real MCP tool calls.
+- **`C_API/Examples/Sprite Game`** - a substantial pure-C shooter (551
+  lines). Movement already polled `buttonIsPressed` correctly before any
+  of this; firing needed the `pushed`-bitmask fix, confirmed by watching
+  a real bullet sprite appear via `list_entities` immediately after a
+  `press_button` call.
+
+`AButtonHeld`/`BButtonHeld` (fired after a continuous 1-second hold) are
+a separate mechanism from the up/down edges above and aren't synthesized
+- neither example needed them, and it's called out here rather than
+implied to work.
 
 ## License
 

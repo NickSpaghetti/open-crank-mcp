@@ -237,6 +237,86 @@ static void test_override_masks_real_bit_off(void)
     assert((cur & kButtonB) == 0);
 }
 
+static void test_override_update_edges_press_produces_pushed_once(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    PDButtons cur, pushed, released;
+
+    /* A tick with no override yet produces nothing. */
+    mcp_override_update_edges(&ov, 0);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert(pushed == 0 && released == 0);
+
+    mcp_override_apply_press(&ov, kButtonA, 1000, 0);
+
+    /* First tick after the press is applied - synthetic pushed edge. */
+    mcp_override_update_edges(&ov, 0);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((pushed & kButtonA) != 0);
+    assert((cur & kButtonA) != 0);
+
+    /* Still held next tick - no repeated pushed edge. */
+    mcp_override_update_edges(&ov, 0);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((pushed & kButtonA) == 0);
+    assert((cur & kButtonA) != 0);
+}
+
+static void test_override_update_edges_release_produces_released_once(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    PDButtons cur, pushed, released;
+
+    mcp_override_apply_press(&ov, kButtonA, 1000, 0);
+    mcp_override_update_edges(&ov, 0); /* pushed edge consumed here */
+
+    mcp_override_apply_release(&ov, kButtonA, 1000, 100);
+    mcp_override_update_edges(&ov, 0);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((released & kButtonA) != 0);
+    assert((cur & kButtonA) == 0);
+
+    /* Still released next tick - no repeated edge. */
+    mcp_override_update_edges(&ov, 0);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((released & kButtonA) == 0);
+}
+
+static void test_override_update_edges_expiry_produces_released(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    PDButtons cur, pushed, released;
+
+    mcp_override_apply_press(&ov, kButtonA, 100, 0);
+    mcp_override_update_edges(&ov, 0); /* pushed edge */
+
+    /* Override lapses on its own (no explicit release), real hardware
+       isn't actually pressed - should still produce a released edge. */
+    mcp_override_expire(&ov, 150);
+    mcp_override_update_edges(&ov, 0);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((released & kButtonA) != 0);
+    assert((cur & kButtonA) == 0);
+}
+
+static void test_override_update_edges_untouched_button_passes_through(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    PDButtons cur, pushed, released;
+
+    mcp_override_apply_press(&ov, kButtonA, 1000, 0); /* only A is overridden */
+    mcp_override_update_edges(&ov, 0);
+
+    PDButtons real_pushed = kButtonB; /* B really just pressed, no override on B */
+    mcp_override_get_button_state(&ov, 0, real_pushed, 0, &cur, &pushed, &released);
+    assert((pushed & kButtonB) != 0); /* passed through untouched */
+    assert((pushed & kButtonA) != 0); /* synthetic edge for A still present */
+}
+
 static void test_override_crank(void)
 {
     McpOverrideState ov;
@@ -277,6 +357,10 @@ int main(void)
     test_override_press_and_expiry();
     test_override_release_forces_not_pressed();
     test_override_masks_real_bit_off();
+    test_override_update_edges_press_produces_pushed_once();
+    test_override_update_edges_release_produces_released_once();
+    test_override_update_edges_expiry_produces_released();
+    test_override_update_edges_untouched_button_passes_through();
     test_override_crank();
 
     printf("pure logic: all tests passed\n");

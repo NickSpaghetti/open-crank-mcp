@@ -17,6 +17,43 @@ local realGetButtonState = playdate.getButtonState
 local realGetCrankPosition = playdate.getCrankPosition
 local realGetCrankChange = playdate.getCrankChange
 local realIsCrankDocked = playdate.isCrankDocked
+local realPrint = print
+
+-- PlaydateSimulator's own Lua console (print()/error output) never
+-- touches the process's real stdout/stderr on Linux (SDK 3.1.1) - it
+-- renders only into an internal GUI console widget, despite the SDK docs'
+-- claim otherwise. get_logs (the Go-side tool reading real process
+-- stdout/stderr) can't see any of this, so this harness captures it
+-- itself into a small file-based channel instead. Capped so the file
+-- can't grow unbounded over a long play session; oldest entries drop
+-- first.
+local GAME_LOGS_MAX = 200
+local gameLogs = {}
+
+local function appendGameLog(logType, message)
+    table.insert(gameLogs, {type = logType, message = message, ms = playdate.getCurrentTimeMilliseconds()})
+    if #gameLogs > GAME_LOGS_MAX then
+        table.remove(gameLogs, 1)
+    end
+    -- Flushed on every call, not batched into mcp.update() - so a log
+    -- written the frame before a crash still lands on disk even if
+    -- mcp.update() itself never runs again afterward.
+    local f = playdate.file.open("mcp/game_logs.json", playdate.file.kFileWrite)
+    if f then
+        f:write(json.encode(gameLogs))
+        f:close()
+    end
+end
+
+function print(...)
+    realPrint(...)
+    local n = select("#", ...)
+    local parts = {}
+    for i = 1, n do
+        parts[i] = tostring(select(i, ...))
+    end
+    appendGameLog("print", table.concat(parts, "\t"))
+end
 
 local buttonConstants = {
     a = playdate.kButtonA,
@@ -39,25 +76,108 @@ function playdate.buttonIsPressed(button)
     return realButtonIsPressed(button)
 end
 
+-- Real edges for an overridden button, synthesized in updateButtonEdges()
+-- below - see its comment for why this needs its own tracking rather than
+-- just passing through the real buttonJustPressed/buttonJustReleased or
+-- letting the SDK's own AButtonDown/leftButtonDown/etc callbacks fire on
+-- their own (they can't: those reflect a real hardware edge the
+-- Simulator's own runtime decides to dispatch, which an override doesn't
+-- cause to happen).
+local lastEffectivePressed = {}
+local overrideWasActiveLastFrame = {}
+local justPressedSynthetic = {}
+local justReleasedSynthetic = {}
+
+-- Name prefix used to build each button's *ButtonDown/*ButtonUp callback
+-- name (e.g. "A" -> "AButtonDown", "up" -> "upButtonDown") - exact casing
+-- confirmed against Inside Playdate.html's "Button callbacks" section.
+-- AButtonHeld/BButtonHeld (fired after a continuous 1-second hold) are a
+-- separate mechanism, deliberately not synthesized here.
+local buttonCallbackPrefix = {
+    [playdate.kButtonA] = "A",
+    [playdate.kButtonB] = "B",
+    [playdate.kButtonUp] = "up",
+    [playdate.kButtonDown] = "down",
+    [playdate.kButtonLeft] = "left",
+    [playdate.kButtonRight] = "right",
+}
+
+-- Called once per frame from mcp.update(), before that frame's incoming
+-- command (if any) is processed - so a press/release command only
+-- produces its edge starting the *next* frame's call, a small,
+-- predictable latency rather than an order-dependent one. Buttons never
+-- touched by an override are left alone entirely: no risk of double
+-- firing a real edge the SDK already dispatched on its own.
+local function updateButtonEdges()
+    for button, prefix in pairs(buttonCallbackPrefix) do
+        justPressedSynthetic[button] = false
+        justReleasedSynthetic[button] = false
+
+        local o = override.button[button]
+        local activeNow = o ~= nil and o.active
+        local effective
+        if activeNow then
+            effective = o.value
+        else
+            effective = realButtonIsPressed(button)
+        end
+
+        if activeNow or overrideWasActiveLastFrame[button] then
+            if effective and not lastEffectivePressed[button] then
+                justPressedSynthetic[button] = true
+                local fn = playdate[prefix .. "ButtonDown"]
+                if fn then fn() end
+            elseif not effective and lastEffectivePressed[button] then
+                justReleasedSynthetic[button] = true
+                local fn = playdate[prefix .. "ButtonUp"]
+                if fn then fn() end
+            end
+        end
+
+        lastEffectivePressed[button] = effective
+        overrideWasActiveLastFrame[button] = activeNow
+    end
+end
+
 function playdate.buttonJustPressed(button)
-    -- Not faked, only "currently held" is overridden - same simplification
-    -- as the C harness, see its mcp_override_get_button_state.
+    local o = override.button[button]
+    local activeNow = o ~= nil and o.active
+    if activeNow or overrideWasActiveLastFrame[button] then
+        return justPressedSynthetic[button] or false
+    end
     return realButtonJustPressed(button)
 end
 
 function playdate.buttonJustReleased(button)
+    local o = override.button[button]
+    local activeNow = o ~= nil and o.active
+    if activeNow or overrideWasActiveLastFrame[button] then
+        return justReleasedSynthetic[button] or false
+    end
     return realButtonJustReleased(button)
 end
 
 function playdate.getButtonState()
     local current, pressed, released = realGetButtonState()
-    for buttonConst, o in pairs(override.button) do
-        if o.active then
+    for button, _ in pairs(buttonCallbackPrefix) do
+        local o = override.button[button]
+        local activeNow = o ~= nil and o.active
+        if activeNow then
             if o.value then
-                current = current | buttonConst
+                current = current | button
             else
-                current = current & ~buttonConst
+                current = current & ~button
             end
+        end
+        -- Same merge as buttonJustPressed/buttonJustReleased above: an
+        -- overridden (or just-was-overridden) button's real pressed/
+        -- released bit is meaningless, since no real hardware edge
+        -- caused it - use the synthetic edge instead.
+        if activeNow or overrideWasActiveLastFrame[button] then
+            pressed = pressed & ~button
+            released = released & ~button
+            if justPressedSynthetic[button] then pressed = pressed | button end
+            if justReleasedSynthetic[button] then released = released | button end
         end
     end
     return current, pressed, released
@@ -86,6 +206,24 @@ end
 
 function mcp.registerState(fn)
     stateFn = fn
+end
+
+-- Games call this once instead of assigning playdate.update themselves.
+-- xpcall guarantees mcp.update() (the harness's own command-polling loop)
+-- always runs after the game's frame logic, whether or not that logic
+-- threw - so an uncaught error in the game's own code can no longer
+-- freeze get_game_state/get_screenshot/list_entities along with it. The
+-- traceback lands in the same game_logs.json channel as print() output.
+-- Calling mcp.update() manually (the older pattern) still works for
+-- backward compatibility, it just doesn't get this protection.
+function mcp.run(gameUpdateFn)
+    playdate.update = function()
+        local ok, err = xpcall(gameUpdateFn, debug.traceback)
+        if not ok then
+            appendGameLog("error", err)
+        end
+        mcp.update()
+    end
 end
 
 local function applyPress(button, durationMs, nowMs)
@@ -160,6 +298,7 @@ end
 function mcp.update()
     local nowMs = playdate.getCurrentTimeMilliseconds()
     expireOverrides(nowMs)
+    updateButtonEdges()
 
     if not playdate.file.exists("mcp/command.json") then
         return
