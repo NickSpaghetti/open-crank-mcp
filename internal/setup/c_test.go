@@ -79,6 +79,216 @@ func TestPatchInputCallsIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestPatchInputCallsAddsMissingInclude reproduces the second half of the
+// real gap found testing against the SDK's own "Sprite Game" example:
+// game.c (a file other than the one setupC designates as "the"
+// eventHandler file) got its direct SDK calls rewritten to mcp_get_*, but
+// never got #include "mcp_harness.h" added - it only "compiled" as an
+// implicit-declaration warning, since nothing else in the project already
+// included it.
+func TestPatchInputCallsAddsMissingInclude(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "game.c")
+	mustWrite(t, path, `#include "game.h"
+
+void checkButtons(void) {
+	PDButtons pushed;
+	pd->system->getButtonState(NULL, &pushed, NULL);
+}
+`)
+
+	changes, err := patchInputCalls(dir)
+	if err != nil {
+		t.Fatalf("patchInputCalls: %v", err)
+	}
+	if len(changes) != 1 || !changes[0].Changed {
+		t.Fatalf("patchInputCalls() = %v, want exactly one Changed=true entry", changes)
+	}
+	content := mustRead(t, path)
+	if !strings.Contains(content, `#include "mcp_harness.h"`) {
+		t.Fatalf("patched content missing #include \"mcp_harness.h\":\n%s", content)
+	}
+	if !strings.Contains(content, "mcp_get_button_state(pd, NULL, &pushed, NULL)") {
+		t.Fatalf("patched content missing the rewritten call:\n%s", content)
+	}
+}
+
+// TestPatchInputCallsDoesNotDuplicateExistingInclude covers a file that
+// already has the literal include (missile-command's aim.c, hand-wired
+// before this tool existed) - patchInputCalls shouldn't add a second one.
+func TestPatchInputCallsDoesNotDuplicateExistingInclude(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "aim.c")
+	mustWrite(t, path, `#include "mcp_harness.h"
+
+void checkButtons(void) {
+	PDButtons pushed;
+	pd->system->getButtonState(NULL, &pushed, NULL);
+}
+`)
+
+	if _, err := patchInputCalls(dir); err != nil {
+		t.Fatalf("patchInputCalls: %v", err)
+	}
+	content := mustRead(t, path)
+	if strings.Count(content, `#include "mcp_harness.h"`) != 1 {
+		t.Fatalf("expected exactly one #include \"mcp_harness.h\", got:\n%s", content)
+	}
+}
+
+func TestPatchCMakeListsAddsIncludeDirectories(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CMakeLists.txt")
+	mustWrite(t, path, "cmake_minimum_required(VERSION 3.14)\n"+
+		"project(Game C ASM)\n\n"+
+		"add_library(${NAME} SHARED main.c)\n")
+
+	changed, err := patchCMakeLists(path)
+	if err != nil {
+		t.Fatalf("patchCMakeLists: %v", err)
+	}
+	if !changed {
+		t.Fatal("patchCMakeLists() changed = false, want true")
+	}
+	content := mustRead(t, path)
+	if !strings.Contains(content, "include_directories(src)") {
+		t.Fatalf("expected include_directories(src) to be inserted:\n%s", content)
+	}
+	if !strings.Contains(content, cmakeMarkerBegin) || !strings.Contains(content, cmakeMarkerEnd) {
+		t.Fatalf("expected the include_directories(src) insertion to be marker-wrapped:\n%s", content)
+	}
+	if strings.Contains(content, cMarkerBegin) {
+		t.Fatalf("include_directories(src) was wrapped in C-style markers, not valid CMake syntax:\n%s", content)
+	}
+	// Inserted after project(...), before the add_library call.
+	projectIdx := strings.Index(content, "project(")
+	includeIdx := strings.Index(content, "include_directories(src)")
+	addLibIdx := strings.Index(content, "add_library(")
+	if !(projectIdx < includeIdx && includeIdx < addLibIdx) {
+		t.Fatalf("expected project(...) < include_directories(src) < add_library(...):\n%s", content)
+	}
+}
+
+func TestPatchCMakeListsIncludeDirectoriesIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CMakeLists.txt")
+	mustWrite(t, path, "project(Game C ASM)\n\nadd_library(${NAME} SHARED main.c)\n")
+
+	if _, err := patchCMakeLists(path); err != nil {
+		t.Fatalf("first patchCMakeLists: %v", err)
+	}
+	firstContent := mustRead(t, path)
+
+	changed, err := patchCMakeLists(path)
+	if err != nil {
+		t.Fatalf("second patchCMakeLists: %v", err)
+	}
+	if changed {
+		t.Fatal("patchCMakeLists() second call changed = true, want false (already patched)")
+	}
+	if mustRead(t, path) != firstContent {
+		t.Fatal("second patchCMakeLists() modified an already-patched file")
+	}
+}
+
+func TestTeardownCStripsIncludeDirectories(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "CMakeLists.txt")
+	mustWrite(t, path, "project(Game C ASM)\n\nadd_library(${NAME} SHARED main.c)\n")
+
+	changed, err := teardownCMakeLists(path)
+	if err != nil {
+		t.Fatalf("teardownCMakeLists: %v", err)
+	}
+	if changed {
+		t.Fatal("teardownCMakeLists() changed = true on a file with neither src/mcp_harness.c nor " +
+			"an include_directories(src) block, want false")
+	}
+
+	// Now with the block actually present, as patchCMakeLists would leave it.
+	if _, err := patchCMakeLists(path); err != nil {
+		t.Fatalf("patchCMakeLists: %v", err)
+	}
+	if !strings.Contains(mustRead(t, path), "include_directories(src)") {
+		t.Fatal("expected patchCMakeLists to have inserted include_directories(src)")
+	}
+
+	changed, err = teardownCMakeLists(path)
+	if err != nil {
+		t.Fatalf("teardownCMakeLists: %v", err)
+	}
+	if !changed {
+		t.Fatal("teardownCMakeLists() changed = false, want true")
+	}
+	content := mustRead(t, path)
+	if strings.Contains(content, "include_directories(src)") || strings.Contains(content, cmakeMarkerBegin) {
+		t.Fatalf("teardownCMakeLists left the include_directories(src) block in place:\n%s", content)
+	}
+}
+
+// TestSetupAndTeardownCFlatLayoutRoundTrip reproduces the SDK's own
+// "Sprite Game" example's actual shape: no src/ directory at all - the
+// eventHandler file and a second file with direct input calls both live
+// at the project root. Without patchCMakeIncludeDirectories and
+// patchInputCalls' own #include insertion, a bare #include
+// "mcp_harness.h" (always copied into sourceDir/src/) can't resolve from
+// either file, and game.c's rewritten calls have no declaration in scope
+// at all.
+func TestSetupAndTeardownCFlatLayoutRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "CMakeLists.txt"),
+		"cmake_minimum_required(VERSION 3.14)\n"+
+			"project(SpriteGame C ASM)\n\n"+
+			"add_library(${NAME} SHARED main.c game.c)\n")
+	mustWrite(t, filepath.Join(dir, "main.c"), fixtureStyleMain)
+	mustWrite(t, filepath.Join(dir, "game.c"), `#include "game.h"
+
+void checkButtons(void) {
+	PDButtons pushed;
+	pd->system->getButtonState(NULL, &pushed, NULL);
+}
+`)
+
+	result, err := Setup(dir, C)
+	if err != nil {
+		t.Fatalf("Setup: %v", err)
+	}
+	if len(result.ManualSteps) != 0 {
+		t.Fatalf("Setup().ManualSteps = %v, want empty for this fixture shape", result.ManualSteps)
+	}
+	if !fileExists(filepath.Join(dir, "src", "mcp_harness.h")) || !fileExists(filepath.Join(dir, "src", "mcp_harness.c")) {
+		t.Fatal("mcp_harness.h/.c were not copied to src/")
+	}
+
+	cmakeContent := mustRead(t, filepath.Join(dir, "CMakeLists.txt"))
+	if !strings.Contains(cmakeContent, "src/mcp_harness.c") {
+		t.Fatalf("CMakeLists.txt source list wasn't patched:\n%s", cmakeContent)
+	}
+	if !strings.Contains(cmakeContent, "include_directories(src)") {
+		t.Fatalf("CMakeLists.txt missing include_directories(src) - main.c/game.c at the project root "+
+			"can't otherwise reach mcp_harness.h in src/:\n%s", cmakeContent)
+	}
+
+	gameContent := mustRead(t, filepath.Join(dir, "game.c"))
+	if !strings.Contains(gameContent, `#include "mcp_harness.h"`) {
+		t.Fatalf("game.c missing #include \"mcp_harness.h\" after its calls were rewritten:\n%s", gameContent)
+	}
+	if !strings.Contains(gameContent, "mcp_get_button_state(pd, NULL, &pushed, NULL)") {
+		t.Fatalf("game.c's direct call wasn't rewritten:\n%s", gameContent)
+	}
+
+	teardownResult, err := Teardown(dir, C)
+	if err != nil {
+		t.Fatalf("Teardown: %v", err)
+	}
+	// patchInputCalls' rewrite in game.c is never reversed (same
+	// documented trade-off as TestSetupThenTeardownCWithInputCallsIsANoOp),
+	// so teardown here is correctly a full no-op.
+	if len(teardownResult.FilesRemoved) != 0 || len(teardownResult.FilesPatched) != 0 {
+		t.Fatalf("Teardown() = %+v, want a full no-op - mcp_get_button_state() is still called in game.c", teardownResult)
+	}
+}
+
 func TestPatchCMakeListsInlineStyle(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CMakeLists.txt")

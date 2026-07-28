@@ -27,7 +27,11 @@ func setupC(sourceDir, repoRoot string) (SetupResult, error) {
 		return result, fmt.Errorf("patching CMakeLists.txt: %w", err)
 	}
 	result.FilesPatched = append(result.FilesPatched, FileChange{Path: cmakePath, Changed: cmakeChanged})
-	if !cmakeChanged && !fileContains(cmakePath, "src/mcp_harness.c") {
+	// Checked against the file's actual end state, not cmakeChanged - that
+	// flag can be true purely from the include_directories(src) patch (see
+	// patchCMakeLists) even when the source-list patch itself found nothing
+	// to touch, which would otherwise wrongly suppress this ManualStep.
+	if !fileContains(cmakePath, "src/mcp_harness.c") {
 		result.ManualSteps = append(result.ManualSteps, fmt.Sprintf(
 			"could not find a source list to patch in %s - add src/mcp_harness.c to your add_library/add_executable call yourself",
 			cmakePath))
@@ -108,6 +112,13 @@ func patchInputCalls(sourceDir string) ([]FileChange, error) {
 		if patched == content {
 			return nil
 		}
+		// A file other than the eventHandler one (which already got its
+		// own #include from patchEventHandlerInit) may not have any
+		// declaration of the mcp_get_* functions now used in it - without
+		// this, it "compiles" only as an implicit-declaration warning
+		// (and only links because mcp_harness.c happens to be in the same
+		// build), which breaks under a stricter toolchain or C23.
+		patched, _ = insertIncludeIfMissing(patched)
 		if writeErr := os.WriteFile(p, []byte(patched), 0o644); writeErr != nil {
 			return writeErr
 		}
@@ -125,11 +136,43 @@ func fileContains(path, substr string) bool {
 	return strings.Contains(string(b), substr)
 }
 
-// patchCMakeLists can't use marker comments the way Lua/C source files do -
-// a CMake comment mid-argument-list would comment out the rest of that
-// line, breaking the call. "src/mcp_harness.c" is unique and unambiguous
-// enough (a user's own project wouldn't organically have a file with this
-// exact name) to use directly for both idempotency and teardown instead.
+// patchCMakeLists makes two independent edits, in one read/write pass:
+// adding "src/mcp_harness.c" to the project's source list, and adding an
+// include_directories(src) line so #include "mcp_harness.h" resolves from
+// any .c file in the project - not just ones that happen to already live
+// in src/ alongside it (see patchCMakeIncludeDirectories).
+func patchCMakeLists(path string) (bool, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	content := string(b)
+	changed := false
+
+	if !strings.Contains(content, "src/mcp_harness.c") {
+		if newContent, ok := patchCMakeSourceList(content); ok {
+			content = newContent
+			changed = true
+		}
+	}
+
+	if newContent, ok := patchCMakeIncludeDirectories(content); ok {
+		content = newContent
+		changed = true
+	}
+
+	if !changed {
+		return false, nil
+	}
+	return true, os.WriteFile(path, []byte(content), 0o644)
+}
+
+// patchCMakeSourceList can't use marker comments the way Lua/C source
+// files do - a CMake comment mid-argument-list would comment out the rest
+// of that line, breaking the call. "src/mcp_harness.c" is unique and
+// unambiguous enough (a user's own project wouldn't organically have a
+// file with this exact name) to use directly for both idempotency and
+// teardown instead.
 //
 // Handles the two source-list shapes seen across this project's own
 // examples: an inline list (add_library(NAME SHARED src/main.c ...)) and
@@ -140,30 +183,20 @@ var (
 	addCallRe  = regexp.MustCompile(`(?s)(?:add_library|add_executable)\(([^()]*)\)`)
 )
 
-func patchCMakeLists(path string) (bool, error) {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
-	content := string(b)
-	if strings.Contains(content, "src/mcp_harness.c") {
-		return false, nil
-	}
-
+func patchCMakeSourceList(content string) (string, bool) {
 	if loc := setBlockRe.FindStringSubmatchIndex(content); loc != nil {
 		body := content[loc[2]:loc[3]]
 		if strings.Contains(body, ".c") {
 			indent := content[loc[4]:loc[5]]
 			insertion := "\n" + indent + "\tsrc/mcp_harness.c"
 			bodyEnd := loc[3]
-			content = content[:bodyEnd] + insertion + content[bodyEnd:]
-			return true, os.WriteFile(path, []byte(content), 0o644)
+			return content[:bodyEnd] + insertion + content[bodyEnd:], true
 		}
 	}
 
 	matches := addCallRe.FindAllStringSubmatchIndex(content, -1)
 	if len(matches) == 0 {
-		return false, nil
+		return content, false
 	}
 	changed := false
 	for i := len(matches) - 1; i >= 0; i-- {
@@ -175,10 +208,40 @@ func patchCMakeLists(path string) (bool, error) {
 		content = content[:argsEnd] + " src/mcp_harness.c" + content[argsEnd:]
 		changed = true
 	}
-	if !changed {
-		return false, nil
+	return content, changed
+}
+
+var projectLineRe = regexp.MustCompile(`(?m)^project\([^)]*\)\s*$`)
+
+// patchCMakeIncludeDirectories inserts a marker-wrapped
+// include_directories(src) line right after the project(...) line -
+// present in every CMakeLists style this tool handles. Unlike the
+// source-list entry above, this is its own standalone statement, not an
+// insertion inside an existing call's argument list, so it CAN safely use
+// marker comments (a "#" here doesn't truncate anything else) and be
+// cleanly reversed by teardownCMakeLists.
+//
+// Needed because a bare #include "mcp_harness.h" only resolves against
+// the including file's own directory before falling back to -I search
+// paths - every project this tool was tested against originally
+// (missile-command, c-harness/test/fixture-game) keeps all its sources
+// under src/ alongside mcp_harness.h, so this always happened to resolve.
+// The SDK's own "Sprite Game" example keeps main.c/game.c at the project
+// root instead, where a bare include has no way to find a header that
+// only exists in src/ - this is what makes it reachable regardless of
+// where a project's own files live. Checked against the literal text, not
+// hasMarkerBlock, so a project that already has this line by hand isn't
+// duplicated.
+func patchCMakeIncludeDirectories(content string) (string, bool) {
+	if strings.Contains(content, "include_directories(src)") {
+		return content, false
 	}
-	return true, os.WriteFile(path, []byte(content), 0o644)
+	loc := projectLineRe.FindStringIndex(content)
+	if loc == nil {
+		return content, false
+	}
+	block := markerBlock(cmakeMarkerBegin, cmakeMarkerEnd, "include_directories(src)")
+	return content[:loc[1]] + "\n" + block + content[loc[1]:], true
 }
 
 var eventHandlerRe = regexp.MustCompile(`\beventHandler\s*\(\s*PlaydateAPI\s*\*\s*(\w+)`)
@@ -214,6 +277,24 @@ func findEventHandler(sourceDir string) (path, pdVar string, err error) {
 
 var includeRe = regexp.MustCompile(`(?m)^#include\s*[<"][^>"]+[>"]\s*$`)
 
+// insertIncludeIfMissing inserts a marker-wrapped #include "mcp_harness.h"
+// into content - after the last existing #include line if any, otherwise
+// prepended - unless the literal include is already present. Shared by
+// patchEventHandlerInit and patchInputCalls: both need to guarantee
+// mcp_harness.h is reachable from whatever file they're touching, not just
+// the one file setup happens to designate as "the" eventHandler file.
+func insertIncludeIfMissing(content string) (string, bool) {
+	if strings.Contains(content, `#include "mcp_harness.h"`) {
+		return content, false
+	}
+	includeBlock := markerBlock(cMarkerBegin, cMarkerEnd, `#include "mcp_harness.h"`)
+	if allIncludes := includeRe.FindAllStringIndex(content, -1); len(allIncludes) > 0 {
+		last := allIncludes[len(allIncludes)-1]
+		return content[:last[1]] + "\n" + includeBlock + content[last[1]:], true
+	}
+	return includeBlock + "\n" + content, true
+}
+
 var kEventInitRe = regexp.MustCompile(`event\s*==\s*kEventInit\s*\)\s*\{`)
 
 // patchEventHandlerInit inserts the #include and the mcp_harness_init()
@@ -228,14 +309,8 @@ func patchEventHandlerInit(path, pdVar string) (bool, error) {
 	content := string(b)
 	changed := false
 
-	if !strings.Contains(content, `#include "mcp_harness.h"`) {
-		includeBlock := markerBlock(cMarkerBegin, cMarkerEnd, `#include "mcp_harness.h"`)
-		if allIncludes := includeRe.FindAllStringIndex(content, -1); len(allIncludes) > 0 {
-			last := allIncludes[len(allIncludes)-1]
-			content = content[:last[1]] + "\n" + includeBlock + content[last[1]:]
-		} else {
-			content = includeBlock + "\n" + content
-		}
+	if newContent, ok := insertIncludeIfMissing(content); ok {
+		content = newContent
 		changed = true
 	}
 
@@ -488,9 +563,24 @@ func teardownCMakeLists(path string) (bool, error) {
 		return false, err
 	}
 	content := string(b)
-	if !strings.Contains(content, "src/mcp_harness.c") {
+	changed := false
+
+	if strings.Contains(content, "src/mcp_harness.c") {
+		content = mcpHarnessCRefRe.ReplaceAllString(content, "")
+		changed = true
+	}
+
+	// The include_directories(src) block (see patchCMakeIncludeDirectories)
+	// is always marker-wrapped, unlike the source-list entry above, so
+	// stripMarkerBlocks alone correctly removes only what setup added -
+	// never a hand-written line that happens to read the same way.
+	if newContent, stripped := stripMarkerBlocks(content, cmakeMarkerBegin, cmakeMarkerEnd); stripped {
+		content = newContent
+		changed = true
+	}
+
+	if !changed {
 		return false, nil
 	}
-	newContent := mcpHarnessCRefRe.ReplaceAllString(content, "")
-	return true, os.WriteFile(path, []byte(newContent), 0o644)
+	return true, os.WriteFile(path, []byte(content), 0o644)
 }
