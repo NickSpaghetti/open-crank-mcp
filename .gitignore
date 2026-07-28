@@ -29,6 +29,24 @@ go.work.sum
 # env file
 .env
 
+# Simulator Data directory bind-mounted by the byos profile. Holds a running
+# game's save data and mcp/game_logs.json. Root-owned, since the container
+# runs as root.
+/.byos-data/
+
 # Editor/IDE
-# .idea/
 # .vscode/
+
+# IntelliJ / GoLand. Covers the project directory wherever it sits, plus the
+# module and workspace files those IDEs write next to it.
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+# Browser test dependencies and output, installed into the mounted directory by
+# the Playwright container, so root-owned on the host.
+/tests/browser/node_modules/
+/tests/browser/test-results/
+/tests/browser/playwright-report/

@@ -90,8 +90,84 @@ make up-vnc
 No host display or audio integration at all. Works the same on Linux,
 Windows, and macOS through Docker Desktop's normal port publishing.
 Trade-off: a browser tab instead of a native window. Open
-`http://localhost:6080/vnc.html` for video, `http://localhost:8000/stream.mp3`
-for audio.
+`http://localhost:6080/` for both video and audio. The audio player sits in
+the bottom right corner of that page. `audio.html` on the same port serves
+the player on its own if you want sound without the video.
+
+Audio is an endless MP3 stream on port 8000. Point a browser straight at
+that stream and you get a media viewer that reports it as 0:00 long and
+often won't start, which is why the pages above wrap it in an `<audio>`
+element instead. Only one listener is served at a time, so two tabs will
+fight over it.
+
+Both ports are published on `127.0.0.1` only. The VNC server runs with no
+password and allows multiple simultaneous clients, so anyone who reaches
+port 6080 can drive the Simulator, not just watch it. Publishing on
+`0.0.0.0` would also slip past a host firewall, since Docker's iptables
+rules sit ahead of the filter table.
+
+To reach it from another machine, forward the ports over SSH:
+
+```
+ssh -L 6080:localhost:6080 -L 8000:localhost:8000 user@host
+```
+
+`BIND_ADDR` overrides the bind address if you want it on the network
+directly. Use it on a network you trust.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `BIND_ADDR` | `127.0.0.1` | Host address for ports 6080 and 8000. `0.0.0.0` serves every interface. |
+
+### Simulator defaults
+
+The display is a workspace, not a frame around the Simulator. The Simulator
+opens at its normal size, pinned to the top-left corner, and everything left
+over is room to drag its console and other debugging windows into.
+
+| Setting | Default | Why |
+|---|---|---|
+| `SIM_ZOOM` | `1` | The Simulator's own default size. `Ctrl-1`/`Ctrl-2`/`Ctrl-3` change it live. |
+| `VNC_GEOMETRY` | `1280x800` | Workspace size. The Simulator's window is `400*zoom+82` by `240*zoom+466`, that 466 being fixed chrome, so the rest is free space. |
+
+A window manager runs in the container, which is what lets you move, resize
+and focus windows. Two of openbox's defaults are disabled because both of
+them make the Simulator look like it vanished: the four virtual desktops,
+where a stray scroll over the background switches to an empty one, and the
+keybindings, one of which unmaps every window at once. They also collided
+with the Simulator's own `Ctrl-1`/`Ctrl-2`/`Ctrl-3` and `Shift-Ctrl-C`.
+
+The "test on real hardware" and "join the developer email list" modals are
+suppressed through the Simulator's own INI, using key names found in the
+Simulator binary's strings.
+
+### Volume
+
+The Playdate's volume slider is the volume control. Clicking it does two
+things: the click is real, so it moves the Simulator's own volume as always,
+and the page reads where in the trough you clicked and sets the browser
+player to the same level. Clicking the mute icon under it mutes the player.
+So one gesture sets both, and the slider you see on the Playdate is the level
+the audio is actually at.
+
+Nothing else starts playback. Clicking elsewhere, pressing a d-pad or turning
+the crank leaves the audio alone, and the page doesn't touch the stream at all
+until you ask for sound, so a VNC tab nobody is listening to won't hold the
+single listener slot away from one that is.
+
+That only works in one direction. Nothing can read the Simulator's slider
+back: the SDK exposes `getVolume()` on its system API with no setter, every
+`setVolume()` in the sound API is per-source, and the INI has no key for it.
+Moving the browser player's own control therefore does not move the
+Playdate's.
+
+The page finds the slider by reading the framebuffer rather than by trusting
+fixed offsets, which moved with the zoom level. One pixel-wide column down
+the device frame crosses the LOCK button, MENU button, trough, knob and mute
+icon, and each reads as either dark or white against the yellow frame. The
+longest run below the buttons is the trough. It publishes what it found to
+`pd-layout.json`, and logs a warning if the column stops looking like a
+device frame.
 
 Fully self-contained. The container runs its own PulseAudio daemon with a
 null sink, `x11vnc` bridges the Xvfb display, `ffmpeg` re-streams the null
@@ -187,6 +263,128 @@ globally) - the same `mcpServers`/`command`/`args` shape as Claude Code:
   }
 }
 ```
+
+## Bring your own simulator (shared, watchable session)
+
+Every profile above and the "Connecting" command above it are two
+independent things. `docker compose run` (what an MCP client uses) always
+creates a brand new container per connection. So even if you separately
+had `make up-vnc` running, you'd never be looking at the same Simulator
+process an agent is driving through MCP tool calls. Two unrelated
+containers, two unrelated displays.
+
+`make up-byos` fixes that. One persistent container, shared by both. Start
+it once, pointed at your game's directory:
+
+```
+GAME_DIR=/absolute/path/to/your-game make up-byos
+```
+
+`GAME_DIR` is required and must be absolute. The target refuses to start
+without it, rather than silently mounting this repo as your game.
+
+Unlike every other `up*` target, this one runs detached. It keeps running
+in the background instead of occupying your terminal. Open
+`http://localhost:6080/` for video and audio in one tab, with the same
+Simulator defaults and the same `127.0.0.1` port binding described under
+`up-vnc` above. The binding matters more here. This container is detached,
+so anything published stays reachable in the background.
+
+Then point your MCP client at the *same* container instead of spinning up
+a new one. That means `docker compose exec` instead of `docker compose
+run`, with no inline `Xvfb ... && DISPLAY=...` dance, since the persistent
+container already has Xvfb running and `DISPLAY`/`PLAYDATE_SDK_PATH`
+already set:
+
+```json
+{
+  "mcpServers": {
+    "open-crank-mcp": {
+      "command": "docker",
+      "args": [
+        "compose", "-f", "/absolute/path/to/open-crank-mcp/docker-compose.yml",
+        "exec", "-T", "simulator-byos", "open-crank-mcp"
+      ]
+    }
+  }
+}
+```
+
+(The same `args` shape works for OpenCode's `command` list and
+`claude mcp add`/`opencode mcp add`, matching the "Connecting" section
+above. Only `run --rm -v ... simulator bash -c "..."` changes to
+`exec -T simulator-byos open-crank-mcp`.)
+
+Once both are connected, an agent calling `launch_simulator` makes the
+game appear in the browser tab you already have open. Click or type into
+that window and your input drives the same live process alongside
+whatever the agent's `press_button`/`set_crank` calls are doing. Real
+input and harness overrides are two independent mechanisms feeding the
+same running Simulator, so neither one blocks the other.
+
+### Seeing the logs
+
+Three separate channels carry different output. They are not
+interchangeable, and only two of them are readable by a human.
+
+| Channel | Carries | Readable by |
+|---|---|---|
+| `get_logs` | The Simulator process's real stdout/stderr. GTK warnings, native startup diagnostics, and a C game's `printf` output. | The agent only. Buffered in memory by the server, never written to disk. |
+| `get_game_logs` | Lua `print()` calls and uncaught-error tracebacks. | The agent, and you (see below). |
+| The VNC view | The Simulator GUI itself. Per `docs/GOTCHAS.md` this is the only place the SDK renders Lua console output, though no console pane is open by default. | You only. |
+
+The `byos` profile bind-mounts the Simulator's sandboxed Data directory to
+`.byos-data/` in this repo, so the file behind `get_game_logs` is readable
+from the host while the game runs:
+
+```
+tail -f .byos-data/<bundle-id>/mcp/game_logs.json
+```
+
+`launch_simulator` returns the `bundle_id` and the container-side
+`data_dir`, so the agent can tell you the exact path. The file is written
+by the Lua harness on every `print()` call, not batched, so a log from the
+frame before a crash still lands.
+
+Two asymmetries worth knowing, both covered in detail in
+`docs/GOTCHAS.md`:
+
+- Lua `print()` never reaches the process's real stdout on this SDK, so it
+  never appears in `get_logs`. `get_game_logs` exists to route around
+  that.
+- A C game's `printf` does reach real stdout, so `get_logs` already covers
+  it. The C harness doesn't write `game_logs.json` at all, and doesn't
+  need to.
+
+### Rough edges
+
+- The game directory is fixed when the container starts. Switching games
+  means `make down` and starting over with a new `GAME_DIR`.
+- The container runs as root, so `build_game` leaves root-owned `build/`
+  and `.pdx` output inside your game directory, and `.byos-data/` is
+  root-owned too. Both are readable without `sudo`. Deleting them needs
+  `sudo`, or a `docker compose run --rm` doing the `rm` from inside a
+  container.
+- Audio starts when you click the Playdate's volume slider, because nothing
+  in the SDK can set that slider and nothing can read it. See "Volume" above.
+  It's the first thing to suspect if a future SDK version rearranges the
+  device frame.
+- The persistent container and your VNC view survive an MCP client
+  disconnecting, but nothing supervises the Simulator an agent launched.
+  If the connection drops without `stop_simulator` first, the Simulator is
+  reparented to the container's init and keeps running. The next
+  connection's `launch_simulator` then starts a second one alongside it.
+  Both run the same `.pdx`, so both resolve to the same bundle ID and the
+  same Data directory, and both harnesses poll the same
+  `mcp/command.json`. A tool response can come back from either instance.
+  Worth clearing before you trust what you're seeing:
+
+  ```
+  docker compose exec simulator-byos pkill -9 -f bin/PlaydateSimulator
+  ```
+
+  `-9` is required. The Simulator ignores `SIGTERM`, which is why the
+  server's own `stop_simulator` uses `SIGKILL` too.
 
 ## Setting up a game
 
@@ -306,6 +504,51 @@ this project only targets the Simulator, never real hardware.
 **Hybrid C+Lua games** (C for hot loops, Lua for UI, an officially
 supported pattern) can use the Lua harness alone, since a real Lua VM is
 still running.
+
+## Tests
+
+| Target | Needs | Covers |
+|---|---|---|
+| `make go-test` | Go | The server, tools and harness IPC. |
+| `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |
+| `make sdk-contract-check` | Docker | The MCP tools driving a real Simulator, so an SDK release that changes behaviour shows up here. |
+| `make test-byos-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. Fast, no container. |
+| `make byos-check` | Docker | The VNC workspace: pages served, window manager configuration, where the slider was found, and that clicking it works. |
+| `make test-byos-types` | Docker | Typechecks the browser tests with `tsgo`, the Go port of `tsc`. |
+| `make test-byos-browser` | Docker | The browser behaviour of the VNC pages, driven by Playwright in its own container so nothing is installed on the host. Runs the typecheck and `byos-check` first. |
+
+The byos tests exist because that layer is easy to break invisibly. Each of
+these asserts something that has actually broken in practice:
+
+- Every page returns 200. A partial edit once deleted two of them, and a
+  missing page is invisible until someone opens that exact URL.
+- The patched openbox config keeps every mouse binding the shipped one has.
+  openbox doesn't merge a partial config with its defaults, so a hand-written
+  `rc.xml` silently dropped all 59 of them, taking window dragging with it.
+- No keybinding can hide or close the Simulator, since only an MCP client can
+  start one.
+- The volume slider is found by relationships, not pixel values: inside the
+  window, running downwards a plausible distance, mute icon below it. The exact
+  numbers move with zoom and theme.
+- Clicking the slider changes the framebuffer, which covers the whole input
+  path: X, GTK's click-to-warp, and the coordinates being right.
+- Audio playback starts only from the slider, never from a click elsewhere.
+
+The browser tests are TypeScript, run by Playwright's own runner, which
+transpiles them directly. `tsgo` typechecks them separately and emits nothing,
+so there's no build step in front of the tests.
+
+Node is the runtime, inside the Playwright container. Playwright's test runner
+requires it: Bun and Deno can drive `playwright-core`, but not this runner.
+`PLAYWRIGHT_IMAGE` in the `Makefile` has to stay on the same version as
+`@playwright/test` in `tests/browser/package.json`, since the image carries the
+browsers and the package drives them.
+
+Two things are deliberately not tested. Game audio end to end needs a
+sound-producing fixture and level thresholds, which is a flake factory, so the
+audio chain is checked with a synthetic tone into the sink instead. And nothing
+compares screenshots: the game animates, so image diffing would fail for
+reasons unrelated to the code.
 
 ## License
 

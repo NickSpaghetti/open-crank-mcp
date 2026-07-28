@@ -40,9 +40,9 @@ services:
     profiles: ["wsl"]
     environment:
       - DISPLAY=${DISPLAY}
-      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY}
+      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}
       - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}
-      - PULSE_SERVER=${PULSE_SERVER}
+      - PULSE_SERVER=${PULSE_SERVER:-}
       - SDL_AUDIODRIVER=pulseaudio
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix
@@ -60,8 +60,71 @@ services:
         PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
     profiles: ["vnc"]
     command: ["bash", "/workspace/scripts/run-vnc.sh"]
+    # Loopback by default. x11vnc runs with -nopw -shared (see run-vnc.sh),
+    # so whoever reaches 6080 gets an unauthenticated interactive session on
+    # the same display - able to drive the Simulator and the container's
+    # window manager, not just watch. A bare "6080:6080" would publish on
+    # 0.0.0.0, and Docker's iptables rules land ahead of the filter table,
+    # so a host ufw/firewalld rule you'd expect to cover that port doesn't.
+    # Reaching this from another machine is still supported (pd-audio.js
+    # builds its stream URL from location.hostname for exactly that case):
+    # set BIND_ADDR=0.0.0.0 to opt in, or leave this alone and forward the
+    # ports over SSH, which is the better answer given -nopw.
     ports:
-      - "6080:6080"
-      - "8000:8000"
+      - "${BIND_ADDR:-127.0.0.1}:6080:6080"
+      - "${BIND_ADDR:-127.0.0.1}:8000:8000"
     stdin_open: true
     tty: true
+
+  # A persistent, shared session: unlike every profile above, this one
+  # stays running in the background (`make up-byos` starts it detached),
+  # so an MCP client can `docker compose exec` a real open-crank-mcp
+  # process into the *same* container a human is watching via the VNC
+  # video/audio URLs below - both looking at, and both able to drive, the
+  # exact same live Simulator process. Every other profile only gives you
+  # one or the other: `docker compose run` (what an MCP client normally
+  # uses) always creates a brand new container per connection, so it was
+  # never the same container/display/filesystem as whatever `up-vnc`
+  # separately started.
+  simulator-byos:
+    build:
+      context: .
+      args:
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+    profiles: ["byos"]
+    environment:
+      # Set at the container level, not just inside run-vnc.sh's own
+      # process tree - a later `docker compose exec`'d open-crank-mcp
+      # process (and the Simulator it launches) is a sibling process, not
+      # a child of run-vnc.sh, so it only inherits the container's own
+      # environment. Without this, the agent-launched Simulator's audio
+      # wouldn't reach the same pulseaudio sink the VNC audio stream reads
+      # from. This value must stay in sync with the PULSE_SERVER that
+      # run-vnc.sh exports for its own children. DISPLAY and
+      # PLAYDATE_SDK_PATH are already image-level ENV in the Dockerfile.
+      - PULSE_SERVER=unix:/tmp/pulse-vnc/native
+      - SDL_AUDIODRIVER=pulseaudio
+    volumes:
+      # A long-lived service defined once, not a per-connection `docker
+      # compose run -v`. The game directory is configured via an env var at
+      # start time instead: GAME_DIR=/absolute/path/to/your-game make
+      # up-byos. Changing games means `make down` and starting over, since
+      # this is fixed when the container starts.
+      - ${GAME_DIR:-.}:/your-game
+      # Exposes the Simulator's sandboxed Data directory on the host, which
+      # is where a running game's mcp/game_logs.json lands (launch.go builds
+      # dataDir as $PLAYDATE_SDK_PATH/Disk/Data/<bundleID>, inside the image,
+      # not under /your-game). Without this the human watching the VNC view
+      # has no way to read the same Lua print()/traceback output the agent
+      # sees through get_game_logs. Empty in the image, so this shadows
+      # nothing.
+      - ./.byos-data:/opt/playdate-sdk/Disk/Data
+    command: ["bash", "/workspace/scripts/run-vnc.sh"]
+    # Same loopback default and same BIND_ADDR override as simulator-vnc
+    # above, for the same reason. It matters more here: this is the one
+    # service that runs detached, so an unauthenticated session published
+    # on 0.0.0.0 would sit there reachable in the background rather than
+    # only for as long as a terminal is occupied.
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:6080:6080"
+      - "${BIND_ADDR:-127.0.0.1}:8000:8000"
