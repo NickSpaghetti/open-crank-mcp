@@ -6,14 +6,22 @@ import "strings"
 // begin/end marker comment pair, each on its own line - never bare. That's
 // what makes both idempotency ("is a marker block already present") and
 // teardown ("strip everything between these markers") simple, reliable
-// string operations instead of fragile content-diffing. CMakeLists.txt is
-// the one exception - see patchCMakeLists, a CMake comment mid-argument-list
-// would comment out the rest of that line, so it can't use this scheme.
+// string operations instead of fragile content-diffing.
+//
+// CMakeLists.txt gets its own marker pair, using CMake's own "#" comment
+// syntax rather than C's "/* */" - and even then, only a standalone
+// statement (like include_directories(...), see
+// patchCMakeIncludeDirectories) can be wrapped this way. An insertion
+// *inside* an existing call's argument list (the src/mcp_harness.c source
+// entry, see patchCMakeLists) still can't use markers at all - a comment
+// there would run to end of line and comment out the rest of that call.
 const (
-	luaMarkerBegin = "-- BEGIN MCP HARNESS"
-	luaMarkerEnd   = "-- END MCP HARNESS"
-	cMarkerBegin   = "/* BEGIN MCP HARNESS */"
-	cMarkerEnd     = "/* END MCP HARNESS */"
+	luaMarkerBegin   = "-- BEGIN MCP HARNESS"
+	luaMarkerEnd     = "-- END MCP HARNESS"
+	cMarkerBegin     = "/* BEGIN MCP HARNESS */"
+	cMarkerEnd       = "/* END MCP HARNESS */"
+	cmakeMarkerBegin = "# BEGIN MCP HARNESS"
+	cmakeMarkerEnd   = "# END MCP HARNESS"
 )
 
 // markerBlock wraps content between beginMarker/endMarker, each on its own

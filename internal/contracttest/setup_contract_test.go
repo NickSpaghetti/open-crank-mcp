@@ -106,6 +106,54 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("build.Build after teardown: %v\n%s", err, buildResult.Output)
 		}
 	})
+
+	// Reproduces the SDK's own "Sprite Game" example's actual shape: no
+	// src/ directory at all - main.c and a second file with a direct input
+	// call both live at the project root. mcp_harness.h/.c still get
+	// copied into sourceDir/src/ (unchanged), so a bare #include
+	// "mcp_harness.h" from either file only resolves once
+	// include_directories(src) is added to CMakeLists.txt - this is what
+	// actually proves that fix against a real cmake/pdc build, not just
+	// Go-level string assertions.
+	t.Run("C flat layout", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, "CMakeLists.txt"), cFlatFixtureCMakeLists)
+		writeFile(t, filepath.Join(dir, "Source", "pdxinfo"), cFlatFixturePdxinfo)
+		writeFile(t, filepath.Join(dir, "main.c"), cFlatFixtureMain)
+		writeFile(t, filepath.Join(dir, "game.c"), cFlatFixtureGame)
+
+		result, err := setup.Setup(dir, setup.C)
+		if err != nil {
+			t.Fatalf("setup.Setup: %v", err)
+		}
+		if len(result.ManualSteps) != 0 {
+			t.Fatalf("setup.Setup().ManualSteps = %v, want empty for this fixture", result.ManualSteps)
+		}
+
+		buildResult, err := build.Build(dir)
+		if err != nil {
+			t.Fatalf("build.Build after setup: %v\n%s", err, buildResult.Output)
+		}
+
+		runAndConfirmHarnessReachable(t, sdkPath, buildResult.PdxPath, "dev.setupcontract.c.flat")
+
+		if _, err := setup.Teardown(dir, setup.C); err != nil {
+			t.Fatalf("setup.Teardown: %v", err)
+		}
+
+		// patchInputCalls' rewrite in game.c is never reversed (documented
+		// trade-off), so teardown here is correctly a full no-op - unlike
+		// the "C" subtest above, the harness files stay in place and the
+		// project must still build clean with them present.
+		if _, err := os.Stat(filepath.Join(dir, "src", "mcp_harness.c")); err != nil {
+			t.Fatalf("mcp_harness.c was removed even though game.c's rewritten call still needs it: %v", err)
+		}
+
+		buildResult, err = build.Build(dir)
+		if err != nil {
+			t.Fatalf("build.Build after teardown: %v\n%s", err, buildResult.Output)
+		}
+	})
 }
 
 func writeFile(t *testing.T, path, content string) {
@@ -224,5 +272,79 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
         pd->system->setUpdateCallback(update, NULL);
     }
     return 0;
+}
+`
+
+const cFlatFixturePdxinfo = `name=Flat Layout Setup Contract Fixture
+author=open-crank-mcp
+description=Sprite-Game-shaped fixture (no src/ directory) for TestSetupContract
+bundleID=dev.setupcontract.c.flat
+`
+
+const cFlatFixtureCMakeLists = `cmake_minimum_required(VERSION 3.14)
+set(CMAKE_C_STANDARD 11)
+
+set(ENVSDK $ENV{PLAYDATE_SDK_PATH})
+if (NOT ${ENVSDK} STREQUAL "")
+	file(TO_CMAKE_PATH ${ENVSDK} SDK)
+else()
+	execute_process(
+			COMMAND bash -c "egrep '^\\s*SDKRoot' $HOME/.Playdate/config"
+			COMMAND head -n 1
+			COMMAND cut -c9-
+			OUTPUT_VARIABLE SDK
+			OUTPUT_STRIP_TRAILING_WHITESPACE
+	)
+endif()
+if (NOT EXISTS ${SDK})
+	message(FATAL_ERROR "SDK Path not found; set ENV value PLAYDATE_SDK_PATH")
+	return()
+endif()
+
+set(CMAKE_CONFIGURATION_TYPES "Debug;Release")
+set(PLAYDATE_GAME_NAME setupcontractcheckflat)
+set(PLAYDATE_GAME_DEVICE setupcontractcheckflat_DEVICE)
+
+project(${PLAYDATE_GAME_NAME} C ASM)
+
+if (TOOLCHAIN STREQUAL "armgcc")
+	add_executable(${PLAYDATE_GAME_DEVICE} main.c game.c)
+else()
+	add_library(${PLAYDATE_GAME_NAME} SHARED main.c game.c)
+endif()
+
+include(${SDK}/C_API/buildsupport/playdate_game.cmake)
+`
+
+const cFlatFixtureMain = `#include "pd_api.h"
+
+PlaydateAPI *pd;
+
+void checkButtons(void);
+
+static int update(void *userdata) {
+    (void)userdata;
+    checkButtons();
+    pd->graphics->clear(kColorWhite);
+    return 1;
+}
+
+int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
+    (void)arg;
+    if (event == kEventInit) {
+        pd = playdate;
+        pd->system->setUpdateCallback(update, NULL);
+    }
+    return 0;
+}
+`
+
+const cFlatFixtureGame = `#include "pd_api.h"
+
+extern PlaydateAPI *pd;
+
+void checkButtons(void) {
+    PDButtons pushed;
+    pd->system->getButtonState(NULL, &pushed, NULL);
 }
 `
