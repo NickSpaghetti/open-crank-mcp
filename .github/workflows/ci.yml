@@ -64,6 +64,37 @@ jobs:
       - if: steps.filter.outputs.harness == 'true'
         run: make sdk-contract-check
 
+  byos:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Pure awk and bash, so this runs whether or not anything else does.
+      - run: make test-byos-unit
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            byos:
+              - 'scripts/run-vnc.sh'
+              - 'scripts/byos-lib.sh'
+              - 'scripts/find-volume-slider.awk'
+              - 'scripts/byos-check.sh'
+              - 'tests/browser/**'
+              - 'docker-compose.yml'
+              - 'Dockerfile'
+      # Same reason as sdk-contract-check: the job always runs so the required
+      # check resolves, and only the expensive part is conditional. This one
+      # builds the image, boots the container and drives a browser, so it isn't
+      # worth doing on a docs-only change.
+      #
+      # test-byos-browser runs byos-check itself, so the container and its
+      # image are only built once.
+      # Typechecking is cheap and has no container to boot, so it runs on every
+      # change to the browser tests rather than only when byos itself changes.
+      - run: make test-byos-types
+      - if: steps.filter.outputs.byos == 'true'
+        run: make test-byos-browser
+
   mutation-test:
     runs-on: ubuntu-latest
     steps:
