@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Rebuilds and reloads the running game whenever its source changes. Runs
-# inside the byos container; `make byos-watch` pipes it in.
+# inside the shared container; `make shared-watch` pipes it in.
 #
 # The reload is the Simulator's own Reset accelerator, Ctrl-R, which re-reads
 # the .pdx from disk. Verified: swapping the compiled code under a running
@@ -19,7 +19,7 @@ SOURCE_DIR="${SOURCE_DIR:-/your-game/Source}"
 PDX_PATH="${PDX_PATH:-/your-game/your-game.pdx}"
 
 if [ ! -d "$SOURCE_DIR" ]; then
-  echo "byos-watch: no $SOURCE_DIR - is GAME_DIR pointing at a project with a Source directory?" >&2
+  echo "shared-watch: no $SOURCE_DIR - is GAME_DIR pointing at a project with a Source directory?" >&2
   exit 1
 fi
 
@@ -50,7 +50,7 @@ reload() {
   echo "  reloaded"
 }
 
-echo "byos-watch: watching $SOURCE_DIR"
+echo "shared-watch: watching $SOURCE_DIR"
 echo "  save a file to rebuild and reload. Ctrl-C to stop."
 echo
 
@@ -62,7 +62,7 @@ while true; do
     --format '%f' "$SOURCE_DIR" 2>/dev/null)
   status=$?
   if [ "$status" -ne 0 ]; then
-    echo "byos-watch: inotifywait exited ($status), stopping" >&2
+    echo "shared-watch: inotifywait exited ($status), stopping" >&2
     exit "$status"
   fi
 

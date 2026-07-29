@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
-// The container is expected to be up already, started by byos-check.sh --keep,
-// so there's no webServer block here. BYOS_URL exists for the case where the
+// The container is expected to be up already, started by shared-check.sh --keep,
+// so there's no webServer block here. SHARED_URL exists for the case where the
 // container is reached somewhere other than localhost.
 export default defineConfig({
   testDir: '.',
@@ -12,7 +12,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: process.env.BYOS_URL ?? 'http://localhost:6080',
+    baseURL: process.env.SHARED_URL ?? 'http://localhost:6080',
     // Without this the audio element can never start, since headless Chromium
     // blocks playback until a real user gesture. The click mapping is what's
     // under test, not the browser's autoplay policy.

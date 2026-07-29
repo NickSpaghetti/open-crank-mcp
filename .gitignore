@@ -29,9 +29,15 @@ go.work.sum
 # env file
 .env
 
-# Simulator Data directory bind-mounted by the byos profile. Holds a running
+# Simulator Data directory bind-mounted by the shared profile. Holds a running
 # game's save data and mcp/game_logs.json. Root-owned, since the container
 # runs as root.
+/.shared-data/
+
+# Same directory under its pre-rename name. Still ignored so an existing
+# checkout doesn't show it as untracked: it's root-owned, so clearing it needs
+# sudo or a container, and nobody should be forced to do that just to get a
+# clean `git status`. See the README's migration note.
 /.byos-data/
 
 # Editor/IDE

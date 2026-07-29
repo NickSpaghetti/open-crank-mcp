@@ -350,7 +350,7 @@ SIGPIPE from a closed stdout pipe, Docker killing exec descendants, CPU
 starvation, the framebuffer scanner, container age. The Simulator was never
 dying. It was never starting.
 
-Two things now guard it. `cmd/byos-load` waits for `pactl info` to succeed
+Two things now guard it. `cmd/shared-load` waits for `pactl info` to succeed
 before launching anything, rather than waiting only for the container to accept
 execs. And `launch_simulator` checks the process is still alive shortly after
 starting it, returning the captured output if it isn't, so the message that
