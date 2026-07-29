@@ -70,6 +70,71 @@ if [ -d "$SDK/Disk" ]; then find "$SDK/Disk" -maxdepth 3 2>/dev/null | head -20;
 } 2>&1 | tee "$HOME/playdate-macos-report.txt"
 ```
 
+RESPONSE ON MAC:
+```shell
+ @admin  {
+echo "=== 1. the SDK's own config, byte-exact ==="
+if [ -f "$HOME/.Playdate/config" ]; then
+  od -c "$HOME/.Playdate/config" | head -20
+else
+  echo "MISSING: $HOME/.Playdate/config"
+fi
+
+echo; echo "=== 2. candidate SDK roots ==="
+for d in "$HOME/Developer/PlaydateSDK" "$HOME/PlaydateSDK" "/Applications/PlaydateSDK"; do
+  if [ -d "$d" ]; then echo "EXISTS  $d"; else echo "absent  $d"; fi
+done
+
+SDK=$(awk '$1=="SDKRoot"{print $2; exit}' "$HOME/.Playdate/config" 2>/dev/null)
+[ -z "$SDK" ] && SDK="$HOME/Developer/PlaydateSDK"
+echo; echo "using SDK=$SDK"
+
+echo; echo "=== 3. bin/ ==="
+if [ -d "$SDK/bin" ]; then ls -la "$SDK/bin" | head -30; else echo "MISSING: $SDK/bin"; fi
+
+echo; echo "=== 4. the Simulator bundle, and the executable inside it ==="
+find "$SDK" -maxdepth 3 -name "*.app" 2>/dev/null
+find "$SDK" -maxdepth 6 -path "*.app/Contents/MacOS/*" 2>/dev/null
+
+echo; echo "=== 5. candidate data directories ==="
+for d in "$HOME/Library/Application Support"/*laydate*; do
+  if [ -d "$d" ]; then echo "EXISTS  $d"; find "$d" -maxdepth 3 2>/dev/null | head -20; fi
+done
+echo "--- in-SDK Disk/ ---"
+if [ -d "$SDK/Disk" ]; then find "$SDK/Disk" -maxdepth 3 2>/dev/null | head -20; else echo "absent  $SDK/Disk"; fi
+} 2>&1 | tee "$HOME/playdate-macos-report.txt"
+=== 1. the SDK's own config, byte-exact ===
+0000000    S   D   K   R   o   o   t  \t   /   U   s   e   r   s   /   a
+0000020    d   m   i   n   /   D   e   v   e   l   o   p   e   r   /   P
+0000040    l   a   y   d   a   t   e   S   D   K  \n
+0000053
+
+=== 2. candidate SDK roots ===
+EXISTS  /Users/admin/Developer/PlaydateSDK
+absent  /Users/admin/PlaydateSDK
+absent  /Applications/PlaydateSDK
+
+using SDK=/Users/admin/Developer/PlaydateSDK
+
+=== 3. bin/ ===
+total 4240
+drwxr-xr-x   7 admin  staff      224 Jul 27 15:23 .
+drwxr-xr-x  15 admin  staff      480 Jul 22 15:35 ..
+-rw-r--r--@  1 admin  staff     6148 Jul 27 15:23 .DS_Store
+-rw-r--r--   1 admin  staff     1076 Jul 22 15:30 firmware_symbolizer.py
+-rwxr-xr-x   1 admin  staff  2015760 Jul 22 15:30 pdc
+-rwxr-xr-x   1 admin  staff   136224 Jul 22 15:30 pdutil
+drwxr-xr-x@  3 admin  staff       96 Jul 22 15:32 Playdate Simulator.app
+
+=== 4. the Simulator bundle, and the executable inside it ===
+/Users/admin/Developer/PlaydateSDK/bin/Playdate Simulator.app
+/Users/admin/Developer/PlaydateSDK/bin/Playdate Simulator.app/Contents/MacOS/crashpad_handler
+/Users/admin/Developer/PlaydateSDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator
+
+=== 5. candidate data directories ===
+zsh: no matches found: /Users/admin/Library/Application Support/*laydate*
+```
+
 Section 5 is worth more once a game has run at least once, since the Simulator
 may not create the directory until then. If you have any `.pdx`, open it in the
 Simulator, quit, and run section 5 again.
@@ -108,6 +173,39 @@ echo "--- first 40 lines of what the process actually wrote ---"
 head -40 /tmp/sim-stdout.txt
 ```
 
+RESPONSE ON MACOS:
+```shell
+@admin  SDK=$(awk '$1=="SDKRoot"{print $2; exit}' "$HOME/.Playdate/config" 2>/dev/null)
+[ -z "$SDK" ] && SDK="$HOME/Developer/PlaydateSDK"
+
+"$SDK/bin/pdc" lua/test-fixture/Source /tmp/fixture.pdx || echo "pdc failed"
+
+SIM=$(find "$SDK" -maxdepth 6 -path "*.app/Contents/MacOS/*" 2>/dev/null | head -1)
+echo "simulator: $SIM"
+
+"$SIM" /tmp/fixture.pdx > /tmp/sim-stdout.txt 2>&1 &
+SIMPID=$!
+sleep 8
+# -9 because the Simulator ignores SIGTERM. That is a real finding, not caution:
+# see internal/simulator and docs/GOTCHAS.md.
+kill -9 "$SIMPID" 2>/dev/null
+
+echo "--- occurrences of the fixture's print() in real stdout ---"
+grep -c "fixture print line" /tmp/sim-stdout.txt
+echo "--- first 40 lines of what the process actually wrote ---"
+head -40 /tmp/sim-stdout.txt
+error: lua/test-fixture/Source/main.lua:2: No such file: mcp_harness
+pdc failed
+simulator: /Users/admin/Developer/PlaydateSDK/bin/Playdate Simulator.app/Contents/MacOS/crashpad_handler
+[1] 13954
+[1]  + 13954 exit 1     "$SIM" /tmp/fixture.pdx > /tmp/sim-stdout.txt 2>&1
+--- occurrences of the fixture's print() in real stdout ---
+0
+--- first 40 lines of what the process actually wrote ---
+crashpad_handler: --handshake-fd or --mach-service is required
+Try 'crashpad_handler --help' for more information.
+```
+
 A count above zero means macOS behaves differently from Linux here. Zero
 confirms the existing finding holds on both.
 
@@ -116,6 +214,11 @@ re-check where it landed:
 
 ```bash
 find "$HOME/Library/Application Support" "$SDK/Disk" -maxdepth 4 -name "*contractcheck*" 2>/dev/null
+find "$HOME/Library/Application Support" "$SDK/Disk" -maxdepth 5 -name "game_logs.json" 2>/dev/null
+```
+RESPONSE:
+```bash
+ find "$HOME/Library/Application Support" "$SDK/Disk" -maxdepth 4 -name "*contractcheck*" 2>/dev/null
 find "$HOME/Library/Application Support" "$SDK/Disk" -maxdepth 5 -name "game_logs.json" 2>/dev/null
 ```
 
