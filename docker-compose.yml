@@ -118,7 +118,10 @@ services:
       # has no way to read the same Lua print()/traceback output the agent
       # sees through get_game_logs. Empty in the image, so this shadows
       # nothing.
-      - ./.byos-data:/opt/playdate-sdk/Disk/Data
+      # BYOS_DATA_DIR so a test run can keep its save data and logs away from
+      # yours - two containers sharing this directory would collide on the same
+      # bundle ID.
+      - ${BYOS_DATA_DIR:-./.byos-data}:/opt/playdate-sdk/Disk/Data
     command: ["bash", "/workspace/scripts/run-vnc.sh"]
     # Same loopback default and same BIND_ADDR override as simulator-vnc
     # above, for the same reason. It matters more here: this is the one
@@ -126,5 +129,7 @@ services:
     # on 0.0.0.0 would sit there reachable in the background rather than
     # only for as long as a terminal is occupied.
     ports:
-      - "${BIND_ADDR:-127.0.0.1}:6080:6080"
-      - "${BIND_ADDR:-127.0.0.1}:8000:8000"
+      # VNC_PORT and AUDIO_PORT are overridable so a test run can publish
+      # elsewhere and leave a session you are using alone. See byos-check.sh.
+      - "${BIND_ADDR:-127.0.0.1}:${VNC_PORT:-6080}:6080"
+      - "${BIND_ADDR:-127.0.0.1}:${AUDIO_PORT:-8000}:8000"

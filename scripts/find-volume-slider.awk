@@ -68,5 +68,36 @@ END {
     }
   }
 
-  print first[trough], last[trough], mute
+  # The knob is the light run inside the track, and where it sits along the
+  # track is the Simulator's volume. Reading it here is what lets the browser
+  # follow the slider instead of being told about it: the slider is the only
+  # place that volume exists, since the SDK exposes no way to read it.
+  knob_first = 0
+  knob_last = 0
+  for (row = first[trough]; row <= last[trough]; row++) {
+    if (pixel[row] < light) continue
+    if (knob_first == 0) knob_first = row
+    knob_last = row
+  }
+
+  # -1 rather than 0 for "no knob found": 0 is a legitimate volume, and a
+  # caller that can't tell the two apart would silence the audio on a bad read.
+  volume = -1
+  if (knob_first > 0) {
+    knob_height = knob_last - knob_first
+    # The knob's centre can only travel between half its own height from each
+    # end of the track, so those are the ends of the scale rather than the
+    # track's own edges. Without this the reading tops out around 0.93 and
+    # bottoms out around 0.07.
+    lowest = last[trough] - knob_height / 2
+    highest = first[trough] + knob_height / 2
+    centre = (knob_first + knob_last) / 2
+    if (lowest > highest) {
+      volume = (lowest - centre) / (lowest - highest)
+      if (volume < 0) volume = 0
+      if (volume > 1) volume = 1
+    }
+  }
+
+  printf "%d %d %d %.3f\n", first[trough], last[trough], mute, volume
 }

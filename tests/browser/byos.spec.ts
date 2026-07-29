@@ -124,7 +124,12 @@ test.describe('the workspace page', () => {
 
   test('the audio player exists but is out of the way', async ({ page }) => {
     // The element has to be in the document to play at all, and it has to be
-    // invisible so it isn't covering the workspace.
+    // invisible so it isn't covering the workspace. The stream is stubbed
+    // because the player deliberately reveals itself when the stream fails, and
+    // the container's encoder serves only one listener.
+    await page.route('**/stream.mp3', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'audio/mpeg', path: 'fixtures/silence.mp3' });
+    });
     await page.goto('/vnc.html?resize=scale&autoconnect=true');
     expect((await requireAudioState(page)).hidden).toBe(true);
   });
@@ -135,93 +140,117 @@ test.describe('the workspace page', () => {
   });
 });
 
-test.describe('the Playdate volume slider drives the player', () => {
-  test('clicking anywhere else leaves the audio alone', async ({ page, request }) => {
-    // The regression this exists for: playback used to start on any click, so
-    // aiming a crank or pressing a d-pad made noise.
-    const layout = await requireLayout(request);
-    await openWorkspace(page);
-    expect((await requireAudioState(page)).paused).toBe(true);
-
-    // Well clear of the slider: the middle of the Playdate's screen.
-    const point = await pagePoint(page, layout.window.x + 100, layout.window.y + 150);
-    await page.mouse.click(point.x, point.y);
-    await page.waitForTimeout(600);
-
-    expect((await requireAudioState(page)).paused).toBe(true);
-  });
-
-  test('clicking near the top of the trough sets a high volume and plays', async ({ page, request }) => {
-    const layout = await requireLayout(request);
-    await openWorkspace(page);
-    const point = await pagePoint(page, layout.troughX, layout.troughTop + 4);
-    await page.mouse.click(point.x, point.y);
-    await page.waitForTimeout(600);
-
-    const state = await requireAudioState(page);
-    expect(state.muted).toBe(false);
-    expect(state.paused).toBe(false);
-    // Near the top of the trough is near the top of the range. Asserted as a
-    // band rather than a value, since the click lands a few pixels in.
-    expect(state.volume).toBeGreaterThan(0.85);
-  });
-
-  test('clicking near the bottom of the trough sets a low volume', async ({ page, request }) => {
-    const layout = await requireLayout(request);
-    await openWorkspace(page);
-    const point = await pagePoint(page, layout.troughX, layout.troughBottom - 4);
-    await page.mouse.click(point.x, point.y);
-    await page.waitForTimeout(600);
-
-    expect((await requireAudioState(page)).volume).toBeLessThan(0.15);
-  });
-
-  test('the middle of the trough is roughly half volume', async ({ page, request }) => {
-    // Proves the mapping is proportional rather than just on or off.
-    const layout = await requireLayout(request);
-    await openWorkspace(page);
-    const middle = Math.round((layout.troughTop + layout.troughBottom) / 2);
-    const point = await pagePoint(page, layout.troughX, middle);
-    await page.mouse.click(point.x, point.y);
-    await page.waitForTimeout(600);
-
-    const state = await requireAudioState(page);
-    expect(state.volume).toBeGreaterThan(0.35);
-    expect(state.volume).toBeLessThan(0.65);
-  });
-
-  test('the very first click is not dropped', async ({ page, request }) => {
-    // The page fetches the slider position asynchronously. It used to ignore
-    // any click that arrived before that fetch came back, so the first touch of
-    // the slider did nothing at all.
-    const layout = await requireLayout(request);
-    await page.goto('/vnc.html?resize=scale&autoconnect=true');
-    await page.waitForFunction(() => {
-      const canvas = document.querySelector<HTMLCanvasElement>('#noVNC_canvas, canvas');
-      return canvas !== null && canvas.width > 0;
+test.describe('the player follows the Playdate volume slider', () => {
+  // The container reads the slider off the framebuffer and publishes it, so the
+  // page's whole job is to follow that number. These serve it directly rather
+  // than moving a real slider: a browser can't reach into the Simulator, and the
+  // container side is covered by byos-check.
+  async function serveVolume(page: Page, volume: () => number): Promise<void> {
+    await page.route('**/pd-volume.json', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ volume: volume() }),
+      });
     });
 
-    // No settling pause here, deliberately: that pause is what used to hide
-    // this bug.
-    const point = await pagePoint(page, layout.troughX, layout.troughTop + 4);
-    await page.mouse.click(point.x, point.y);
+    // The stream is served locally too, from a silent fixture. The container's
+    // encoder hands out one listener at a time, so a browser tab someone left
+    // open would otherwise make these fail for a reason that has nothing to do
+    // with the logic under test. The real stream is covered by byos-check.
+    await page.route('**/stream.mp3', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'audio/mpeg',
+        path: 'fixtures/silence.mp3',
+      });
+    });
+  }
 
-    await expect
-      .poll(async () => (await requireAudioState(page)).volume, { timeout: 5_000 })
-      .toBeGreaterThan(0.85);
+  test('a slider at zero leaves the audio paused', async ({ page }) => {
+    await serveVolume(page, () => 0);
+    await openWorkspace(page);
+    await page.waitForTimeout(1500);
+    expect((await requireAudioState(page)).paused).toBe(true);
   });
 
-  test('the mute icon toggles mute', async ({ page, request }) => {
-    const layout = await requireLayout(request);
+  test('raising the slider starts playback at that level', async ({ page }) => {
+    let level = 0;
+    await serveVolume(page, () => level);
     await openWorkspace(page);
-    const trough = await pagePoint(page, layout.troughX, layout.troughTop + 4);
-    await page.mouse.click(trough.x, trough.y);
-    await page.waitForTimeout(400);
-    expect((await requireAudioState(page)).muted).toBe(false);
+    await page.waitForTimeout(1200);
+    expect((await requireAudioState(page)).paused).toBe(true);
 
-    const mute = await pagePoint(page, layout.troughX, layout.muteY);
-    await page.mouse.click(mute.x, mute.y);
-    await page.waitForTimeout(400);
-    expect((await requireAudioState(page)).muted).toBe(true);
+    // A gesture, because browsers refuse to start audio without one. It is not
+    // a request for sound: the slider is.
+    await page.mouse.click(5, 5);
+    level = 0.8;
+
+    await expect
+      .poll(async () => (await requireAudioState(page)).paused, { timeout: 8_000 })
+      .toBe(false);
+    expect((await requireAudioState(page)).volume).toBeCloseTo(0.8, 1);
+  });
+
+  test('lowering it to zero stops playback again', async ({ page }) => {
+    let level = 0.9;
+    await serveVolume(page, () => level);
+    await openWorkspace(page);
+    await page.mouse.click(5, 5);
+    await expect
+      .poll(async () => (await requireAudioState(page)).paused, { timeout: 8_000 })
+      .toBe(false);
+
+    level = 0;
+    await expect
+      .poll(async () => (await requireAudioState(page)).paused, { timeout: 8_000 })
+      .toBe(true);
+  });
+
+  test('a mid-track slider tracks proportionally', async ({ page }) => {
+    let level = 0.5;
+    await serveVolume(page, () => level);
+    await openWorkspace(page);
+    await page.mouse.click(5, 5);
+    await expect
+      .poll(async () => (await requireAudioState(page)).volume, { timeout: 8_000 })
+      .toBeCloseTo(0.5, 1);
+
+    level = 0.25;
+    await expect
+      .poll(async () => (await requireAudioState(page)).volume, { timeout: 8_000 })
+      .toBeCloseTo(0.25, 1);
+  });
+
+  test('an unreadable slider leaves the audio alone', async ({ page }) => {
+    // -1 is the container saying the scan failed. Acting on it would silence
+    // working audio, and a failed read looks exactly like silence.
+    let level = 0.7;
+    await serveVolume(page, () => level);
+    await openWorkspace(page);
+    await page.mouse.click(5, 5);
+    await expect
+      .poll(async () => (await requireAudioState(page)).paused, { timeout: 8_000 })
+      .toBe(false);
+
+    level = -1;
+    await page.waitForTimeout(2500);
+    const state = await requireAudioState(page);
+    expect(state.paused).toBe(false);
+    expect(state.volume).toBeCloseTo(0.7, 1);
+  });
+
+  test('clicking the game does not start audio on its own', async ({ page, request }) => {
+    // The regression that started all of this: playback used to begin on any
+    // click, so aiming a crank made noise. A gesture only unlocks the browser.
+    const layout = await requireLayout(request);
+    await serveVolume(page, () => 0);
+    await openWorkspace(page);
+
+    const point = await pagePoint(page, layout.window.x + 100, layout.window.y + 150);
+    await page.mouse.click(point.x, point.y);
+    await page.waitForTimeout(1500);
+
+    expect((await requireAudioState(page)).paused).toBe(true);
   });
 });

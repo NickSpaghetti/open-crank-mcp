@@ -59,10 +59,16 @@ smoke-check: build
 sdk-contract-check: build
 	docker compose run --rm simulator go test ./internal/contracttest/... -v
 
-# Builds and launches the game in an already-running byos container, by
-# driving the MCP server exactly as a client would. `up-byos` only starts the
-# container; something still has to load a game into it, and this is that.
-byos-load:
+# Recreates the container against the current GAME_DIR, then builds and launches
+# the game by driving the MCP server exactly as a client would. This is the one
+# command to reach for: GAME_DIR is fixed when the container starts, so a
+# container left over from another game would otherwise keep serving that game.
+#
+# Pass -keep-container to reuse a running one, which is faster and keeps the
+# volume slider and the VNC connection, at the cost of keeping whatever GAME_DIR
+# it started with:
+#   go run ./cmd/byos-load -keep-container
+byos-load: check-game-dir
 	go run ./cmd/byos-load -compose-file $(CURDIR)/docker-compose.yml
 
 # Rebuilds and reloads on save, using the Simulator's own Ctrl-R, which
@@ -92,6 +98,8 @@ byos-check:
 # runner requires it; Bun and Deno can drive playwright-core but not this
 # runner. It all lives in the container, so the host needs neither.
 PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.62.0-noble
+# Must match the default in scripts/byos-check.sh.
+CHECK_VNC_PORT ?= 6180
 BROWSER_TESTS = docker run --rm --network host \
 	-v "$(CURDIR)/tests/browser:/work" -w /work $(PLAYWRIGHT_IMAGE) \
 	sh -c "npm install --no-audit --no-fund --loglevel=error >/dev/null &&
@@ -105,10 +113,13 @@ test-byos-types:
 # Browser behaviour for the VNC pages: the scaling redirect, the hidden player,
 # and the mapping from a click on the Playdate's slider to the player's volume.
 # Host networking is how the container reaches port 6080.
+# BYOS_URL points the browser tests at the isolated container byos-check starts,
+# not at whatever is on the default port. The teardown names the same project, so
+# a byos container of your own survives a test run untouched.
 test-byos-browser: test-byos-types
 	bash scripts/byos-check.sh --keep
-	$(BROWSER_TESTS) npx playwright test"
-	docker compose --profile byos down
+	$(BROWSER_TESTS) BYOS_URL=http://localhost:$(CHECK_VNC_PORT) npx playwright test"
+	COMPOSE_PROJECT_NAME=open-crank-mcp-check docker compose --profile byos down
 
 go-build:
 	go build ./...

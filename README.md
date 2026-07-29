@@ -94,11 +94,18 @@ Trade-off: a browser tab instead of a native window. Open
 the bottom right corner of that page. `audio.html` on the same port serves
 the player on its own if you want sound without the video.
 
-Audio is an endless MP3 stream on port 8000. Point a browser straight at
-that stream and you get a media viewer that reports it as 0:00 long and
-often won't start, which is why the pages above wrap it in an `<audio>`
-element instead. Only one listener is served at a time, so two tabs will
-fight over it.
+Audio is an endless MP3 stream on port 8000. Point a browser straight at that
+stream and you get a media viewer that reports it as 0:00 long and often won't
+start, which is why the pages above wrap it in an `<audio>` element instead.
+
+The stream is served by `socat`, which starts a fresh encoder per listener. That
+is not an implementation detail: a single long-lived `ffmpeg -listen 1` opens its
+pulse input before it opens its output, so it captures into a queue while waiting
+for someone to connect, and hands over the backlog when they do. Measured with a
+beep played at a known moment, that was **22 seconds** of lag after a few idle
+minutes, held for the whole session - late audio that keeps playing after you
+pause the game. Starting the encoder at connect time keeps it under a second, and
+as a side effect several listeners can share the stream.
 
 Both ports are published on `127.0.0.1` only. The VNC server runs with no
 password and allows multiple simultaneous clients, so anyone who reaches
@@ -143,31 +150,30 @@ Simulator binary's strings.
 
 ### Volume
 
-The Playdate's volume slider is the volume control. Clicking it does two
-things: the click is real, so it moves the Simulator's own volume as always,
-and the page reads where in the trough you clicked and sets the browser
-player to the same level. Clicking the mute icon under it mutes the player.
-So one gesture sets both, and the slider you see on the Playdate is the level
-the audio is actually at.
+The Playdate's own volume slider is the volume control, and the browser follows
+it. Turn it up in the VNC view and sound starts at that level; turn it down and
+it stops. Nothing in the page decides when to play, so clicking the game, working
+the crank or pressing a d-pad never makes noise on its own.
 
-Nothing else starts playback. Clicking elsewhere, pressing a d-pad or turning
-the crank leaves the audio alone, and the page doesn't touch the stream at all
-until you ask for sound, so a VNC tab nobody is listening to won't hold the
-single listener slot away from one that is.
+That works by reading the slider off the framebuffer, because the slider is the
+only place the Simulator's volume exists: the SDK exposes `getVolume()` on its
+system API with no setter, every `setVolume()` in the sound API is per-source,
+and the Simulator's INI has no key for it. So a one-pixel-wide column down the
+device frame gets scanned once a second. It crosses the LOCK button, the MENU
+button, the volume track, its knob and the mute icon, and each reads as either
+dark or light against the yellow frame. The knob's position along the track is
+the volume, published to `pd-volume.json` for the page to poll.
 
-That only works in one direction. Nothing can read the Simulator's slider
-back: the SDK exposes `getVolume()` on its system API with no setter, every
-`setVolume()` in the sound API is per-source, and the INI has no key for it.
-Moving the browser player's own control therefore does not move the
-Playdate's.
+Geometry is re-read on every scan, so dragging the Simulator window or changing
+its zoom can't leave it reading the wrong pixels. A scan that can't find the
+slider publishes `-1`, and the page leaves the audio exactly as it is: acting on
+a failed read would silence working audio, which looks identical to a broken
+pipeline.
 
-The page finds the slider by reading the framebuffer rather than by trusting
-fixed offsets, which moved with the zoom level. One pixel-wide column down
-the device frame crosses the LOCK button, MENU button, trough, knob and mute
-icon, and each reads as either dark or white against the yellow frame. The
-longest run below the buttons is the trough. It publishes what it found to
-`pd-layout.json`, and logs a warning if the column stops looking like a
-device frame.
+One thing no design can avoid: browsers refuse to start audio until the page has
+seen a user gesture. Clicking to connect to the display is enough, and in
+practice you have clicked something before you care about sound. The gesture only
+unlocks the browser; the slider still decides.
 
 Fully self-contained. The container runs its own PulseAudio daemon with a
 null sink, `x11vnc` bridges the Xvfb display, `ffmpeg` re-streams the null
@@ -603,6 +609,12 @@ make byos-load
 ## Tests
 
 What each command is above. This section is why they exist.
+
+The container tests run in their own compose project, on ports 6180 and 8100,
+with their own data directory. That isolation matters more than it sounds: the
+suite needs a known game mounted, so without it a test run unmounts the game you
+were playing and then fights your browser tab for the single-listener audio
+stream. Isolated, you can run the whole suite mid-game and nothing moves.
 
 The byos tests exist because that layer is easy to break invisibly. Each of
 these asserts something that has actually broken in practice:

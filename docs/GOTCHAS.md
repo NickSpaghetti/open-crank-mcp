@@ -323,3 +323,35 @@ both ways: the Go test now passes 20/20 runs under `-race`, and re-running
 the same concurrent batch against all three real games produced 10/10
 distinct screenshots and zero timeouts, where before it was 1/10 distinct
 and multiple timeouts.
+
+## The Simulator will not start without PulseAudio
+
+`SDL_AUDIODRIVER=pulseaudio` is set for the VNC and shared profiles so a game's
+audio reaches the stream. The consequence is easy to miss: the Simulator treats
+SDL initialisation as fatal, so with no reachable PulseAudio socket it prints
+
+```
+SDL2 could not be initalized (-1 - Could not setup connection to PulseAudio).
+SDL2 is required for the Playdate Simulator to run and it will now quit.
+```
+
+and exits. Not degraded audio - no Simulator at all.
+
+This is worth knowing because of how it presents. On a container that has been
+up for a while it never happens; on one that has just started, whatever launches
+a game can easily get there before `run-vnc.sh` has PulseAudio accepting
+connections. The same command works or doesn't depending on timing, and the
+message explaining it goes to the Simulator's own stdout, which is captured into
+the server's buffer and discarded when that session ends. What you observe is a
+game that launches, reports healthy, and is gone seconds later.
+
+Hours went into theories that were all wrong: process groups and sessions,
+SIGPIPE from a closed stdout pipe, Docker killing exec descendants, CPU
+starvation, the framebuffer scanner, container age. The Simulator was never
+dying. It was never starting.
+
+Two things now guard it. `cmd/byos-load` waits for `pactl info` to succeed
+before launching anything, rather than waiting only for the container to accept
+execs. And `launch_simulator` checks the process is still alive shortly after
+starting it, returning the captured output if it isn't, so the message that
+explains the failure reaches whoever asked.

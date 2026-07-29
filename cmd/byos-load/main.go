@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -124,17 +125,19 @@ func (c *client) callTool(name string, args map[string]any) (json.RawMessage, er
 	return wrapper.Content, nil
 }
 
-// clearRunningSimulators kills any Simulator already running in the container
-// before a new one is launched.
+// clearRunningSimulators kills any Simulator already running in the container,
+// for the -keep-container path where the container is not being replaced.
 //
-// launch_simulator has no already-running guard, and it can't have a useful one
-// here: server state lives in the connection, so a fresh one has no idea a
-// previous session left a Simulator behind. Launching anyway gives two
-// Simulators on one display, both running the same .pdx, so both harnesses poll
-// the same mcp/command.json and a tool response can come back from either.
+// launch_simulator has no already-running guard, and it can't have a useful one:
+// server state lives in the connection, so a fresh one has no idea a previous
+// session left a Simulator behind. Launching anyway gives two Simulators on one
+// display, both running the same .pdx, so both harnesses poll the same
+// mcp/command.json and a tool response can come back from either.
 //
 // SIGKILL because the Simulator ignores SIGTERM, which is also why the server's
-// own stop_simulator uses it.
+// own stop_simulator uses it. Server processes are deliberately left alone:
+// killing every open-crank-mcp would disconnect an agent that is connected right
+// now, and an idle server owns nothing once its Simulator is gone.
 func clearRunningSimulators(composeFile string) {
 	// pkill exits 0 when it killed something, 1 when there was nothing to kill.
 	cmd := exec.Command("docker", "compose", "-f", composeFile,
@@ -142,56 +145,166 @@ func clearRunningSimulators(composeFile string) {
 	if err := cmd.Run(); err == nil {
 		fmt.Println("stopped: a Simulator was already running")
 	}
-
-	// Server processes are deliberately left alone. Killing every
-	// open-crank-mcp in the container would also disconnect an agent that is
-	// connected right now, and an idle server owns nothing once its Simulator
-	// is gone. Only the Simulator is worth clearing, because two of those on
-	// one display is a genuine conflict.
 }
 
-// waitForHarness polls get_status until the game's harness answers, which is
-// the point at which the Simulator is fully up.
-func waitForHarness(c *client) error {
-	// A floor as well as a poll. get_status can report the harness reachable
-	// immediately, because the IPC it checks is a file in the data directory and
-	// a previous run's response can still be sitting there. Exiting on that
-	// answer kills a Simulator that is half a second old, so hold on regardless
-	// of what the first few polls claim.
-	start := time.Now()
-	const minimum = 5 * time.Second
+// recreateContainer tears the byos container down and brings it back up against
+// the current GAME_DIR.
+//
+// Replacing it rather than reusing it, because GAME_DIR is fixed when the
+// container starts: a container left over from a different game keeps serving
+// that game, and every tool then reports confidently about the wrong thing.
+// The failure is quiet and confusing - either "no Playdate project in
+// /your-game" or, worse, a successful build of a game you weren't asking about.
+//
+// The image is rebuilt too. Plain `docker compose build` skips services that
+// declare a profile, so an edit to run-vnc.sh or the Dockerfile would otherwise
+// be silently absent from the container this just started.
+func recreateContainer(composeFile, gameDir string) error {
+	sdkVersion := os.Getenv("PLAYDATE_SDK_VERSION")
+	if sdkVersion == "" {
+		sdkVersion = "3.1.1"
+	}
+	env := append(os.Environ(),
+		"GAME_DIR="+gameDir,
+		"PLAYDATE_SDK_VERSION="+sdkVersion,
+	)
 
-	deadline := time.Now().Add(20 * time.Second)
+	// --remove-orphans also clears containers left behind by `docker compose
+	// run`, which hold the project's network open and make `down` complain.
+	steps := [][]string{
+		{"compose", "-f", composeFile, "--profile", "byos", "down", "--remove-orphans"},
+		{"compose", "-f", composeFile, "--profile", "byos", "build", "simulator-byos"},
+		{"compose", "-f", composeFile, "--profile", "byos", "up", "-d", "simulator-byos"},
+	}
+	for _, args := range steps {
+		cmd := exec.Command("docker", args...)
+		cmd.Env = env
+		var out strings.Builder
+		cmd.Stdout = &out
+		cmd.Stderr = &out
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("docker %s: %w\n%s", args[3], err, strings.TrimSpace(out.String()))
+		}
+	}
+	fmt.Printf("container: recreated against %s\n", gameDir)
+	return nil
+}
+
+// waitForServer retries until the container is accepting execs *and* PulseAudio
+// inside it is accepting connections.
+//
+// Both halves matter. A container reports as started before it can be exec'd,
+// and it can be exec'd well before run-vnc.sh has PulseAudio up. The Simulator
+// runs with SDL_AUDIODRIVER=pulseaudio and refuses to start at all without it:
+//
+//	SDL2 could not be initalized (-1 - Could not setup connection to PulseAudio).
+//	SDL2 is required for the Playdate Simulator to run and it will now quit.
+//
+// That is a game that never appears on a freshly started container and works
+// perfectly on a warm one, which reads as flakiness rather than as a missing
+// dependency.
+func waitForServer(composeFile string) error {
+	deadline := time.Now().Add(90 * time.Second)
+	warned := false
 	for {
-		out, err := c.callTool("get_status", map[string]any{})
-		if err != nil {
-			return err
-		}
-		var status struct {
-			Running          bool `json:"running"`
-			HarnessReachable bool `json:"harness_reachable"`
-		}
-		if err := json.Unmarshal(out, &status); err != nil {
-			return fmt.Errorf("parsing get_status output: %w", err)
-		}
-		if status.HarnessReachable && time.Since(start) >= minimum {
+		// pactl talks to the same socket SDL will, so this is the real check
+		// rather than a proxy for it.
+		cmd := exec.Command("docker", "compose", "-f", composeFile,
+			"exec", "-T", "simulator-byos", "pactl", "info")
+		if err := cmd.Run(); err == nil {
 			return nil
 		}
-		if !status.Running {
-			return errors.New("the simulator exited during startup")
+		if !warned && time.Since(deadline.Add(-90*time.Second)) > 10*time.Second {
+			fmt.Println("waiting for audio to come up in the container")
+			warned = true
 		}
 		if time.Now().After(deadline) {
-			// Running but silent means the game is up and the harness isn't
-			// wired in, which is a game problem rather than a launch failure.
-			fmt.Println("warning: the simulator is running but its harness never answered")
-			return nil
+			return errors.New("PulseAudio never came up in the container, and the " +
+				"Simulator will not start without it (SDL_AUDIODRIVER=pulseaudio)")
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// harnessTimeout is generous on purpose. A cold container has Xvfb, openbox and
+// pulseaudio starting, a first-time build, and a game loading its assets, all at
+// once. 20 seconds was enough on a warm container and not on a cold one, which
+// is the difference between "your game works" and a warning that reads like a
+// broken harness.
+const harnessTimeout = 45 * time.Second
+
+// waitForHarness polls get_status until the game's harness answers. Returns
+// whether it answered; a game with no harness wired in is not an error.
+func waitForHarness(c *client) (bool, error) {
+	// A floor as well as a poll. get_status can report the harness reachable
+	// immediately, because the IPC it checks is a file in the data directory and
+	// a previous run's response can still be sitting there.
+	start := time.Now()
+	const minimum = 5 * time.Second
+	nextNote := 15 * time.Second
+
+	for {
+		status, err := readStatus(c)
+		if err != nil {
+			return false, err
+		}
+		if status.HarnessReachable && time.Since(start) >= minimum {
+			return true, nil
+		}
+		if !status.Running {
+			return false, errors.New("the simulator is not running.\n" +
+				"  Its own console has the reason, and Lua output never reaches stdout:\n" +
+				"  open http://localhost:6080/ and look at the Simulator window.")
+		}
+		if elapsed := time.Since(start); elapsed >= nextNote {
+			fmt.Printf("waiting for the harness (%ds)\n", int(elapsed.Seconds()))
+			nextNote += 15 * time.Second
+		}
+		if time.Since(start) > harnessTimeout {
+			return false, nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 }
 
-func run(composeFile string, skipSetup bool) error {
-	clearRunningSimulators(composeFile)
+type simulatorStatus struct {
+	Running          bool `json:"running"`
+	HarnessReachable bool `json:"harness_reachable"`
+}
+
+func readStatus(c *client) (simulatorStatus, error) {
+	out, err := c.callTool("get_status", map[string]any{})
+	if err != nil {
+		return simulatorStatus{}, err
+	}
+	var status simulatorStatus
+	if err := json.Unmarshal(out, &status); err != nil {
+		return simulatorStatus{}, fmt.Errorf("parsing get_status output: %w", err)
+	}
+	return status, nil
+}
+
+func run(composeFile string, skipSetup, keepContainer bool) error {
+	if keepContainer {
+		clearRunningSimulators(composeFile)
+	} else {
+		gameDir := os.Getenv("GAME_DIR")
+		if gameDir == "" {
+			return errors.New("GAME_DIR is not set.\n" +
+				"  GAME_DIR=/absolute/path/to/your-game make byos-load\n" +
+				"  It must be the directory that contains Source/, not Source itself.\n" +
+				"  Pass -keep-container to reuse a running container instead.")
+		}
+		if !filepath.IsAbs(gameDir) {
+			return fmt.Errorf("GAME_DIR must be an absolute path, got %q", gameDir)
+		}
+		if err := recreateContainer(composeFile, gameDir); err != nil {
+			return err
+		}
+		if err := waitForServer(composeFile); err != nil {
+			return err
+		}
+	}
 
 	cmd := exec.Command("docker", "compose", "-f", composeFile,
 		"exec", "-T", "simulator-byos", "open-crank-mcp")
@@ -272,18 +385,46 @@ func run(composeFile string, skipSetup bool) error {
 		return fmt.Errorf("parsing launch_simulator output: %w", err)
 	}
 
-	// Waiting for the harness before exiting, and this is load-bearing rather
-	// than cosmetic. The Simulator's stdout is a pipe held by this server, so
-	// exiting the moment launch_simulator returns closes that pipe while the
-	// Simulator is still writing its startup output, and it dies about a second
-	// later - a game that launches and immediately disappears. Staying until
-	// the harness answers gets it past startup, after which it survives on its
-	// own.
-	if err := waitForHarness(c); err != nil {
+	reachable, err := waitForHarness(c)
+	if err != nil {
 		return err
 	}
 
+	// One relaunch if it never answered. On a cold container the first launch
+	// competes with everything else starting up, and a second attempt usually
+	// answers immediately.
+	if !reachable {
+		fmt.Println("harness did not answer, relaunching once")
+		if _, err := c.callTool("restart_simulator", map[string]any{}); err != nil {
+			return err
+		}
+		reachable, err = waitForHarness(c)
+		if err != nil {
+			return err
+		}
+	}
+
+	// Never report a game as running when its process is gone. That is the
+	// failure that sent someone looking at harness wiring for a game whose
+	// harness was fine.
+	status, err := readStatus(c)
+	if err != nil {
+		return err
+	}
+	if !status.Running {
+		return errors.New("the simulator is no longer running.\n" +
+			"  Its own console has the reason, and Lua output never reaches stdout:\n" +
+			"  open http://localhost:6080/ and look at the Simulator window.")
+	}
+
 	fmt.Printf("running: %s\n", launched.BundleID)
+	if !reachable {
+		fmt.Println("harness:  not answering. The game runs, but screenshots, state")
+		fmt.Println("          and input tools will time out. See the README's")
+		fmt.Println("          \"Setting up a game\" section.")
+	} else {
+		fmt.Println("harness:  reachable")
+	}
 	fmt.Printf("logs:    .byos-data/%s/mcp/game_logs.json\n", launched.BundleID)
 	fmt.Println("view:    http://localhost:6080/")
 	return nil
@@ -292,9 +433,10 @@ func run(composeFile string, skipSetup bool) error {
 func main() {
 	composeFile := flag.String("compose-file", "docker-compose.yml", "path to this repo's docker-compose.yml")
 	skipSetup := flag.String("skip-setup", "", "set to any value to skip the setup tool, which rewrites the harness in your game's source")
+	keepContainer := flag.Bool("keep-container", false, "reuse the running container instead of replacing it; faster, and keeps the volume slider and VNC connection, but keeps whatever GAME_DIR it was started with")
 	flag.Parse()
 
-	if err := run(*composeFile, *skipSetup != ""); err != nil {
+	if err := run(*composeFile, *skipSetup != "", *keepContainer); err != nil {
 		fmt.Fprintf(os.Stderr, "byos-load: %v\n", err)
 		os.Exit(1)
 	}

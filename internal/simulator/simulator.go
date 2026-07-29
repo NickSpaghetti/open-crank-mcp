@@ -68,6 +68,7 @@ func Launch(binPath, pdxPath string, extraArgs ...string) (*Simulator, error) {
 // because some shells fork rather than exec the final command in a `-c`
 // script, leaving an orphaned grandchild that would otherwise keep
 // stdout/stderr's pipe open and Wait() blocked until it exits on its own.
+
 func (s *Simulator) Stop() error {
 	if s.cmd.Process == nil {
 		return nil
@@ -82,6 +83,20 @@ func (s *Simulator) Stop() error {
 // its own if the process is expected to exit by itself.
 func (s *Simulator) Wait() error {
 	return s.cmd.Wait()
+}
+
+// Exited reports whether the process has already finished, without blocking.
+// Useful right after Launch: the Simulator can quit during startup - a missing
+// PulseAudio makes it refuse to run at all - and a successful Start() says
+// nothing about whether it survived.
+func (s *Simulator) Exited() bool {
+	if s.cmd.Process == nil {
+		return true
+	}
+	// Signal 0 checks for the process's existence without touching it. A
+	// released-but-unreaped child answers here too, which is what we want:
+	// either way it is gone.
+	return s.cmd.Process.Signal(syscall.Signal(0)) != nil
 }
 
 // Output returns the combined stdout+stderr captured so far. Safe to call

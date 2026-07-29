@@ -127,10 +127,8 @@ x11vnc -display "$DISPLAY" -forever -shared -nopw -rfbport 5900 -quiet &
 # - A browser pointed straight at an endless chunked stream shows its own
 #   media viewer, reports the stream as 0:00 long, and often won't start it.
 #   An <audio> element handles the same stream fine.
-# - The encoder below serves one listener per invocation and exits when that
-#   listener leaves, so every reconnect has a short window where the port
-#   refuses connections. Without a retry loop you're left hard-refreshing
-#   until the timing happens to line up.
+# - The stream can drop: the container restarts, or the encoder serving this
+#   listener goes away. Without a retry loop that means hard-refreshing.
 #
 # On the VNC page the Playdate's own volume slider drives this player. A click
 # on that slider is a real click, delivered to the Simulator, so it moves the
@@ -190,29 +188,73 @@ cat > /usr/share/novnc/pd-audio.js <<'JS'
   // reconnects and starts playing on its own, which is the same "audio out of
   // nowhere" behaviour that clicking anywhere used to cause.
   var wanted = false;
+  var reconnectTimer = null;
 
   function reconnect() {
-    if (++attempts > 120) {
+    // One pending attempt at a time. The element can fire several errors for a
+    // single failure, and a timer per error turns one dropped stream into a
+    // burst of connections, each of which spawns an encoder in the container.
+    if (reconnectTimer) return;
+
+    if (++attempts > 40) {
       status.textContent = 'gave up, reload to retry';
       bar.style.display = 'flex';
       return;
     }
+
+    // Backing off rather than hammering every 400ms. A container that is
+    // restarting takes seconds, not milliseconds, and the old fixed interval
+    // meant ~150 attempts across that window.
+    var delay = Math.min(400 * Math.pow(2, attempts - 1), 5000);
     status.textContent = 'reconnecting';
     bar.style.display = 'flex';
-    setTimeout(function () {
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = null;
       el.load();
       if (wanted) resume();
-    }, 400);
+    }, delay);
   }
 
   function resume() {
     if (!el.paused) return;
+    // load() first, every time. Pausing does not discard what the element has
+    // already buffered, so resuming without this replays audio from wherever it
+    // stopped - explosions from several minutes ago, arriving while the game sits
+    // on its game-over screen. A live stream has no business resuming from a
+    // buffer, so the connection is dropped and remade.
+    el.load();
     el.play().then(function () {
       status.textContent = '';
       attempts = 0;
       if (!visible) bar.style.display = 'none';
-    }).catch(function () {});
+    }).catch(function () {
+      // A rejected play is not a stream failure: an autoplay block resolves
+      // itself on the next gesture, so don't burn reconnect attempts on it.
+    });
   }
+
+  // A browser that falls behind on a live stream keeps the gap rather than
+  // catching up, so latency grows and never recovers. Backgrounded tabs are the
+  // usual cause: timers get throttled, the element keeps buffering, and coming
+  // back to the tab means hearing the past.
+  //
+  // Reconnecting rather than seeking. Seeking a chunked live stream is not
+  // meaningful - there is no seekable range behind it - and setting currentTime
+  // on one produces exactly the stutter this is meant to remove. A fresh
+  // connection gets a fresh encoder, which starts at the live edge.
+  var lastResync = 0;
+  function resyncIfBehind() {
+    if (el.paused || el.buffered.length === 0) return;
+    var live = el.buffered.end(el.buffered.length - 1);
+    if (live - el.currentTime < 3) return;
+    // Rate limited, so a browser that simply cannot keep up doesn't end up
+    // reconnecting on a loop and stuttering worse than the drift it is fixing.
+    if (Date.now() - lastResync < 30000) return;
+    lastResync = Date.now();
+    el.load();
+    resume();
+  }
+  setInterval(resyncIfBehind, 5000);
 
   el.addEventListener('error', reconnect);
   el.addEventListener('ended', reconnect);
@@ -220,78 +262,57 @@ cat > /usr/share/novnc/pd-audio.js <<'JS'
   // just as much a request for audio as clicking the Playdate's slider.
   el.addEventListener('play', function () { wanted = true; });
 
-  // Where the Simulator's window and its volume slider currently are, in
-  // framebuffer pixels, republished by the container whenever the Simulator
-  // is relaunched.
-  var layout = null;
-  function pollLayout() {
-    return fetch('pd-layout.json', { cache: 'no-store' })
-      .then(function (r) { return r.json(); })
-      .then(function (j) { layout = j && j.troughX ? j : null; })
-      .catch(function () {});
-  }
-  pollLayout();
-  setInterval(pollLayout, 1000);
-
-  // noVNC draws the framebuffer into a canvas and scales it with CSS, so a
-  // click's page coordinates have to be converted back to framebuffer pixels
-  // before they can be compared against the layout above.
-  function toFramebuffer(event) {
-    var canvas = document.querySelector('#noVNC_canvas, canvas');
-    if (!canvas || !canvas.width) return null;
-    var rect = canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-    if (event.clientX < rect.left || event.clientX > rect.right) return null;
-    if (event.clientY < rect.top || event.clientY > rect.bottom) return null;
-    return {
-      x: (event.clientX - rect.left) * (canvas.width / rect.width),
-      y: (event.clientY - rect.top) * (canvas.height / rect.height)
-    };
-  }
-
-  // Deliberately not "any click anywhere". Starting playback on every click
-  // means audio fires when you are aiming a crank or pressing a d-pad, which
-  // is not something you asked the page to do.
+  // The Playdate's own volume slider decides everything. The container reads
+  // the slider off the framebuffer once a second and publishes it here, because
+  // that slider is the only place the Simulator's volume exists. Turn it up in
+  // the VNC view and sound starts at that level; turn it down and it stops.
   //
-  // Bound on mousedown in the capture phase, not on click. noVNC calls
-  // preventDefault on the mouse events it forwards to the remote display, so a
-  // listener waiting for a bubbling click is at its mercy. Capture runs before
-  // the canvas sees the event at all.
-  function applyAt(pt) {
-    if (!layout) return;
-    if (Math.abs(pt.x - layout.troughX) > 12) return;
+  // Nothing in this page decides when to play. There is no click handling, no
+  // hit-testing against the slider's pixels, and no "click here for audio"
+  // affordance to miss, which is what the previous version got wrong.
+  var lastVolume = -1;
 
-    if (Math.abs(pt.y - layout.muteY) <= 12) {
-      el.muted = !el.muted;
-      status.textContent = el.muted ? 'muted' : '';
-      if (!el.muted) {
-        wanted = true;
-        resume();
-      }
+  function follow(volume) {
+    // -1 means the scan couldn't read the slider. Leave the audio exactly as it
+    // is: a failed read looks identical to silence if you act on it.
+    if (volume < 0) return;
+    if (volume === lastVolume) return;
+    lastVolume = volume;
+
+    el.volume = Math.max(0, Math.min(1, volume));
+
+    if (volume < 0.02) {
+      // Paused rather than muted, so the connection is released and its encoder
+      // exits. Muting would leave an encoder capturing audio nobody hears.
+      if (!el.paused) el.pause();
+      status.textContent = '';
+      if (!visible) bar.style.display = 'none';
       return;
     }
 
-    if (pt.y < layout.troughTop - 8 || pt.y > layout.troughBottom + 8) return;
-    var span = layout.troughBottom - layout.troughTop;
-    var fraction = (layout.troughBottom - pt.y) / span;
-    el.volume = Math.max(0, Math.min(1, fraction));
-    el.muted = false;
     wanted = true;
     resume();
   }
 
-  document.addEventListener('mousedown', function (event) {
-    var pt = toFramebuffer(event);
-    if (!pt) return;
-    if (layout) {
-      applyAt(pt);
-      return;
-    }
-    // A click can land before the first layout fetch has come back, and
-    // dropping it means the slider does nothing the first time you touch it.
-    // Fetch now and apply this same click once the answer arrives.
-    pollLayout().then(function () { applyAt(pt); });
-  }, true);
+  function pollVolume() {
+    fetch('pd-volume.json', { cache: 'no-store' })
+      .then(function (r) { return r.json(); })
+      .then(function (j) { follow(typeof j.volume === 'number' ? j.volume : -1); })
+      .catch(function () {});
+  }
+  pollVolume();
+  setInterval(pollVolume, 1000);
+
+  // Browsers refuse to start audio until the page has seen a user gesture, and
+  // there is no way around that. This only records that one happened - it never
+  // decides to play, so a click on the game is not a request for sound. Clicking
+  // to connect to the display is enough to satisfy it, which is why the slider
+  // appears to just work.
+  function unlock() {
+    if (lastVolume >= 0.02) resume();
+  }
+  document.addEventListener('pointerdown', unlock, true);
+  document.addEventListener('keydown', unlock, true);
 })();
 JS
 
@@ -314,8 +335,7 @@ cat > /usr/share/novnc/audio.html <<'HTML'
 <p>Audio only, with a visible player. For video and audio in one tab use
 <a href="vnc.html">vnc.html</a> instead, where the Playdate's own volume
 slider is the control and the player stays out of the way.</p>
-<p>Only one listener is served at a time, so close any other tab pointed at
-port 8000.</p>
+<p>Several listeners are fine, each gets its own encoder.</p>
 <script>window.PD_AUDIO_VISIBLE = true;</script>
 <script src="pd-audio.js"></script>
 </body>
@@ -350,95 +370,107 @@ fi
 
 websockify --web=/usr/share/novnc 6080 localhost:5900 &
 
-# ffmpeg's -listen HTTP server serves exactly one client per invocation and
-# exits when that client disconnects. Wrapped in a restart loop so it
-# survives reconnects, like re-opening the stream in a browser.
+# The audio stream: socat accepts the connection, and each listener gets its own
+# freshly started encoder.
 #
-# -content_type is required. Without it ffmpeg's HTTP server sends
-# application/octet-stream, and browsers download the stream as a file
-# instead of playing it inline.
-( set +e; while true; do
-  ffmpeg -loglevel error -f pulse -i vnc_sink.monitor -c:a libmp3lame -f mp3 \
-    -content_type audio/mpeg -listen 1 http://0.0.0.0:8000/stream.mp3
-  sleep 0.2
-done ) &
+# The obvious approach - one long-lived `ffmpeg -listen 1` acting as the HTTP
+# server - is broken in a way that takes measuring to see. ffmpeg opens its input
+# before its output, so the pulse capture starts immediately and then ffmpeg
+# blocks waiting for someone to connect. Everything captured meanwhile queues up,
+# and the listener that finally arrives is handed the backlog: measured with a
+# beep played at a known moment, a fresh encoder delivered it ~2s later, one left
+# idle for a few minutes delivered it ~22s later and stayed that far behind for
+# the rest of the session. Which is exactly what late audio that keeps playing
+# after you pause sounds like.
+#
+# Starting the encoder only once a client is connected removes the problem rather
+# than managing it: there is no idle period to accumulate. It also drops the
+# one-listener-at-a-time limit that came with using ffmpeg as the server, since
+# socat forks per connection and a pulse monitor can be read by several clients
+# at once.
+cat > /usr/local/bin/pd-audio-stream <<'STREAM'
+#!/usr/bin/env bash
+# Serves one listener: HTTP headers, then MP3 for as long as they stay connected.
+# Run per connection by socat, so the capture below always starts now.
+printf 'HTTP/1.0 200 OK\r\n'
+printf 'Content-Type: audio/mpeg\r\n'
+printf 'Cache-Control: no-cache, no-store\r\n'
+printf 'Connection: close\r\n'
+printf '\r\n'
 
-# Pins the Simulator to the top-left corner and publishes where its volume
-# slider is, once per Simulator window that appears.
+exec ffmpeg -loglevel quiet -f pulse -i vnc_sink.monitor \
+  -c:a libmp3lame -b:a 128k -flush_packets 1 -f mp3 pipe:1
+STREAM
+chmod +x /usr/local/bin/pd-audio-stream
+
+socat TCP-LISTEN:8000,reuseaddr,fork,bind=0.0.0.0 \
+  SYSTEM:/usr/local/bin/pd-audio-stream &
+
+# Pins the Simulator to the top-left corner, then publishes what its volume
+# slider currently reads, once a second.
 #
-# The corner placement is the point of the workspace: centred, it sits in the
-# middle of a field of dead space, and there is nowhere to put the console
-# window without overlapping it. Flush in the corner, everything left over is
-# somewhere to drag debugging windows to.
+# The corner placement is the point of the workspace: centred, the Simulator sits
+# in the middle of dead space with nowhere to put the console window. Flush in the
+# corner, everything left over is somewhere to drag debugging windows to.
 #
-# The layout file is how the browser page knows which pixels are the volume
-# slider. It cannot work that out itself: it only sees a framebuffer, and the
-# window's position depends on where the Simulator opened.
+# The volume reading is the interesting half. The Simulator's slider is the only
+# place its volume exists - the SDK exposes getVolume() with no setter and no way
+# to read it from outside - so it gets read off the framebuffer instead. One
+# pixel-wide column down the device frame crosses the LOCK button, the MENU
+# button, the volume track, its knob and the mute icon, each reading as dark or
+# light against the yellow frame. The knob's position along the track is the
+# volume.
 #
-# The slider is found by reading the framebuffer rather than by hardcoding
-# offsets, because those offsets move with the zoom level. One pixel-wide
-# column down the device frame, 29px in from the window's right edge, crosses
-# the LOCK button, the MENU button, the volume trough, its knob, and the mute
-# icon. On the yellow frame each of those reads as either dark or white, so
-# the runs of non-yellow pixels are the widgets:
+# The browser page follows this file, which is what makes the slider behave the
+# way you would expect: turn it up in the VNC view and sound starts, turn it down
+# and it stops. Nothing in the page decides when to play.
 #
-#   rows 44-48    LOCK
-#   rows 68-80    MENU
-#   rows 124-193  the trough        <- longest run, and the one we want
-#   rows 195-207  the knob, sitting at the bottom when volume is zero
-#   rows 219-229  the mute icon
-#
-# Those row numbers are 1x zoom, quoted to show the shape of what's being
-# matched, not relied on: the code takes the longest run below the buttons,
-# whatever its position, so 2x and 3x calibrate themselves.
-( set +e
+# A failed read publishes -1, which the page treats as "don't know" and leaves the
+# audio alone. Publishing 0 instead would silence working audio every time a scan
+# happened to fail, which is indistinguishable from a broken pipeline.
+( set +eu
   seen=""
   while true; do
+    # Corner-pin before reading, not after. Publishing first and moving second
+    # leaves a window where the file describes the position the window just left,
+    # and anything that clicks those coordinates misses.
     win=$(xdotool search --name '^Playdate Simulator$' 2>/dev/null | tail -1)
-    if [ -z "$win" ]; then
-      seen=""
-      echo '{}' > /usr/share/novnc/pd-layout.json
-    elif [ "$win" != "$seen" ]; then
-      sleep 1
+    if [ -n "$win" ] && [ "$win" != "$seen" ]; then
       xdotool windowmove "$win" 0 0 2>/dev/null
+      seen="$win"
       sleep 0.5
-      unset X Y WIDTH HEIGHT
-      eval "$(xdotool getwindowgeometry --shell "$win" 2>/dev/null)"
-      if [ -n "${WIDTH:-}" ] && [ -n "${HEIGHT:-}" ]; then
-        trough_x=$(( X + WIDTH - 29 ))
-        ffmpeg -loglevel error -f x11grab -video_size "$VNC_GEOMETRY" -i "$DISPLAY" \
-          -frames:v 1 -y /tmp/pd-frame.png 2>/dev/null
-        ffmpeg -loglevel error -i /tmp/pd-frame.png \
-          -vf "crop=1:400:${trough_x}:${Y},format=gray" \
-          -f rawvideo -y /tmp/pd-column.raw 2>/dev/null
+    fi
 
-        # Emits "top bottom mute" as offsets from the top of the window, or
-        # nothing at all when the column doesn't look like a device frame. The
-        # parser lives in find-volume-slider.awk so it can be unit tested
-        # against synthetic columns instead of only against a live Simulator.
-        read -r t_top t_bottom t_mute <<EOF
-$(byos_column_from_raw /tmp/pd-column.raw | byos_find_slider)
-EOF
+    reading=$(byos_read_slider 2>/dev/null)
 
-        if [ -n "${t_top:-}" ] && [ -n "${t_bottom:-}" ]; then
-          cat > /usr/share/novnc/pd-layout.json <<JSON
+    # Nine fields, or it isn't a reading. Guarding on the count rather than on
+    # emptiness because a short line would leave the later fields unset, and this
+    # loop has already died silently once that way.
+    if [ "$(echo "$reading" | wc -w)" -ne 9 ]; then
+      echo '{"volume":-1}' > /usr/share/novnc/pd-volume.json
+      echo '{}' > /usr/share/novnc/pd-layout.json
+      seen=""
+      sleep 1
+      continue
+    fi
+
+    set -- $reading
+    win_x="$1"; win_y="$2"; win_w="$3"; win_h="$4"; trough_x="$5"
+    t_top="$6"; t_bottom="$7"; t_mute="$8"; volume="$9"
+
+    printf '{"volume":%s}\n' "$volume" > /usr/share/novnc/pd-volume.json
+    cat > /usr/share/novnc/pd-layout.json <<JSON
 {
-  "window": { "x": $X, "y": $Y, "w": $WIDTH, "h": $HEIGHT },
+  "window": { "x": $win_x, "y": $win_y, "w": $win_w, "h": $win_h },
   "troughX": $trough_x,
-  "troughTop": $(( Y + t_top )),
-  "troughBottom": $(( Y + t_bottom )),
-  "muteY": $(( Y + ${t_mute:-0} ))
+  "troughTop": $(( win_y + t_top )),
+  "troughBottom": $(( win_y + t_bottom )),
+  "muteY": $(( win_y + t_mute )),
+  "volume": $volume
 }
 JSON
-          echo "layout: trough $(( Y + t_top ))-$(( Y + t_bottom )) mute $(( Y + ${t_mute:-0} )) at x=$trough_x" >&2
-        else
-          echo '{}' > /usr/share/novnc/pd-layout.json
-          echo "WARNING: could not find the volume slider in the framebuffer" >&2
-        fi
-        seen="$win"
-      fi
-    fi
-    sleep 2
+
+    sleep 1
   done ) &
 
 echo "video + audio: http://localhost:6080/"

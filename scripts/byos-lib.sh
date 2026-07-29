@@ -22,3 +22,32 @@ byos_find_slider() {
 byos_column_from_raw() {
   od -An -tu1 -v "$1" | tr -s ' ' '\n' | grep -v '^$'
 }
+
+# Grabs the one-pixel column down the device frame that crosses the volume
+# slider, and prints what the parser makes of it: "top bottom mute volume".
+# Prints nothing when the Simulator isn't there or the column doesn't look like
+# a device frame.
+#
+# Geometry is read fresh every time rather than cached, so dragging the window
+# or changing zoom can't leave this reading the wrong pixels.
+byos_read_slider() {
+  local geometry display_size win
+  win=$(xdotool search --name '^Playdate Simulator$' 2>/dev/null | tail -1)
+  [ -n "$win" ] || return 1
+
+  unset X Y WIDTH HEIGHT
+  eval "$(xdotool getwindowgeometry --shell "$win" 2>/dev/null)"
+  [ -n "${WIDTH:-}" ] && [ -n "${HEIGHT:-}" ] || return 1
+
+  display_size=$(xdotool getdisplaygeometry | tr ' ' 'x')
+  ffmpeg -loglevel error -f x11grab -video_size "$display_size" -i "$DISPLAY" \
+    -frames:v 1 -y /tmp/pd-slider.png 2>/dev/null || return 1
+  ffmpeg -loglevel error -i /tmp/pd-slider.png \
+    -vf "crop=1:400:$(( X + WIDTH - 29 )):${Y},format=gray" \
+    -f rawvideo -y /tmp/pd-slider.raw 2>/dev/null || return 1
+
+  local parsed
+  parsed=$(byos_column_from_raw /tmp/pd-slider.raw | byos_find_slider)
+  [ -n "$parsed" ] || return 1
+  echo "$X $Y $WIDTH $HEIGHT $(( X + WIDTH - 29 )) $parsed"
+}
