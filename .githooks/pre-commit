@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Runs the test suite before a commit is created.
+#
+# Enable with `make hooks`. This lives in the repo rather than in .git/hooks so
+# it is reviewable and shared: an untracked hook is per-clone and invisible to
+# everyone else. `make hooks` points core.hooksPath here rather than copying,
+# so there is never a stale copy to notice.
+#
+# Bypass once with `git commit --no-verify`.
+#
+# Known limitation, stated rather than worked around: this tests the WORKING
+# TREE, not the staged snapshot. Stage some changes and leave others unstaged
+# and what runs here is not exactly what you are committing. The usual fix is
+# `git stash --keep-index`, which is not worth it here - the suite bind-mounts
+# this directory into containers for around two minutes, and a failure partway
+# through would leave you with an unexpected stash to reconcile on top of a
+# failed commit.
+set -uo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+# Markdown-only commits skip the suite. It boots several containers and takes
+# about two minutes, and no Markdown change can affect any of it. Without this
+# the hook is annoying enough on a typo fix to get bypassed out of habit, and a
+# hook that is always bypassed is worse than no hook.
+if [ -n "$staged" ] && ! printf '%s\n' "$staged" | grep -qv '\.md$'; then
+  echo "pre-commit: only Markdown staged, skipping make test"
+  exit 0
+fi
+
+# Checked up front because five of the seven suites need Docker. Without this
+# the first container-dependent stage fails several seconds in with whatever
+# error the daemon socket happens to produce, which reads like a broken test
+# rather than a daemon that is not running.
+if ! docker info >/dev/null 2>&1; then
+  echo "pre-commit: Docker is not running, and most of the suite needs it." >&2
+  echo "  Start Docker and retry, or use --no-verify if you have already run make test." >&2
+  exit 1
+fi
+
+echo "pre-commit: running make test (about two minutes, --no-verify to skip)"
+exec make test

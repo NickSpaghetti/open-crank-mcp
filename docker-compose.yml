@@ -1,3 +1,22 @@
+# Five services, differing only in how a human sees and hears the Simulator.
+# Every one of them runs the same server against the same SDK.
+#
+#   simulator             no profile. Headless under Xvfb. What the MCP tools
+#                         need and nothing more, and what `docker compose run`
+#                         uses when an MCP client starts the server itself.
+#   simulator-visual      profile: visual. Forwards the host's X11 socket and
+#                         PulseAudio. Linux only.
+#   simulator-visual-wsl  profile: wsl. The same idea through WSLg's display
+#                         and audio. Untested against a real Windows machine.
+#   simulator-vnc         profile: vnc. Browser fallback, any OS. Occupies the
+#                         terminal.
+#   simulator-shared      profile: shared. The only long-lived one: started
+#                         detached so an agent and a human can drive the same
+#                         Simulator process at once. See its own comment below.
+#
+# The `shared` profile was called `byos` ("bring your own simulator") until
+# Checkpoint 6. It runs its own Simulator and shares it, so the name described
+# something it never did.
 services:
   simulator:
     build:
@@ -77,7 +96,7 @@ services:
     tty: true
 
   # A persistent, shared session: unlike every profile above, this one
-  # stays running in the background (`make up-byos` starts it detached),
+  # stays running in the background (`make up-shared` starts it detached),
   # so an MCP client can `docker compose exec` a real open-crank-mcp
   # process into the *same* container a human is watching via the VNC
   # video/audio URLs below - both looking at, and both able to drive, the
@@ -86,12 +105,12 @@ services:
   # uses) always creates a brand new container per connection, so it was
   # never the same container/display/filesystem as whatever `up-vnc`
   # separately started.
-  simulator-byos:
+  simulator-shared:
     build:
       context: .
       args:
         PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
-    profiles: ["byos"]
+    profiles: ["shared"]
     environment:
       # Set at the container level, not just inside run-vnc.sh's own
       # process tree - a later `docker compose exec`'d open-crank-mcp
@@ -108,7 +127,7 @@ services:
       # A long-lived service defined once, not a per-connection `docker
       # compose run -v`. The game directory is configured via an env var at
       # start time instead: GAME_DIR=/absolute/path/to/your-game make
-      # up-byos. Changing games means `make down` and starting over, since
+      # up-shared. Changing games means `make down` and starting over, since
       # this is fixed when the container starts.
       - ${GAME_DIR:-.}:/your-game
       # Exposes the Simulator's sandboxed Data directory on the host, which
@@ -118,10 +137,10 @@ services:
       # has no way to read the same Lua print()/traceback output the agent
       # sees through get_game_logs. Empty in the image, so this shadows
       # nothing.
-      # BYOS_DATA_DIR so a test run can keep its save data and logs away from
+      # SHARED_DATA_DIR so a test run can keep its save data and logs away from
       # yours - two containers sharing this directory would collide on the same
       # bundle ID.
-      - ${BYOS_DATA_DIR:-./.byos-data}:/opt/playdate-sdk/Disk/Data
+      - ${SHARED_DATA_DIR:-./.shared-data}:/opt/playdate-sdk/Disk/Data
     command: ["bash", "/workspace/scripts/run-vnc.sh"]
     # Same loopback default and same BIND_ADDR override as simulator-vnc
     # above, for the same reason. It matters more here: this is the one
@@ -130,6 +149,6 @@ services:
     # only for as long as a terminal is occupied.
     ports:
       # VNC_PORT and AUDIO_PORT are overridable so a test run can publish
-      # elsewhere and leave a session you are using alone. See byos-check.sh.
+      # elsewhere and leave a session you are using alone. See shared-check.sh.
       - "${BIND_ADDR:-127.0.0.1}:${VNC_PORT:-6080}:6080"
       - "${BIND_ADDR:-127.0.0.1}:${AUDIO_PORT:-8000}:8000"

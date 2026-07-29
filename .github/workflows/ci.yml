@@ -64,21 +64,21 @@ jobs:
       - if: steps.filter.outputs.harness == 'true'
         run: make sdk-contract-check
 
-  byos:
+  shared:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       # Pure awk and bash, so this runs whether or not anything else does.
-      - run: make test-byos-unit
+      - run: make test-shared-unit
       - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
-            byos:
+            shared:
               - 'scripts/run-vnc.sh'
-              - 'scripts/byos-lib.sh'
+              - 'scripts/shared-lib.sh'
               - 'scripts/find-volume-slider.awk'
-              - 'scripts/byos-check.sh'
+              - 'scripts/shared-check.sh'
               - 'tests/browser/**'
               - 'docker-compose.yml'
               - 'Dockerfile'
@@ -87,13 +87,14 @@ jobs:
       # builds the image, boots the container and drives a browser, so it isn't
       # worth doing on a docs-only change.
       #
-      # test-byos-browser runs byos-check itself, so the container and its
+      # test-shared-browser runs shared-check itself, so the container and its
       # image are only built once.
       # Typechecking is cheap and has no container to boot, so it runs on every
-      # change to the browser tests rather than only when byos itself changes.
-      - run: make test-byos-types
-      - if: steps.filter.outputs.byos == 'true'
-        run: make test-byos-browser
+      # change to the browser tests rather than only when the shared profile
+      # itself changes.
+      - run: make test-shared-types
+      - if: steps.filter.outputs.shared == 'true'
+        run: make test-shared-browser
 
   mutation-test:
     runs-on: ubuntu-latest

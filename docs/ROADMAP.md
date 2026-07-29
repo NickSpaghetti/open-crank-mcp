@@ -229,6 +229,30 @@ see and hear it means reaching out of that VM differently per platform.
   through a browser (noVNC), audio through any player. See `README.md` for
   the three `make up-visual*` targets.
 
+**The `shared` profile exists because `docker compose run` can't be watched.**
+Never written down before, so here it is. Every visual profile above and every
+MCP client config are two independent things. A client runs `docker compose run`,
+which creates a brand new container per connection, so a separately started
+`make up-vnc` was never the same container, display or filesystem as the one an
+agent was driving. Two unrelated Simulators. The `shared` profile is one
+long-lived container, started detached, that a human attaches to over noVNC and
+an agent attaches to over `docker compose exec`. It is the only way to watch,
+live, the exact Simulator process an agent is pressing buttons on.
+
+That is a Docker artifact, not a feature. A native host mode gets the same
+property for free: one host, one display, one process, nothing to attach to. The
+profile exists to give container users what native users would have by default.
+
+It was called `byos`, for "bring your own simulator", through Checkpoint 4. That
+name described something it never did, since it runs its own Simulator, and it
+misled its own author while reviewing this document. Renamed at Checkpoint 6.
+`byos` was then retired outright rather than handed to the native mode that
+genuinely fits it: recycling a name means both meanings coexist across old
+branches, issues and client configs, and it would have cost the one property
+that made the rename reviewable, that `grep -rni byos` is the whole diff. The
+native mode is called `native` in every identifier. "Bring your own simulator"
+survives as prose, where it is finally accurate.
+
 **The SDK is fetched from Panic's own servers at image-build time, not
 bundled in this repo.** The Playdate SDK License bans redistributing the
 SDK. The Dockerfile here is just source that `curl`s `download.panic.com`
@@ -490,7 +514,7 @@ asking "yet?" instead of being told.
   drive. Every profile above gives you one or the other, because an MCP client
   runs `docker compose run`, which creates a new container per connection: a
   separately started `make up-vnc` was never the same container, display or
-  filesystem as the one an agent was driving. The `byos` profile is one
+  filesystem as the one an agent was driving. The `shared` profile is one
   long-lived detached container instead, watched over noVNC and attached to over
   `docker compose exec`. `scripts/run-vnc.sh` starts what that needs: Xvfb,
   openbox, x11vnc, websockify serving noVNC, a PulseAudio null sink, and ffmpeg
@@ -506,14 +530,14 @@ asking "yet?" instead of being told.
   the LOCK and MENU buttons, the volume trough, its knob and the mute icon, and
   the longest run of non-yellow below the buttons is the trough. Taking the
   longest run rather than fixed offsets is what makes it self-calibrating across
-  zoom levels. Verified three ways: `scripts/run-byos-unit-tests.sh` against
-  synthetic columns, `scripts/byos-check.sh` against a real Simulator, and
+  zoom levels. Verified three ways: `scripts/run-shared-unit-tests.sh` against
+  synthetic columns, `scripts/shared-check.sh` against a real Simulator, and
   Playwright tests for the page behaviour.
 
-  Two follow-ups landed on top. `cmd/byos-load` builds and launches a game in
+  Two follow-ups landed on top. `cmd/shared-load` builds and launches a game in
   the running container by driving the MCP server over stdio exactly as a client
-  would, since `up-byos` only ever started a container and something still had
-  to call `build_game`/`launch_simulator`. And `scripts/byos-watch.sh` rebuilds
+  would, since `up-shared` only ever started a container and something still had
+  to call `build_game`/`launch_simulator`. And `scripts/shared-watch.sh` rebuilds
   on save and reloads in place with the Simulator's own Ctrl-R, which re-reads
   the `.pdx` in the same process, so the display, the container and the browser
   tab all survive and the VNC view does not even reconnect. It is not
@@ -530,7 +554,7 @@ asking "yet?" instead of being told.
   sessions, SIGPIPE from a closed stdout pipe, Docker killing exec descendants,
   CPU starvation, the framebuffer scanner and container age were all
   investigated first. The Simulator was never dying, it was never starting.
-  `cmd/byos-load` now waits for `pactl info` to succeed before launching
+  `cmd/shared-load` now waits for `pactl info` to succeed before launching
   anything, and `launch_simulator` checks the process is still alive shortly
   after starting it and returns the captured output if it isn't. Written up in
   `docs/GOTCHAS.md`.
@@ -539,38 +563,34 @@ asking "yet?" instead of being told.
   harness wired in), run each through the containerized stack, confirm every
   tool against real gameplay for both. Independent of Checkpoints 6-11: those
   are the native-mode track and neither blocks this.
-- [ ] **Checkpoint 6**: Rename the `byos` profile to `shared`. No behaviour
-  change, and the point of doing it alone is that `grep -rni byos` is the whole
+- [x] **Checkpoint 6**: Renamed the `byos` profile to `shared`. No behaviour
+  change, and the point of doing it alone was that `grep -rni byos` is the whole
   review. `byos` stood for "bring your own simulator", which is not what that
   profile does - it runs its own Simulator and shares it. The name misled its
-  own author during review, so it goes to `shared` and is then retired as a
-  token repo-wide, leaving it free for Checkpoint 8's native mode. `virtual` was
-  considered and rejected: one letter from the existing `simulator-visual`
-  service and `make up-visual`.
+  own author during review, so it became `shared` and `byos` is now retired as a
+  token repo-wide rather than reused, so there is no version of this repo where
+  the word means two things. `virtual` was considered and rejected: one letter
+  from the existing `simulator-visual` service and `make up-visual`.
 
-  Touches `docker-compose.yml` (service, profile, the `./.byos-data` mount, and
-  the concept comment above the service, which needs rewriting rather than
-  renaming), seven `make` targets, four `scripts/*.sh` files including their
-  `# shellcheck source=` directives, `tests/browser/`, `.github/workflows/ci.yml`
-  (names only - anything that changes *when* a job fires belongs in Checkpoint
-  9), and the Go package `cmd/byos-load`, which is why this checkpoint has to
-  compile. That package hardcodes the service and profile names as bare literals
-  in several places; pull them into consts so the next rename can't leave a
-  half-finished one. Keep `/.byos-data/` in `.gitignore` alongside the new
-  entry: the old directory is root-owned and needs `sudo` to remove, so leaving
-  it ignored keeps it out of everyone's `git status`. Old target names get
-  tombstones that fail with a pointer to the README's migration table, to be
-  deleted at Checkpoint 11.
+  Six files and one Go package renamed, plus the service, the profile, the
+  `.shared-data` mount, four shell functions, `SHARED_LIB_DIR`/`SHARED_URL` and
+  seven `make` targets. `cmd/shared-load` had the service and profile names as
+  bare literals in eight places across three functions, which is how a rename
+  leaves a half-finished one behind, so they are two consts now. The
+  `# shellcheck source=` directives moved with the file they point at, since
+  those are load-bearing rather than prose. CI changed names only: broadening
+  the paths-filter globs changes *when* a job fires, so it belongs to Checkpoint
+  9 rather than here. Old target names became tombstones that fail with a
+  pointer to the README's migration section, to be deleted at Checkpoint 11.
 
-  Out of repo, and the order matters: drop `byos` from `main`'s required status
-  checks *before* this merges, or every later PR blocks forever on a check that
-  will never report again. Add `shared` after.
+  `/.byos-data/` stays in `.gitignore` next to the new entry. The old directory
+  is root-owned because the container runs as root, so clearing it needs `sudo`
+  or a container, and nobody should have to do that just for a clean
+  `git status`.
 
-  Done when `grep -rni byos` returns only the `.gitignore` legacy entry and this
-  checkpoint's own history, `go build ./...` and `go vet ./...` pass, and
-  `make shared-load`, `make shared-watch`, `make shared-check`,
-  `make test-shared-unit`, `make test-shared-types` and
-  `make test-shared-browser` all still work against a real container.
+  Out of repo, and the order mattered: `byos` had to leave `main`'s required
+  status checks *before* this merged, or every later PR would block forever on a
+  check that will never report again. `shared` added after.
 - [ ] **Checkpoint 7**: Portability prep, plus one bug fix that shouldn't wait
   behind a feature. No behaviour change on any existing path. Everything here is
   a prerequisite for native mode that stands on its own.
@@ -611,9 +631,9 @@ asking "yet?" instead of being told.
   pattern breaks, and the container path is untouched: `make build`,
   `make smoke-check`, `make sdk-contract-check`.
 - [ ] **Checkpoint 8**: Native mode. The same binary running against a Playdate
-  SDK the developer installed themselves, no Docker. This is where `byos`
-  finally means what it says, though only in prose - every identifier says
-  `native`, so the retired token stays retired.
+  SDK the developer installed themselves, no Docker. This is the mode "bring your own
+  simulator" always described, though the phrase stays prose only: every
+  identifier says `native`, so the retired name stays retired.
 
   A new `internal/sdk` owns SDK location and per-OS paths, resolving
   `PLAYDATE_SDK_PATH`, then `SDKRoot` in `~/.Playdate/config` (Panic's own

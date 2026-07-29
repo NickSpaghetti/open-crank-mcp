@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# shellcheck source=scripts/byos-lib.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/byos-lib.sh"
+# shellcheck source=scripts/shared-lib.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shared-lib.sh"
 
 export DISPLAY=:99
 export PULSE_RUNTIME_PATH=/tmp/pulse-vnc
@@ -441,7 +441,7 @@ socat TCP-LISTEN:8000,reuseaddr,fork,bind=0.0.0.0 \
       sleep 0.5
     fi
 
-    reading=$(byos_read_slider 2>/dev/null)
+    reading=$(shared_read_slider 2>/dev/null)
 
     # Nine fields, or it isn't a reading. Guarding on the count rather than on
     # emptiness because a short line would leave the later fields unset, and this
@@ -480,5 +480,5 @@ echo "display:       ${VNC_GEOMETRY}, Simulator zoom ${SIM_ZOOM}x"
 # Keeps the container alive exactly as long as these background services
 # are, without needing an attached TTY - works the same whether this runs
 # attached in the foreground (make up-vnc) or detached in the background
-# (make up-byos).
+# (make up-shared).
 wait

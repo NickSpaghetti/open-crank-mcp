@@ -270,7 +270,7 @@ globally) - the same `mcpServers`/`command`/`args` shape as Claude Code:
 }
 ```
 
-## Bring your own simulator (shared, watchable session)
+## Shared, watchable session
 
 Every profile above and the "Connecting" command above it are two
 independent things. `docker compose run` (what an MCP client uses) always
@@ -279,11 +279,11 @@ had `make up-vnc` running, you'd never be looking at the same Simulator
 process an agent is driving through MCP tool calls. Two unrelated
 containers, two unrelated displays.
 
-`make up-byos` fixes that. One persistent container, shared by both. Start
+`make up-shared` fixes that. One persistent container, shared by both. Start
 it once, pointed at your game's directory:
 
 ```
-GAME_DIR=/absolute/path/to/your-game make up-byos
+GAME_DIR=/absolute/path/to/your-game make up-shared
 ```
 
 `GAME_DIR` is required and must be absolute. The target refuses to start
@@ -309,7 +309,7 @@ already set:
       "command": "docker",
       "args": [
         "compose", "-f", "/absolute/path/to/open-crank-mcp/docker-compose.yml",
-        "exec", "-T", "simulator-byos", "open-crank-mcp"
+        "exec", "-T", "simulator-shared", "open-crank-mcp"
       ]
     }
   }
@@ -319,7 +319,7 @@ already set:
 (The same `args` shape works for OpenCode's `command` list and
 `claude mcp add`/`opencode mcp add`, matching the "Connecting" section
 above. Only `run --rm -v ... simulator bash -c "..."` changes to
-`exec -T simulator-byos open-crank-mcp`.)
+`exec -T simulator-shared open-crank-mcp`.)
 
 Once both are connected, an agent calling `launch_simulator` makes the
 game appear in the browser tab you already have open. Click or type into
@@ -330,19 +330,19 @@ same running Simulator, so neither one blocks the other.
 
 ### Loading a game, and reloading on save
 
-`up-byos` starts a container with a display in it. Something still has to build
+`up-shared` starts a container with a display in it. Something still has to build
 a game and launch it, and two commands do that without an MCP client:
 
 ```
-make byos-load     # build and launch, once
-make byos-watch    # rebuild and reload on every save
+make shared-load     # build and launch, once
+make shared-watch    # rebuild and reload on every save
 ```
 
-`byos-load` drives the same MCP tools a client would, over the same stdio
+`shared-load` drives the same MCP tools a client would, over the same stdio
 transport, and stops any Simulator already running first so you can't end up
 with two on one display.
 
-`byos-watch` is the loop worth having. It watches your game's `Source`
+`shared-watch` is the loop worth having. It watches your game's `Source`
 directory, runs `pdc` on change, and presses the Simulator's own `Ctrl-R`,
 which re-reads the `.pdx` from disk **in the same process**. Nothing restarts:
 not the container, not the display, not your browser tab, and the volume you set
@@ -359,7 +359,7 @@ its launching session to stay alive a few seconds; exit immediately after
 `launch_simulator` returns and the game disappears about a second later. Also,
 `get_status` can report the harness reachable straight away, because that check
 reads a file in the data directory and a previous run's response may still be
-sitting there, so it isn't a reliable readiness signal on its own. `byos-load`
+sitting there, so it isn't a reliable readiness signal on its own. `shared-load`
 holds on for five seconds for exactly this reason.
 
 ### Seeing the logs
@@ -373,12 +373,12 @@ interchangeable, and only two of them are readable by a human.
 | `get_game_logs` | Lua `print()` calls and uncaught-error tracebacks. | The agent, and you (see below). |
 | The VNC view | The Simulator GUI itself. Per `docs/GOTCHAS.md` this is the only place the SDK renders Lua console output, though no console pane is open by default. | You only. |
 
-The `byos` profile bind-mounts the Simulator's sandboxed Data directory to
-`.byos-data/` in this repo, so the file behind `get_game_logs` is readable
+The `shared` profile bind-mounts the Simulator's sandboxed Data directory to
+`.shared-data/` in this repo, so the file behind `get_game_logs` is readable
 from the host while the game runs:
 
 ```
-tail -f .byos-data/<bundle-id>/mcp/game_logs.json
+tail -f .shared-data/<bundle-id>/mcp/game_logs.json
 ```
 
 `launch_simulator` returns the `bundle_id` and the container-side
@@ -401,7 +401,7 @@ Two asymmetries worth knowing, both covered in detail in
 - The game directory is fixed when the container starts. Switching games
   means `make down` and starting over with a new `GAME_DIR`.
 - The container runs as root, so `build_game` leaves root-owned `build/`
-  and `.pdx` output inside your game directory, and `.byos-data/` is
+  and `.pdx` output inside your game directory, and `.shared-data/` is
   root-owned too. Both are readable without `sudo`. Deleting them needs
   `sudo`, or a `docker compose run --rm` doing the `rm` from inside a
   container.
@@ -420,7 +420,7 @@ Two asymmetries worth knowing, both covered in detail in
   Worth clearing before you trust what you're seeing:
 
   ```
-  docker compose exec simulator-byos pkill -9 -f bin/PlaydateSimulator
+  docker compose exec simulator-shared pkill -9 -f bin/PlaydateSimulator
   ```
 
   `-9` is required. The Simulator ignores `SIGTERM`, which is why the
@@ -559,52 +559,58 @@ only host requirements are Docker and Go.
 | `make up-visual` | Linux, native X11 window and host audio. |
 | `make up-visual-wsl` | Windows 11 through WSL2, using WSLg's display and audio. |
 | `make up-vnc` | Browser fallback, any OS. Occupies the terminal. |
-| `make up-byos` | Persistent shared session, detached, for an agent and a human at once. Needs `GAME_DIR`. |
-| `make down` | Stops every profile, including byos. |
+| `make up-shared` | Persistent shared session, detached, for an agent and a human at once. Needs `GAME_DIR`. |
+| `make down` | Stops every profile, including the shared one. |
 | `make shell` | A bash prompt in the image. |
 
-Note that only `up-vnc` and `up-byos` publish ports, and only on `127.0.0.1`
+Note that only `up-vnc` and `up-shared` publish ports, and only on `127.0.0.1`
 unless you set `BIND_ADDR`.
 
-### Running a game in byos
+### Running a game in the shared container
 
-`up-byos` gives you a container with a display in it. These put a game inside:
+`up-shared` gives you a container with a display in it. These put a game inside:
 
 | Command | Does |
 |---|---|
-| `make byos-load` | Builds and launches the mounted game, once. Stops any Simulator already running first. |
-| `make byos-watch` | Watches the game's `Source`, rebuilds on save, and reloads in place with the Simulator's own `Ctrl-R`. |
+| `make shared-load` | Builds and launches the mounted game, once. Stops any Simulator already running first. |
+| `make shared-watch` | Watches the game's `Source`, rebuilds on save, and reloads in place with the Simulator's own `Ctrl-R`. |
 
 ```
-GAME_DIR=/absolute/path/to/your-game make up-byos
-make byos-load
+GAME_DIR=/absolute/path/to/your-game make up-shared
+make shared-load
 ```
 
 ### Tests and checks
 
+`make test` runs all of it, in the order below, which is fastest-to-fail first:
+the three host-only suites go before anything that boots a container. It skips
+`shared-check` and `test-shared-types` only because `test-shared-browser`
+already runs both.
+
 | Command | Needs | Covers |
 |---|---|---|
 | `make go-build` / `go-test` | Go | The server, tools and harness IPC. |
-| `make smoke-check` | Docker | The SDK is where the image expects it and the Simulator starts. |
+| `make test-shared-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. No container. |
+| `make mutation-test` | Go | Mutates the code and checks the tests notice, so a line that runs without being asserted on doesn't pass for covered. Thresholds in `.gremlins.yaml`. About 15s. |
 | `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |
+| `make smoke-check` | Docker | The SDK is where the image expects it and the Simulator starts. |
 | `make sdk-contract-check` | Docker | The MCP tools driving a real Simulator, so an SDK release that changes behaviour shows up here. |
-| `make test-byos-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. No container. |
-| `make byos-check` | Docker | The VNC workspace: pages served, window manager config, where the slider was found, and that clicking it works. |
-| `make test-byos-types` | Docker | Typechecks the browser tests with `tsgo`, the Go port of `tsc`. |
-| `make test-byos-browser` | Docker | Browser behaviour of the VNC pages, via Playwright in its own container. Runs the typecheck and `byos-check` first. |
+| `make shared-check` | Docker | The VNC workspace: pages served, window manager config, where the slider was found, and that clicking it works. |
+| `make test-shared-types` | Docker | Typechecks the browser tests with `tsgo`, the Go port of `tsc`. |
+| `make test-shared-browser` | Docker | Browser behaviour of the VNC pages, via Playwright in its own container. Runs the typecheck and `shared-check` first. |
 
 ### Environment variables
 
 | Variable | Default | Applies to |
 |---|---|---|
 | `PLAYDATE_SDK_VERSION` | `3.1.1` | `build`, and every target that builds |
-| `GAME_DIR` | required | `up-byos`. Must be absolute. |
-| `SIM_ZOOM` | `1` | `up-vnc`, `up-byos`. Simulator zoom level. |
-| `VNC_GEOMETRY` | `1280x800` | `up-vnc`, `up-byos`. Workspace size. |
+| `GAME_DIR` | required | `up-shared`. Must be absolute. |
+| `SIM_ZOOM` | `1` | `up-vnc`, `up-shared`. Simulator zoom level. |
+| `VNC_GEOMETRY` | `1280x800` | `up-vnc`, `up-shared`. Workspace size. |
 | `BIND_ADDR` | `127.0.0.1` | Published ports 6080 and 8000 |
-| `SOURCE_DIR` / `PDX_PATH` | `/your-game/Source`, `/your-game/your-game.pdx` | `byos-watch`, if your project isn't laid out that way |
-| `PLAYWRIGHT_IMAGE` | pinned to `@playwright/test` | `test-byos-types`, `test-byos-browser` |
-| `BYOS_URL` | `http://localhost:6080` | The browser tests, when the container isn't on localhost |
+| `SOURCE_DIR` / `PDX_PATH` | `/your-game/Source`, `/your-game/your-game.pdx` | `shared-watch`, if your project isn't laid out that way |
+| `PLAYWRIGHT_IMAGE` | pinned to `@playwright/test` | `test-shared-types`, `test-shared-browser` |
+| `SHARED_URL` | `http://localhost:6080` | The browser tests, when the container isn't on localhost |
 
 ## Tests
 
@@ -616,7 +622,7 @@ suite needs a known game mounted, so without it a test run unmounts the game you
 were playing and then fights your browser tab for the single-listener audio
 stream. Isolated, you can run the whole suite mid-game and nothing moves.
 
-The byos tests exist because that layer is easy to break invisibly. Each of
+The shared-session tests exist because that layer is easy to break invisibly. Each of
 these asserts something that has actually broken in practice:
 
 - Every page returns 200. A partial edit once deleted two of them, and a
@@ -648,6 +654,50 @@ sound-producing fixture and level thresholds, which is a flake factory, so the
 audio chain is checked with a synthetic tone into the sink instead. And nothing
 compares screenshots: the game animates, so image diffing would fail for
 reasons unrelated to the code.
+
+## If you used the byos profile
+
+The `shared` profile was called `byos`, for "bring your own simulator", until
+Checkpoint 6. It runs its own Simulator in a container and shares it, which is
+not bringing your own anything, so the name described something it never did.
+`byos` is now retired entirely rather than reused, so there is no version of
+this repo where the word means two things.
+
+Nothing carries over automatically. The old `make` targets print a pointer to
+this section and fail, but an MCP client config is just a file on your disk, so
+that one you have to edit.
+
+| Old | New | What you see if you don't change it |
+|---|---|---|
+| `make up-byos` | `make up-shared` | The tombstone target, pointing here |
+| `make byos-load` / `byos-watch` | `make shared-load` / `shared-watch` | Same |
+| `make byos-check` | `make shared-check` | Same |
+| `make test-byos-unit` / `-types` / `-browser` | `make test-shared-*` | Same |
+| `simulator-byos` in your MCP client config | `simulator-shared` | `no such service: simulator-byos` |
+| `--profile byos` | `--profile shared` | Compose starts nothing and says nothing |
+| `BYOS_URL` | `SHARED_URL` | The browser tests fall back to `localhost:6080` |
+
+The bind-mounted Data directory moved from `.byos-data/` to `.shared-data/`. It
+holds each game's save data and the `mcp/game_logs.json` behind
+`get_game_logs`, so it's worth moving rather than deleting if you have anything
+in there you care about. Everything in it is root-owned, since the container
+runs as root, which is why this goes through a container instead of `sudo`:
+
+```
+docker run --rm -v "$PWD/.byos-data:/old" -v "$PWD/.shared-data:/new" \
+  open-crank-mcp-simulator:latest \
+  sh -c 'for d in /old/*; do [ -e "/new/$(basename "$d")" ] || mv "$d" /new/; done'
+docker run --rm -v "$PWD:/repo" open-crank-mcp-simulator:latest rm -rf /repo/.byos-data
+```
+
+The guard matters if you have run anything since the rename: a bundle that
+already exists under the new name is the live one, and the copy under the old
+name is stale. Skipping those keeps the newer data.
+
+If you don't want any of it, `docker run --rm -v "$PWD:/repo"
+open-crank-mcp-simulator:latest rm -rf /repo/.byos-data` on its own is enough.
+Either way `.byos-data/` stays in `.gitignore`, so leaving it in place costs
+nothing but disk.
 
 ## License
 

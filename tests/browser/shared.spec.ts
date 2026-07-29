@@ -1,10 +1,10 @@
-// Browser behaviour for the byos VNC pages. These cover the parts that only
+// Browser behaviour for the shared VNC pages. These cover the parts that only
 // exist in the browser, so nothing else can check them: the scaling redirect,
 // whether the audio player is in the way, and the mapping from a click on the
 // Playdate's volume slider to the player's volume.
 //
-// Needs a running byos container with a launched Simulator:
-//   bash scripts/byos-check.sh --keep
+// Needs a running shared container with a launched Simulator:
+//   bash scripts/shared-check.sh --keep
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 
 // What the container publishes to pd-layout.json, in framebuffer pixels. It
@@ -144,7 +144,7 @@ test.describe('the player follows the Playdate volume slider', () => {
   // The container reads the slider off the framebuffer and publishes it, so the
   // page's whole job is to follow that number. These serve it directly rather
   // than moving a real slider: a browser can't reach into the Simulator, and the
-  // container side is covered by byos-check.
+  // container side is covered by shared-check.
   async function serveVolume(page: Page, volume: () => number): Promise<void> {
     await page.route('**/pd-volume.json', async (route) => {
       await route.fulfill({
@@ -157,7 +157,7 @@ test.describe('the player follows the Playdate volume slider', () => {
     // The stream is served locally too, from a silent fixture. The container's
     // encoder hands out one listener at a time, so a browser tab someone left
     // open would otherwise make these fail for a reason that has nothing to do
-    // with the logic under test. The real stream is covered by byos-check.
+    // with the logic under test. The real stream is covered by shared-check.
     await page.route('**/stream.mp3', async (route) => {
       await route.fulfill({
         status: 200,

@@ -1,14 +1,14 @@
-// Command byos-load builds and launches a game in an already-running byos
+// Command shared-load builds and launches a game in an already-running shared
 // container, by driving the MCP server the same way a client would.
 //
 // It exists because starting the container and loading a game are two separate
-// things, and only the first one had a command. `make up-byos` gets you a
+// things, and only the first one had a command. `make up-shared` gets you a
 // container with a display; something still has to call setup, build_game and
 // launch_simulator, and without this that meant either connecting a real MCP
 // client or hand-rolling JSON-RPC.
 //
 // The transport is the same one a client uses: stdio, over
-// `docker compose exec -T simulator-byos open-crank-mcp`. No ports, no HTTP.
+// `docker compose exec -T simulator-shared open-crank-mcp`. No ports, no HTTP.
 package main
 
 import (
@@ -25,9 +25,18 @@ import (
 	"time"
 )
 
-// Where docker-compose.yml mounts GAME_DIR. Fixed by the byos service, not
+// Where docker-compose.yml mounts GAME_DIR. Fixed by the shared service, not
 // something the caller chooses.
 const gameDir = "/your-game"
+
+// The compose service and profile this drives. Named once rather than repeated
+// at each `docker compose` call site: they appeared eight times as bare
+// literals across three functions before, which is how a rename leaves a
+// half-finished one behind.
+const (
+	service = "simulator-shared"
+	profile = "shared"
+)
 
 type request struct {
 	JSONRPC string `json:"jsonrpc"`
@@ -141,13 +150,13 @@ func (c *client) callTool(name string, args map[string]any) (json.RawMessage, er
 func clearRunningSimulators(composeFile string) {
 	// pkill exits 0 when it killed something, 1 when there was nothing to kill.
 	cmd := exec.Command("docker", "compose", "-f", composeFile,
-		"exec", "-T", "simulator-byos", "pkill", "-9", "-f", "bin/PlaydateSimulator")
+		"exec", "-T", service, "pkill", "-9", "-f", "bin/PlaydateSimulator")
 	if err := cmd.Run(); err == nil {
 		fmt.Println("stopped: a Simulator was already running")
 	}
 }
 
-// recreateContainer tears the byos container down and brings it back up against
+// recreateContainer tears the shared container down and brings it back up against
 // the current GAME_DIR.
 //
 // Replacing it rather than reusing it, because GAME_DIR is fixed when the
@@ -172,9 +181,9 @@ func recreateContainer(composeFile, gameDir string) error {
 	// --remove-orphans also clears containers left behind by `docker compose
 	// run`, which hold the project's network open and make `down` complain.
 	steps := [][]string{
-		{"compose", "-f", composeFile, "--profile", "byos", "down", "--remove-orphans"},
-		{"compose", "-f", composeFile, "--profile", "byos", "build", "simulator-byos"},
-		{"compose", "-f", composeFile, "--profile", "byos", "up", "-d", "simulator-byos"},
+		{"compose", "-f", composeFile, "--profile", profile, "down", "--remove-orphans"},
+		{"compose", "-f", composeFile, "--profile", profile, "build", service},
+		{"compose", "-f", composeFile, "--profile", profile, "up", "-d", service},
 	}
 	for _, args := range steps {
 		cmd := exec.Command("docker", args...)
@@ -210,7 +219,7 @@ func waitForServer(composeFile string) error {
 		// pactl talks to the same socket SDL will, so this is the real check
 		// rather than a proxy for it.
 		cmd := exec.Command("docker", "compose", "-f", composeFile,
-			"exec", "-T", "simulator-byos", "pactl", "info")
+			"exec", "-T", service, "pactl", "info")
 		if err := cmd.Run(); err == nil {
 			return nil
 		}
@@ -291,7 +300,7 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 		gameDir := os.Getenv("GAME_DIR")
 		if gameDir == "" {
 			return errors.New("GAME_DIR is not set.\n" +
-				"  GAME_DIR=/absolute/path/to/your-game make byos-load\n" +
+				"  GAME_DIR=/absolute/path/to/your-game make shared-load\n" +
 				"  It must be the directory that contains Source/, not Source itself.\n" +
 				"  Pass -keep-container to reuse a running container instead.")
 		}
@@ -307,7 +316,7 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 	}
 
 	cmd := exec.Command("docker", "compose", "-f", composeFile,
-		"exec", "-T", "simulator-byos", "open-crank-mcp")
+		"exec", "-T", service, "open-crank-mcp")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -340,7 +349,7 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 	if _, err := c.send("initialize", map[string]any{
 		"protocolVersion": "2024-11-05",
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "byos-load", "version": "1"},
+		"clientInfo":      map[string]any{"name": "shared-load", "version": "1"},
 	}, true); err != nil {
 		// A container that isn't running fails here, and the docker error is
 		// more useful than the read error that surfaces it.
@@ -425,7 +434,7 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 	} else {
 		fmt.Println("harness:  reachable")
 	}
-	fmt.Printf("logs:    .byos-data/%s/mcp/game_logs.json\n", launched.BundleID)
+	fmt.Printf("logs:    .shared-data/%s/mcp/game_logs.json\n", launched.BundleID)
 	fmt.Println("view:    http://localhost:6080/")
 	return nil
 }
@@ -437,7 +446,7 @@ func main() {
 	flag.Parse()
 
 	if err := run(*composeFile, *skipSetup != "", *keepContainer); err != nil {
-		fmt.Fprintf(os.Stderr, "byos-load: %v\n", err)
+		fmt.Fprintf(os.Stderr, "shared-load: %v\n", err)
 		os.Exit(1)
 	}
 }

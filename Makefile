@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-byos byos-load byos-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-byos-unit byos-check test-byos-types test-byos-browser go-build go-test
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-test mutation-test test hooks
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -23,24 +23,25 @@ up-vnc: build
 	docker compose --profile vnc up simulator-vnc
 
 # Detached, unlike every other up* target. Stays running in the background
-# so an MCP client can attach to it separately afterward. See README's
-# "Bring your own simulator" section.
+# so an MCP client can attach to it separately afterward. See the README's
+# "Shared, watchable session" section.
 #
 # GAME_DIR is checked here rather than in docker-compose.yml. A compose-level
-# `${GAME_DIR:?}` guard would also fire on `make down`, which parses the byos
+# `${GAME_DIR:?}` guard would also fire on `make down`, which parses the shared
 # profile too, so a missing var would block cleanup.
 # Builds its own service rather than depending on `build`. Plain
 # `docker compose build` skips every service that declares a profile, so
 # `build` only ever rebuilds `simulator`. Depending on it would leave a
-# stale byos image in place after any edit to the Dockerfile or run-vnc.sh.
-up-byos: check-game-dir
-	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose --profile byos build simulator-byos
-	docker compose --profile byos up -d simulator-byos
+# stale shared-profile image in place after any edit to the Dockerfile or
+# run-vnc.sh.
+up-shared: check-game-dir
+	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose --profile shared build simulator-shared
+	docker compose --profile shared up -d simulator-shared
 
 check-game-dir:
 	@test -n "$(GAME_DIR)" || { \
 		echo "GAME_DIR is not set."; \
-		echo "Run: GAME_DIR=/absolute/path/to/your-game make up-byos"; \
+		echo "Run: GAME_DIR=/absolute/path/to/your-game make up-shared"; \
 		exit 1; }
 	@case "$(GAME_DIR)" in /*) ;; *) \
 		echo "GAME_DIR must be an absolute path, got: $(GAME_DIR)"; \
@@ -48,7 +49,7 @@ check-game-dir:
 		exit 1;; esac
 
 down:
-	docker compose --profile visual --profile wsl --profile vnc --profile byos down
+	docker compose --profile visual --profile wsl --profile vnc --profile shared down
 
 shell: build
 	docker compose run --rm simulator /bin/bash
@@ -67,9 +68,9 @@ sdk-contract-check: build
 # Pass -keep-container to reuse a running one, which is faster and keeps the
 # volume slider and the VNC connection, at the cost of keeping whatever GAME_DIR
 # it started with:
-#   go run ./cmd/byos-load -keep-container
-byos-load: check-game-dir
-	go run ./cmd/byos-load -compose-file $(CURDIR)/docker-compose.yml
+#   go run ./cmd/shared-load -keep-container
+shared-load: check-game-dir
+	go run ./cmd/shared-load -compose-file $(CURDIR)/docker-compose.yml
 
 # Rebuilds and reloads on save, using the Simulator's own Ctrl-R, which
 # re-reads the .pdx from disk in the same process - so the display, the
@@ -78,19 +79,19 @@ byos-load: check-game-dir
 #
 # Piped in rather than run from the image, so editing the script takes effect
 # immediately instead of needing a rebuild.
-byos-watch:
-	docker compose exec -T simulator-byos bash -s < scripts/byos-watch.sh
+shared-watch:
+	docker compose exec -T simulator-shared bash -s < scripts/shared-watch.sh
 
-# Unit tests for the byos helpers: the volume-slider parser and the window
+# Unit tests for the shared helpers: the volume-slider parser and the window
 # geometry formula. Pure awk and bash, so no container and no display.
-test-byos-unit:
-	bash scripts/run-byos-unit-tests.sh
+test-shared-unit:
+	bash scripts/run-shared-unit-tests.sh
 
-# Boots the byos container against the in-repo Lua fixture and asserts the
+# Boots the shared container against the in-repo Lua fixture and asserts the
 # workspace invariants: pages served, window manager configuration, where the
 # volume slider was found, and that clicking it works.
-byos-check:
-	bash scripts/byos-check.sh
+shared-check:
+	bash scripts/shared-check.sh
 
 # The image tag must match the @playwright/test version in
 # tests/browser/package.json: the image is what carries the browsers, and the
@@ -98,7 +99,7 @@ byos-check:
 # runner requires it; Bun and Deno can drive playwright-core but not this
 # runner. It all lives in the container, so the host needs neither.
 PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.62.0-noble
-# Must match the default in scripts/byos-check.sh.
+# Must match the default in scripts/shared-check.sh.
 CHECK_VNC_PORT ?= 6180
 BROWSER_TESTS = docker run --rm --network host \
 	-v "$(CURDIR)/tests/browser:/work" -w /work $(PLAYWRIGHT_IMAGE) \
@@ -107,22 +108,93 @@ BROWSER_TESTS = docker run --rm --network host \
 # Typechecks the browser tests with tsgo, the Go port of tsc. Playwright's
 # runner transpiles TypeScript itself, so this is a check rather than a build
 # step, and nothing is emitted.
-test-byos-types:
+test-shared-types:
 	$(BROWSER_TESTS) npx tsgo --noEmit"
 
 # Browser behaviour for the VNC pages: the scaling redirect, the hidden player,
 # and the mapping from a click on the Playdate's slider to the player's volume.
 # Host networking is how the container reaches port 6080.
-# BYOS_URL points the browser tests at the isolated container byos-check starts,
+# SHARED_URL points the browser tests at the isolated container shared-check starts,
 # not at whatever is on the default port. The teardown names the same project, so
-# a byos container of your own survives a test run untouched.
-test-byos-browser: test-byos-types
-	bash scripts/byos-check.sh --keep
-	$(BROWSER_TESTS) BYOS_URL=http://localhost:$(CHECK_VNC_PORT) npx playwright test"
-	COMPOSE_PROJECT_NAME=open-crank-mcp-check docker compose --profile byos down
+# a shared container of your own survives a test run untouched.
+test-shared-browser: test-shared-types
+	bash scripts/shared-check.sh --keep
+	$(BROWSER_TESTS) SHARED_URL=http://localhost:$(CHECK_VNC_PORT) npx playwright test"
+	COMPOSE_PROJECT_NAME=open-crank-mcp-check docker compose --profile shared down
 
 go-build:
 	go build ./...
 
 go-test:
 	go test ./...
+
+# Mutation testing: gremlins changes the code in small ways and checks the test
+# suite notices. Catches tests that execute a line without asserting anything
+# about it, which coverage alone reports as covered.
+#
+# Run through `go run` with a pinned version rather than installed, so there is
+# nothing to set up on the host and no way for a local run to drift from CI.
+# Keep this version matching the one in .github/workflows/ci.yml. Thresholds and
+# the exclude list live in .gremlins.yaml.
+GREMLINS_VERSION ?= v0.6.0
+
+mutation-test:
+	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash
+
+# Points git at the tracked hooks in .githooks. Not a copy into .git/hooks: a
+# copy goes stale the moment the tracked hook changes, and nothing tells you.
+# core.hooksPath always runs what is in the repo.
+#
+# Opt-in rather than automatic, because git has no way to enable a hook on
+# clone, and a repo that silently starts running a two-minute suite on every
+# commit would be a surprise worth avoiding.
+hooks:
+	git config core.hooksPath .githooks
+	@echo "pre-commit hook enabled. Bypass a single commit with --no-verify."
+	@echo "disable with: git config --unset core.hooksPath"
+
+# Everything, ordered so it fails as fast as it can. The three host-only suites
+# run first: a broken parser or a Go typo then fails in seconds instead of
+# after several minutes of container boots.
+#
+# test-shared-browser stands in for both test-shared-types and shared-check
+# rather than duplicating them. It declares the typecheck as a prerequisite,
+# and it runs shared-check.sh --keep, where --keep only skips the teardown -
+# every assertion in that script still runs and still decides the exit status.
+# Listing shared-check here too would boot a second container to repeat two
+# dozen checks that had just passed.
+#
+# Sequential $(MAKE) calls rather than prerequisites, because prerequisites are
+# fair game for `make -j` to run concurrently and these suites cannot overlap:
+# they each want Docker, and shared-check and test-shared-browser share one
+# fixed port and one compose project name.
+test:
+	$(MAKE) go-test
+	$(MAKE) test-shared-unit
+	$(MAKE) mutation-test
+	$(MAKE) test-c-harness
+	$(MAKE) smoke-check
+	$(MAKE) sdk-contract-check
+	$(MAKE) test-shared-browser
+
+# Tombstones for the pre-rename target names. The profile was called `byos`,
+# for "bring your own simulator", through Checkpoint 4. It runs its own
+# Simulator and shares it, which is not that, so it is `shared` now.
+#
+# These exist because a doc only helps someone who reads it. Muscle memory and
+# any wrapper script of your own get a pointer here instead of make's own "No
+# rule to make target", which says nothing about where the target went. One
+# rule covers all seven: every old name maps to its new one by substitution.
+#
+# Delete these at Checkpoint 11, per docs/ROADMAP.md. They are a migration aid,
+# not a permanent fixture.
+RENAMED_TARGETS = up-byos byos-load byos-watch byos-check test-byos-unit test-byos-types test-byos-browser
+# Declared here rather than in the .PHONY at the top of this file: make expands
+# a rule's prerequisites as it reads them, so a variable defined further down
+# would expand to nothing there.
+.PHONY: $(RENAMED_TARGETS)
+
+$(RENAMED_TARGETS):
+	@echo "make $@ is now make $(subst byos,shared,$@)."
+	@echo "The byos profile was renamed to shared. See \"If you used the byos profile\" in README.md."
+	@exit 1

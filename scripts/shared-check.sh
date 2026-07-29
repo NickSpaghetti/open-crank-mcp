@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Integration checks for the byos profile. Boots the container against the
+# Integration checks for the shared profile. Boots the container against the
 # in-repo Lua fixture, launches the Simulator inside it, and asserts the
 # invariants that have actually broken in practice.
 #
@@ -27,7 +27,7 @@ export AUDIO_PORT="${AUDIO_PORT:-8100}"
 # directory per run, each holding root-owned build output that needs sudo to
 # remove, because --keep skips cleanup by design.
 GAME_DIR="/tmp/open-crank-mcp-check-game"
-export BYOS_DATA_DIR="/tmp/open-crank-mcp-check-data"
+export SHARED_DATA_DIR="/tmp/open-crank-mcp-check-data"
 
 COMPOSE=(docker compose -f "$REPO_DIR/docker-compose.yml")
 
@@ -67,7 +67,7 @@ check_true() {
   fi
 }
 
-in_container() { "${COMPOSE[@]}" exec -T simulator-byos "$@"; }
+in_container() { "${COMPOSE[@]}" exec -T simulator-shared "$@"; }
 
 cleanup() {
   if [ "$KEEP" = "1" ]; then
@@ -76,34 +76,34 @@ cleanup() {
     echo "  view:      $BASE_URL/"
     echo "  project:   $COMPOSE_PROJECT_NAME"
     echo "  game:      the Lua fixture in $GAME_DIR"
-    echo "  stop with: COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME docker compose --profile byos down"
+    echo "  stop with: COMPOSE_PROJECT_NAME=$COMPOSE_PROJECT_NAME docker compose --profile shared down"
     echo
-    echo "your own byos container, if you have one, is untouched on port 6080."
+    echo "your own shared container, if you have one, is untouched on port 6080."
     return
   fi
   # pdc runs as root inside the container, so its output is root-owned on the
   # host. Delete it from in there, where the ownership matches, rather than
   # asking for sudo.
   in_container rm -rf /your-game/fixture.pdx >/dev/null 2>&1
-  "${COMPOSE[@]}" --profile byos down >/dev/null 2>&1
+  "${COMPOSE[@]}" --profile shared down >/dev/null 2>&1
   # Root-owned, because the container runs as root, so removed from in there.
   docker run --rm -v /tmp:/host-tmp alpine \
-    rm -rf "/host-tmp/$(basename "$GAME_DIR")" "/host-tmp/$(basename "$BYOS_DATA_DIR")" \
+    rm -rf "/host-tmp/$(basename "$GAME_DIR")" "/host-tmp/$(basename "$SHARED_DATA_DIR")" \
     >/dev/null 2>&1
 }
 
 # The fixture plus the harness it imports. setup would normally copy the
 # harness in; doing it here keeps this independent of the MCP tools.
 rm -rf "$GAME_DIR" 2>/dev/null || true
-mkdir -p "$GAME_DIR" "$BYOS_DATA_DIR"
+mkdir -p "$GAME_DIR" "$SHARED_DATA_DIR"
 cp -r "$REPO_DIR/lua/test-fixture/Source" "$GAME_DIR/"
 cp "$REPO_DIR/lua/mcp_harness.lua" "$GAME_DIR/Source/"
 trap cleanup EXIT
 
-echo "booting an isolated byos container on port $VNC_PORT with the Lua fixture"
+echo "booting an isolated shared container on port $VNC_PORT with the Lua fixture"
 PLAYDATE_SDK_VERSION="${PLAYDATE_SDK_VERSION:-3.1.1}" \
-  "${COMPOSE[@]}" --profile byos build simulator-byos >/dev/null 2>&1
-GAME_DIR="$GAME_DIR" "${COMPOSE[@]}" --profile byos up -d simulator-byos >/dev/null 2>&1 || {
+  "${COMPOSE[@]}" --profile shared build simulator-shared >/dev/null 2>&1
+GAME_DIR="$GAME_DIR" "${COMPOSE[@]}" --profile shared up -d simulator-shared >/dev/null 2>&1 || {
     echo "FAIL container did not start"
     exit 1
   }
@@ -180,7 +180,7 @@ fi
 # Detached exec, not 'nohup ... &' inside a normal exec. A backgrounded child of
 # an exec session gets torn down with that session, which made the Simulator
 # fail to be there about half the time.
-"${COMPOSE[@]}" exec -d simulator-byos /opt/playdate-sdk/bin/PlaydateSimulator \
+"${COMPOSE[@]}" exec -d simulator-shared /opt/playdate-sdk/bin/PlaydateSimulator \
   /your-game/fixture.pdx /opt/playdate-sdk/Disk/Data/dev.open-crank-mcp.contractchecklua \
   >/dev/null 2>&1
 
@@ -207,7 +207,7 @@ check_true "window pinned to the top-left corner" \
   "$([ "${win_x:-999}" -le 10 ] && [ "${win_y:-999}" -le 48 ] && echo 1 || echo 0)"
 
 # The window's own size should match the measured formula for 1x.
-check "window size matches the 1x formula" "$(bash -c "source '$REPO_DIR/scripts/byos-lib.sh'; byos_window_size 1")" \
+check "window size matches the 1x formula" "$(bash -c "source '$REPO_DIR/scripts/shared-lib.sh'; shared_window_size 1")" \
   "${win_w}x${win_h}"
 
 # --- the published slider layout -------------------------------------------

@@ -1,12 +1,12 @@
-# Shared helpers for the byos/vnc profile, kept out of run-vnc.sh so they can
+# Shared helpers for the shared/vnc profile, kept out of run-vnc.sh so they can
 # be tested without booting a container. Source, don't execute.
 
-BYOS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SHARED_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The Simulator's window size at a given zoom, measured at 1x and 2x with the
 # accelerometer and crank panel shown. The 466 is fixed chrome that doesn't
 # scale: menu bar, d-pad row, toolbar and that panel.
-byos_window_size() {
+shared_window_size() {
   local zoom="$1"
   echo "$(( 400 * zoom + 82 ))x$(( 240 * zoom + 466 ))"
 }
@@ -14,12 +14,12 @@ byos_window_size() {
 # Reads a greyscale pixel column (one value per line on stdin) and prints
 # "top bottom mute" row offsets for the volume slider, or nothing when the
 # column doesn't look like the device frame.
-byos_find_slider() {
-  awk -f "$BYOS_LIB_DIR/find-volume-slider.awk" "$@"
+shared_find_slider() {
+  awk -f "$SHARED_LIB_DIR/find-volume-slider.awk" "$@"
 }
 
 # Turns a raw greyscale file into the one-value-per-line form the parser wants.
-byos_column_from_raw() {
+shared_column_from_raw() {
   od -An -tu1 -v "$1" | tr -s ' ' '\n' | grep -v '^$'
 }
 
@@ -30,7 +30,7 @@ byos_column_from_raw() {
 #
 # Geometry is read fresh every time rather than cached, so dragging the window
 # or changing zoom can't leave this reading the wrong pixels.
-byos_read_slider() {
+shared_read_slider() {
   local geometry display_size win
   win=$(xdotool search --name '^Playdate Simulator$' 2>/dev/null | tail -1)
   [ -n "$win" ] || return 1
@@ -47,7 +47,7 @@ byos_read_slider() {
     -f rawvideo -y /tmp/pd-slider.raw 2>/dev/null || return 1
 
   local parsed
-  parsed=$(byos_column_from_raw /tmp/pd-slider.raw | byos_find_slider)
+  parsed=$(shared_column_from_raw /tmp/pd-slider.raw | shared_find_slider)
   [ -n "$parsed" ] || return 1
   echo "$X $Y $WIDTH $HEIGHT $(( X + WIDTH - 29 )) $parsed"
 }
