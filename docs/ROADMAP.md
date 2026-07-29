@@ -486,7 +486,240 @@ asking "yet?" instead of being told.
   now backed by a mutex-guarded buffer instead, proven race-free under
   `go test -race`. `internal/harness`'s poll interval was 100ms; tightened to
   10ms, matching what `docs/ROADMAP.md` always said the design should be.
-- [ ] **Checkpoint 5**: End-to-end verification. Build one of the SDK's Lua
-  `Examples/` and one of its C `Examples/` (both with the matching harness
-  wired in), run each through the full containerized stack, confirm every
-  tool against real gameplay for both.
+- [x] **Shared session**: One persistent container an agent and a human both
+  drive. Every profile above gives you one or the other, because an MCP client
+  runs `docker compose run`, which creates a new container per connection: a
+  separately started `make up-vnc` was never the same container, display or
+  filesystem as the one an agent was driving. The `byos` profile is one
+  long-lived detached container instead, watched over noVNC and attached to over
+  `docker compose exec`. `scripts/run-vnc.sh` starts what that needs: Xvfb,
+  openbox, x11vnc, websockify serving noVNC, a PulseAudio null sink, and ffmpeg
+  restreaming that sink's monitor as MP3. openbox is patched from its shipped
+  `rc.xml` down to one desktop with no keybindings, because four desktops and a
+  stray toggle-show-desktop both make the Simulator appear to vanish, and there
+  is no taskbar to recover it from - only an MCP client can start one.
+
+  The volume slider was the interesting part. Nothing can read the Simulator's
+  volume back (`getVolume()` has no setter and the INI has no key for it), and
+  the browser only ever sees a framebuffer, so the slider is found in the pixels
+  instead. A one-pixel-wide column 29px in from the window's right edge crosses
+  the LOCK and MENU buttons, the volume trough, its knob and the mute icon, and
+  the longest run of non-yellow below the buttons is the trough. Taking the
+  longest run rather than fixed offsets is what makes it self-calibrating across
+  zoom levels. Verified three ways: `scripts/run-byos-unit-tests.sh` against
+  synthetic columns, `scripts/byos-check.sh` against a real Simulator, and
+  Playwright tests for the page behaviour.
+
+  Two follow-ups landed on top. `cmd/byos-load` builds and launches a game in
+  the running container by driving the MCP server over stdio exactly as a client
+  would, since `up-byos` only ever started a container and something still had
+  to call `build_game`/`launch_simulator`. And `scripts/byos-watch.sh` rebuilds
+  on save and reloads in place with the Simulator's own Ctrl-R, which re-reads
+  the `.pdx` in the same process, so the display, the container and the browser
+  tab all survive and the VNC view does not even reconnect. It is not
+  state-preserving: Reset is the only reload the SDK has.
+
+  Then a bug worth recording for how badly it presented. The Simulator treats
+  SDL initialisation as fatal, so with `SDL_AUDIODRIVER=pulseaudio` set and no
+  reachable PulseAudio socket it prints one line about SDL2 and exits. On a
+  container that has just started, whatever launches a game can easily get there
+  before `run-vnc.sh` has PulseAudio accepting connections, so the same command
+  works or doesn't depending on timing, and the message explaining it goes to a
+  buffer that is discarded when the session ends. What you observe is a game
+  that launches, reports healthy, and is gone seconds later. Process groups and
+  sessions, SIGPIPE from a closed stdout pipe, Docker killing exec descendants,
+  CPU starvation, the framebuffer scanner and container age were all
+  investigated first. The Simulator was never dying, it was never starting.
+  `cmd/byos-load` now waits for `pactl info` to succeed before launching
+  anything, and `launch_simulator` checks the process is still alive shortly
+  after starting it and returns the captured output if it isn't. Written up in
+  `docs/GOTCHAS.md`.
+- [ ] **Checkpoint 5**: End-to-end verification, container. Build one of the
+  SDK's Lua `Examples/` and one of its C `Examples/` (both with the matching
+  harness wired in), run each through the containerized stack, confirm every
+  tool against real gameplay for both. Independent of Checkpoints 6-11: those
+  are the native-mode track and neither blocks this.
+- [ ] **Checkpoint 6**: Rename the `byos` profile to `shared`. No behaviour
+  change, and the point of doing it alone is that `grep -rni byos` is the whole
+  review. `byos` stood for "bring your own simulator", which is not what that
+  profile does - it runs its own Simulator and shares it. The name misled its
+  own author during review, so it goes to `shared` and is then retired as a
+  token repo-wide, leaving it free for Checkpoint 8's native mode. `virtual` was
+  considered and rejected: one letter from the existing `simulator-visual`
+  service and `make up-visual`.
+
+  Touches `docker-compose.yml` (service, profile, the `./.byos-data` mount, and
+  the concept comment above the service, which needs rewriting rather than
+  renaming), seven `make` targets, four `scripts/*.sh` files including their
+  `# shellcheck source=` directives, `tests/browser/`, `.github/workflows/ci.yml`
+  (names only - anything that changes *when* a job fires belongs in Checkpoint
+  9), and the Go package `cmd/byos-load`, which is why this checkpoint has to
+  compile. That package hardcodes the service and profile names as bare literals
+  in several places; pull them into consts so the next rename can't leave a
+  half-finished one. Keep `/.byos-data/` in `.gitignore` alongside the new
+  entry: the old directory is root-owned and needs `sudo` to remove, so leaving
+  it ignored keeps it out of everyone's `git status`. Old target names get
+  tombstones that fail with a pointer to the README's migration table, to be
+  deleted at Checkpoint 11.
+
+  Out of repo, and the order matters: drop `byos` from `main`'s required status
+  checks *before* this merges, or every later PR blocks forever on a check that
+  will never report again. Add `shared` after.
+
+  Done when `grep -rni byos` returns only the `.gitignore` legacy entry and this
+  checkpoint's own history, `go build ./...` and `go vet ./...` pass, and
+  `make shared-load`, `make shared-watch`, `make shared-check`,
+  `make test-shared-unit`, `make test-shared-types` and
+  `make test-shared-browser` all still work against a real container.
+- [ ] **Checkpoint 7**: Portability prep, plus one bug fix that shouldn't wait
+  behind a feature. No behaviour change on any existing path. Everything here is
+  a prerequisite for native mode that stands on its own.
+
+  `internal/simulator` has three POSIX-only constructs, and they fail
+  differently. `SysProcAttr{Setpgid: true}` and `syscall.Kill(-pid, SIGKILL)`
+  are compile errors on Windows. `Exited()`'s `Process.Signal(syscall.Signal(0))`
+  is worse: it compiles and returns the wrong answer, because Windows rejects
+  every signal except Kill, so `Exited()` would always report true and
+  `launch_simulator` would always claim the Simulator quit during startup. Split
+  all three into `proc_unix.go`/`proc_windows.go` behind unexported helpers so no
+  exported signature changes and no call site moves. A `make go-build-cross`
+  target running `GOOS={linux,darwin,windows} go build ./...` plus `go vet` is
+  what proves it, and it is the only cross-platform claim provable from a Linux
+  box, so it lands first. `cmd/smoke-check` gets the same treatment for its Xvfb
+  and `ldd` calls.
+
+  The bug: `internal/setup/repo.go` finds the canonical harness sources by
+  walking up from `os.Getwd()` looking for `go.mod`. That only works because the
+  image sets `WORKDIR` to the repo root. For any binary invoked elsewhere it
+  breaks two ways, and the second is worse than the first: with no `go.mod`
+  above the cwd the `setup` tool dies outright, but with a cwd inside some
+  *other* Go module it returns that module and fails with
+  `reading /some/other/project/lua/mcp_harness.lua: no such file`, which names
+  nothing useful. MCP servers routinely inherit an arbitrary cwd. Fix is
+  `go:embed`, which forces a small structural change worth explaining once:
+  `go:embed` cannot reach `../` and `internal/setup` cannot import `package
+  main`, so the embedding package has to be a non-main package at the repo root,
+  which is what moves `main.go` to `cmd/open-crank-mcp/`. On the read side use
+  `path.Join`, never `filepath.Join` - `fs.FS` paths are always forward-slash.
+  `Teardown` never called `repoRoot` and doesn't change.
+
+  Also `make go-build` runs `go build ./...`, which writes nothing to disk.
+  Native mode's client config points at a binary path, so it needs `-o`.
+
+  Done when `make go-build-cross` passes for all three platforms, `make go-build`
+  produces a binary where the README says it will, a new test fails if the embed
+  pattern breaks, and the container path is untouched: `make build`,
+  `make smoke-check`, `make sdk-contract-check`.
+- [ ] **Checkpoint 8**: Native mode. The same binary running against a Playdate
+  SDK the developer installed themselves, no Docker. This is where `byos`
+  finally means what it says, though only in prose - every identifier says
+  `native`, so the retired token stays retired.
+
+  A new `internal/sdk` owns SDK location and per-OS paths, resolving
+  `PLAYDATE_SDK_PATH`, then `SDKRoot` in `~/.Playdate/config` (Panic's own
+  mechanism, already read by the fixture's `CMakeLists.txt`), then a per-OS
+  default. The env var winning first is what keeps container behaviour
+  byte-identical. It takes its filesystem, environment and home directory as
+  parameters rather than reaching for globals, which is what makes the whole
+  package table-testable with `fstest.MapFS`: resolution order, a malformed
+  config, the macOS `.app` layout, the Windows `.exe` layout, data-directory
+  probing, and the error path listing every candidate tried. Those tests run on
+  every OS on every PR without a Simulator anywhere, and they are what makes
+  shipping unverified macOS paths honest rather than a shrug.
+
+  Two real hazards. `internal/build/exec.go` re-reads `PLAYDATE_SDK_PATH` from
+  the environment independently of the server, so any resolution logic would be
+  honoured by `launch_simulator` and silently ignored by `build_game`; it takes
+  the resolved paths as an argument instead, and sets them in the child
+  environment so a game's own `CMakeLists.txt` can't fall through to the SDK
+  template's `bash`/`egrep` fallback. And the sandboxed data directory is
+  currently assumed to sit inside the SDK, which is the Linux layout only. Guess
+  it wrong and the failure is silent: launch succeeds, `get_status` reports
+  `harness_reachable: false`, and every other tool times out five seconds at a
+  time. So don't guess. Screenshots don't need it at all, because
+  `playdate.simulator.writeToFile` takes a path on the dev machine and a scratch
+  directory serves better. The IPC directory is *observable* once a game runs,
+  because the harness creates `mcp/` inside it, so probe for that after launch
+  and make a failed probe a loud non-fatal warning listing every path tried.
+  That turns the ugliest failure mode into a first-call diagnosis.
+
+  Platform scope is linux and darwin. Windows compiles and its path logic is
+  covered by the `fstest` suite, but the runtime is unsupported and says so:
+  WSL2 already serves those users through the existing profile, and claiming
+  Windows would roughly double the untested surface for a platform nobody here
+  can drive to green.
+
+  Done when the `fstest` suite passes under `go-build-cross`, `make sdk-path`
+  names both the resolved SDK and which source found it, `make
+  smoke-check-native` and `make sdk-contract-check-native` pass on a host SDK,
+  and a real MCP client pointed at the binary with no Docker runs `build_game`
+  through `get_screenshot` and `press_button` to `setup`. Run `setup` from a cwd
+  outside this repo and again from inside an unrelated Go module - that second
+  one is the case Checkpoint 7 fixed.
+- [ ] **Checkpoint 9**: CI for native mode. One `native` job installing the
+  Simulator's shared libraries and the SDK directly on the runner, then building
+  and running the native targets. CI already fetches the SDK from Panic for
+  `docker-build`, so this is not a new licence posture. The job doubles as the
+  authoritative install line for the README's native requirements, so the two
+  can't drift. A macOS leg is advisory (`continue-on-error`) because it is the
+  platform with a real user story and the one worth pushing to green first;
+  there is no Windows leg, since the cross-compile gate plus the `fstest` suite
+  is the agreed coverage and a permanently red advisory leg is only noise. Don't
+  matrix the existing jobs - `mode: [container, native]` would rename
+  `smoke-check` to `smoke-check (container)` and break branch protection a
+  second time for no signal.
+
+  The paths-filter work belongs here rather than in Checkpoint 6, because it
+  changes when jobs fire: broaden the enumerated `scripts/` globs so a future
+  rename can't silently stop firing the browser leg, and add a step to both
+  filtered jobs asserting every path they reference still exists. `weekly.yml`
+  stays container-only on purpose, since its matrix knob is a Docker build arg
+  and a native install is whatever the developer installed; say so in a comment
+  or it reads as an oversight.
+
+  Add `native` to `main`'s required checks once the ubuntu leg is green. Anything
+  promoted later has to keep the always-run-the-job, conditionally-run-the-step
+  shape, for the reason recorded under **Scripts rewrite** above.
+- [ ] **Checkpoint 10**: Documentation for two modes. The README currently
+  interleaves *how the SDK runs* with *which client you configure*, which is why
+  the connecting section repeats near-identical blocks. Separating those axes
+  means adding a third mode reduces the block count rather than growing it.
+  Specific things that become wrong rather than merely incomplete: Docker is
+  listed as the only requirement, `### Linux (native X11/XWayland)` is not
+  native and becomes a trap once a real native mode exists, one paragraph
+  actively argues against a native path on macOS and needs narrowing to "for
+  seeing a containerized Simulator", and `## Local development` claims the only
+  host requirements are Docker and Go. The existing **Needs** and **Applies to**
+  columns are already the right shape for marking mode, so the native rows drop
+  straight in.
+
+  ROADMAP supersessions, all in the "what we tried and what was actually true"
+  voice rather than deletions: the Docker-only decision keeps the Arch WebKit
+  blocker as the reason Docker exists and stays the default, and states what was
+  overstated. The Go decision gets the two sentences that make its
+  cross-compilation argument finally pay off. The visual-spot-check decision
+  gets the note that native dissolves the problem class it describes. The SDK
+  licence decision gets its native branch, where this repo never touches the SDK
+  at all.
+
+  `docs/GOTCHAS.md` needs a file-level note that everything in it was found on
+  containerized Linux and is nonetheless SDK behaviour that applies natively,
+  plus five inline exceptions where the platform genuinely matters. The
+  PulseAudio entry is the interesting one: it is container-specific by
+  construction, since it follows from the profiles forcing
+  `SDL_AUDIODRIVER=pulseaudio`, but the mitigation it describes is general and
+  right to keep.
+- [ ] **Checkpoint 11**: End-to-end verification, native. The same two example
+  games as Checkpoint 5, every tool confirmed against real gameplay, with no
+  Docker in the loop. This is the checkpoint that turns assumptions into either
+  confirmations or bugs, so it is where the unverified macOS paths get found.
+  Linux first, since it is the only platform anything here has been verified on.
+  Note that on Arch this needs the AUR WebKit packages, which is the same
+  blocker that made Docker the default in the first place. Delete Checkpoint 6's
+  tombstone targets here.
+- [ ] **Docs drift pass**: Unrelated to the above and safe to do at any time.
+  The IPC poll interval is recorded as three different numbers in three files:
+  this document says 10ms, `docs/GOTCHAS.md` records 10ms then 1ms then the
+  fsnotify wait that replaced polling, and `.gremlins.yaml` still says 100ms.
+  `.gremlins.yaml` also justifies two exclusions by "the full simulator Docker
+  environment", which becomes "a real SDK install, container or native".
