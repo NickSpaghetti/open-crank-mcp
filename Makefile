@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-byos check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-byos-unit byos-check test-byos-types test-byos-browser go-build go-test
+.PHONY: build up up-visual up-visual-wsl up-vnc up-byos byos-load byos-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-byos-unit byos-check test-byos-types test-byos-browser go-build go-test
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -58,6 +58,22 @@ smoke-check: build
 
 sdk-contract-check: build
 	docker compose run --rm simulator go test ./internal/contracttest/... -v
+
+# Builds and launches the game in an already-running byos container, by
+# driving the MCP server exactly as a client would. `up-byos` only starts the
+# container; something still has to load a game into it, and this is that.
+byos-load:
+	go run ./cmd/byos-load -compose-file $(CURDIR)/docker-compose.yml
+
+# Rebuilds and reloads on save, using the Simulator's own Ctrl-R, which
+# re-reads the .pdx from disk in the same process - so the display, the
+# container and your browser tab all stay put. The game restarts each time:
+# Reset is the only reload the SDK has.
+#
+# Piped in rather than run from the image, so editing the script takes effect
+# immediately instead of needing a rebuild.
+byos-watch:
+	docker compose exec -T simulator-byos bash -s < scripts/byos-watch.sh
 
 # Unit tests for the byos helpers: the volume-slider parser and the window
 # geometry formula. Pure awk and bash, so no container and no display.

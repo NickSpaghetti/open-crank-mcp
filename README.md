@@ -322,6 +322,40 @@ whatever the agent's `press_button`/`set_crank` calls are doing. Real
 input and harness overrides are two independent mechanisms feeding the
 same running Simulator, so neither one blocks the other.
 
+### Loading a game, and reloading on save
+
+`up-byos` starts a container with a display in it. Something still has to build
+a game and launch it, and two commands do that without an MCP client:
+
+```
+make byos-load     # build and launch, once
+make byos-watch    # rebuild and reload on every save
+```
+
+`byos-load` drives the same MCP tools a client would, over the same stdio
+transport, and stops any Simulator already running first so you can't end up
+with two on one display.
+
+`byos-watch` is the loop worth having. It watches your game's `Source`
+directory, runs `pdc` on change, and presses the Simulator's own `Ctrl-R`,
+which re-reads the `.pdx` from disk **in the same process**. Nothing restarts:
+not the container, not the display, not your browser tab, and the volume you set
+on the Playdate's slider survives, which it doesn't across a relaunch.
+
+Two limits, both from the SDK rather than this setup. The game starts over on
+every reload, because Reset is the only reload the Simulator has. And a failed
+build leaves the previous `.pdx` in place, so the running game keeps working
+rather than being replaced by nothing.
+
+One surprise worth knowing if you write your own tooling against the MCP tools:
+**a Simulator dies if the session that launched it exits too quickly.** It needs
+its launching session to stay alive a few seconds; exit immediately after
+`launch_simulator` returns and the game disappears about a second later. Also,
+`get_status` can report the harness reachable straight away, because that check
+reads a file in the data directory and a previous run's response may still be
+sitting there, so it isn't a reliable readiness signal on its own. `byos-load`
+holds on for five seconds for exactly this reason.
+
 ### Seeing the logs
 
 Three separate channels carry different output. They are not
@@ -505,17 +539,70 @@ this project only targets the Simulator, never real hardware.
 supported pattern) can use the Lua harness alone, since a real Lua VM is
 still running.
 
-## Tests
+## Local development
 
-| Target | Needs | Covers |
+Every command is a make target, and everything runs in the container, so the
+only host requirements are Docker and Go.
+
+### Containers
+
+| Command | Does |
+|---|---|
+| `make build` | Builds the image. Fetches the Playdate SDK, pinned by `PLAYDATE_SDK_VERSION`. |
+| `make up` | Headless container under Xvfb. What the MCP tools need and nothing more. |
+| `make up-visual` | Linux, native X11 window and host audio. |
+| `make up-visual-wsl` | Windows 11 through WSL2, using WSLg's display and audio. |
+| `make up-vnc` | Browser fallback, any OS. Occupies the terminal. |
+| `make up-byos` | Persistent shared session, detached, for an agent and a human at once. Needs `GAME_DIR`. |
+| `make down` | Stops every profile, including byos. |
+| `make shell` | A bash prompt in the image. |
+
+Note that only `up-vnc` and `up-byos` publish ports, and only on `127.0.0.1`
+unless you set `BIND_ADDR`.
+
+### Running a game in byos
+
+`up-byos` gives you a container with a display in it. These put a game inside:
+
+| Command | Does |
+|---|---|
+| `make byos-load` | Builds and launches the mounted game, once. Stops any Simulator already running first. |
+| `make byos-watch` | Watches the game's `Source`, rebuilds on save, and reloads in place with the Simulator's own `Ctrl-R`. |
+
+```
+GAME_DIR=/absolute/path/to/your-game make up-byos
+make byos-load
+```
+
+### Tests and checks
+
+| Command | Needs | Covers |
 |---|---|---|
-| `make go-test` | Go | The server, tools and harness IPC. |
+| `make go-build` / `go-test` | Go | The server, tools and harness IPC. |
+| `make smoke-check` | Docker | The SDK is where the image expects it and the Simulator starts. |
 | `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |
 | `make sdk-contract-check` | Docker | The MCP tools driving a real Simulator, so an SDK release that changes behaviour shows up here. |
-| `make test-byos-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. Fast, no container. |
-| `make byos-check` | Docker | The VNC workspace: pages served, window manager configuration, where the slider was found, and that clicking it works. |
+| `make test-byos-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. No container. |
+| `make byos-check` | Docker | The VNC workspace: pages served, window manager config, where the slider was found, and that clicking it works. |
 | `make test-byos-types` | Docker | Typechecks the browser tests with `tsgo`, the Go port of `tsc`. |
-| `make test-byos-browser` | Docker | The browser behaviour of the VNC pages, driven by Playwright in its own container so nothing is installed on the host. Runs the typecheck and `byos-check` first. |
+| `make test-byos-browser` | Docker | Browser behaviour of the VNC pages, via Playwright in its own container. Runs the typecheck and `byos-check` first. |
+
+### Environment variables
+
+| Variable | Default | Applies to |
+|---|---|---|
+| `PLAYDATE_SDK_VERSION` | `3.1.1` | `build`, and every target that builds |
+| `GAME_DIR` | required | `up-byos`. Must be absolute. |
+| `SIM_ZOOM` | `1` | `up-vnc`, `up-byos`. Simulator zoom level. |
+| `VNC_GEOMETRY` | `1280x800` | `up-vnc`, `up-byos`. Workspace size. |
+| `BIND_ADDR` | `127.0.0.1` | Published ports 6080 and 8000 |
+| `SOURCE_DIR` / `PDX_PATH` | `/your-game/Source`, `/your-game/your-game.pdx` | `byos-watch`, if your project isn't laid out that way |
+| `PLAYWRIGHT_IMAGE` | pinned to `@playwright/test` | `test-byos-types`, `test-byos-browser` |
+| `BYOS_URL` | `http://localhost:6080` | The browser tests, when the container isn't on localhost |
+
+## Tests
+
+What each command is above. This section is why they exist.
 
 The byos tests exist because that layer is easy to break invisibly. Each of
 these asserts something that has actually broken in practice:
