@@ -332,6 +332,60 @@ done
 PROBE
 ```
 
+PROBE RESPONSE
+```
+>....
+
+# Name the Simulator rather than listing the directory: crashpad_handler lives
+# next to it and sorts first.
+SIM="$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator"
+echo "simulator: $SIM"
+[ -x "$SIM" ] || echo "NOT EXECUTABLE: $SIM"
+
+# The fixture imports mcp_harness, so the harness has to be beside it before pdc
+# will build it. Built in a copy so the repo is left alone.
+rm -rf /tmp/probe-game && mkdir -p /tmp/probe-game
+cp -R lua/test-fixture/Source /tmp/probe-game/
+cp lua/mcp_harness.lua /tmp/probe-game/Source/
+"$SDK/bin/pdc" /tmp/probe-game/Source /tmp/probe-game/probe.pdx || echo "pdc failed"
+
+"$SIM" /tmp/probe-game/probe.pdx > /tmp/sim-stdout.txt 2>&1 &
+SIMPID=$!
+sleep 10
+kill -9 "$SIMPID" 2>/dev/null
+
+echo "=== did Lua print() reach real stdout? (0 means no) ==="
+grep -c "fixture print line" /tmp/sim-stdout.txt
+echo "=== what the process actually wrote ==="
+head -40 /tmp/sim-stdout.txt
+
+echo
+echo "=== WHERE DID THE DATA GO? this is the value still missing ==="
+for base in "$HOME/Library/Application Support" "$HOME/Library/Containers" "$SDK/Disk"; do
+  if [ -d "$base" ]; then
+    echo "--- under $base ---"
+    find "$base" -maxdepth 5 -name "game_logs.json" 2>/dev/null
+    find "$base" -maxdepth 4 -iname "*contractcheck*" 2>/dev/null
+    find "$base" -maxdepth 2 -iname "*laydate*" 2>/dev/null
+  else
+    echo "absent  $base"
+  fi
+done
+PROBE
+simulator: /Users/admin/Developer/PlaydateSDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator
+=== did Lua print() reach real stdout? (0 means no) ===
+0
+bash: line 23: 14460 Killed: 9               "$SIM" /tmp/probe-game/probe.pdx > /tmp/sim-stdout.txt 2>&1
+=== what the process actually wrote ===
+
+=== WHERE DID THE DATA GO? this is the value still missing ===
+--- under /Users/admin/Library/Application Support ---
+--- under /Users/admin/Library/Containers ---
+--- under /Users/admin/Developer/PlaydateSDK/Disk ---
+/Users/admin/Developer/PlaydateSDK/Disk/Data/dev.open-crank-mcp.contractchecklua/mcp/game_logs.json
+/Users/admin/Developer/PlaydateSDK/Disk/Data/dev.open-crank-mcp.contractchecklua
+```
+
 The `game_logs.json` line is the answer. The harness writes it inside whatever
 directory the Simulator sandboxes for that game, so wherever it turns up is the
 real data directory, and its parent is what `OPEN_CRANK_DATA_ROOT` would be set
