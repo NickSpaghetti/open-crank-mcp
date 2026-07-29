@@ -416,6 +416,66 @@ Get-ChildItem "$env:APPDATA" -Filter "*laydate*" -ErrorAction SilentlyContinue
 Get-ChildItem "$env:LOCALAPPDATA" -Filter "*laydate*" -ErrorAction SilentlyContinue
 ```
 
+response windows
+
+```powershell
+PS C:\Users\nc_ci\GitProjects\NickSpaghetti\open-crank-mcp> Get-Content "$env:USERPROFILE\.Playdate\config" -ErrorAction SilentlyContinue
+PS C:\Users\nc_ci\GitProjects\NickSpaghetti\open-crank-mcp>
+PS C:\Users\nc_ci\GitProjects\NickSpaghetti\open-crank-mcp> foreach ($d in @("$env:LOCALAPPDATA\Programs\PlaydateSDK",
+>>                  "$env:USERPROFILE\Documents\PlaydateSDK",
+>>                  "C:\Program Files\PlaydateSDK")) {
+>>   if (Test-Path $d) { "EXISTS  $d" } else { "absent  $d" }
+>> }
+absent  C:\Users\nc_ci\AppData\Local\Programs\PlaydateSDK
+EXISTS  C:\Users\nc_ci\Documents\PlaydateSDK
+absent  C:\Program Files\PlaydateSDK
+PS C:\Users\nc_ci\GitProjects\NickSpaghetti\open-crank-mcp>
+PS C:\Users\nc_ci\GitProjects\NickSpaghetti\open-crank-mcp> Get-ChildItem "$env:USERPROFILE\Documents\PlaydateSDK\bin" -ErrorAction SilentlyContinue |
+>>   Select-Object Name
+
+Name
+----
+crashpad_handler.exe
+firmware_symbolizer.py
+fmt.dll
+gamecontrollerdb.txt
+jpeg62.dll
+jsoncpp.dll
+libcrypto-3-x64.dll
+libcurl.dll
+libpng16.dll
+libssl-3-x64.dll
+pcre2-16.dll
+pdc.exe
+pdutil.exe
+PlaydateSimulator.exe
+SDL2.dll
+sentry.dll
+sqlite3.dll
+symbols.db
+WebView2Loader.dll
+wxbase331u_net_vc_x64_custom.dll
+wxbase331u_vc_x64_custom.dll
+wxmsw331u_core_vc_x64_custom.dll
+wxmsw331u_webview_vc_x64_custom.dll
+z.dll
+
+
+PS C:\Users\nc_ci\GitProjects\NickSpaghetti\open-crank-mcp>
+PS C:\Users\nc_ci\GitProjects\NickSpaghetti\open-crank-mcp> Get-ChildItem "$env:APPDATA" -Filter "*laydate*" -ErrorAction SilentlyContinue
+PS C:\Users\nc_ci\GitProjects\NickSpaghetti\open-crank-mcp> Get-ChildItem "$env:LOCALAPPDATA" -Filter "*laydate*" -ErrorAction SilentlyContinue
+
+
+    Directory: C:\Users\nc_ci\AppData\Local
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d-----         7/29/2026   5:55 PM                Playdate Simulator
+```
+
+the installer is an .exe
+
 One question no script can answer: **is the Windows SDK an installer `.exe` or an
 archive?** CI provisions the Linux SDK by fetching a `.tar.gz` and extracting it.
 If Windows only ships an interactive installer, a Windows CI job cannot set
