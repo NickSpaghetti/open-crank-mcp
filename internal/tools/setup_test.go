@@ -2,10 +2,23 @@ package tools
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 )
+
+// testHarnessFS stands in for opencrank.HarnessFS. The keys are the paths
+// internal/setup looks up; the contents are irrelevant to what these tests
+// assert, which is the tool's own wiring and reporting.
+func testHarnessFS() fs.FS {
+	return fstest.MapFS{
+		"lua/mcp_harness.lua":     {Data: []byte("-- test harness stand-in\n")},
+		"c-harness/mcp_harness.h": {Data: []byte("/* test harness stand-in */\n")},
+		"c-harness/mcp_harness.c": {Data: []byte("/* test harness stand-in */\n")},
+	}
+}
 
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
@@ -21,7 +34,7 @@ func TestSetupHarnessLua(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "Source", "main.lua"), "function playdate.update()\nend\n")
 
-	s := &Server{}
+	s := &Server{harnessFS: testHarnessFS()}
 	result, out, err := s.setupHarness(context.Background(), nil, SetupInput{SourceDir: dir})
 	if err != nil {
 		t.Fatalf("setupHarness: %v", err)
@@ -41,7 +54,7 @@ func TestSetupHarnessUnknownLanguageIsAToolError(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "Source", "main.lua"), "")
 
-	s := &Server{}
+	s := &Server{harnessFS: testHarnessFS()}
 	result, _, err := s.setupHarness(context.Background(), nil, SetupInput{SourceDir: dir, Language: "rust"})
 	if err != nil {
 		t.Fatalf("setupHarness: %v", err)
@@ -54,7 +67,7 @@ func TestSetupHarnessUnknownLanguageIsAToolError(t *testing.T) {
 func TestSetupHarnessNoProjectFoundIsAToolError(t *testing.T) {
 	dir := t.TempDir()
 
-	s := &Server{}
+	s := &Server{harnessFS: testHarnessFS()}
 	result, _, err := s.setupHarness(context.Background(), nil, SetupInput{SourceDir: dir})
 	if err != nil {
 		t.Fatalf("setupHarness: %v", err)
@@ -69,7 +82,7 @@ func TestSetupThenTeardownHarnessLua(t *testing.T) {
 	mainPath := filepath.Join(dir, "Source", "main.lua")
 	writeFile(t, mainPath, "function playdate.update()\nend\n")
 
-	s := &Server{}
+	s := &Server{harnessFS: testHarnessFS()}
 	if result, _, err := s.setupHarness(context.Background(), nil, SetupInput{SourceDir: dir}); err != nil || result != nil {
 		t.Fatalf("setupHarness: result=%v err=%v", result, err)
 	}

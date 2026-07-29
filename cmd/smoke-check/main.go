@@ -1,7 +1,11 @@
-// Command smoke-check confirms the Playdate SDK's shared libraries resolve,
-// pdc runs, and PlaydateSimulator launches cleanly under Xvfb without
-// crashing or logging an error - the environment-health check for the full
-// simulator Docker image.
+// Command smoke-check confirms the Playdate SDK's shared libraries resolve, pdc
+// runs, and PlaydateSimulator launches without crashing or logging an error.
+// The environment-health check: run it when the SDK moves, the image changes, or
+// a host install is new.
+//
+// The two platform-specific parts are in display_*.go and libs_*.go. On Linux it
+// runs under a throwaway Xvfb and greps ldd; elsewhere the desktop is already
+// there and there is no ldd to grep. run() itself has no platform branch.
 package main
 
 import (
@@ -40,19 +44,11 @@ func run() error {
 	}
 	fmt.Print(string(out))
 
-	xvfb, err := simulator.Launch("Xvfb", ":99", "-screen", "0", "1280x800x24")
+	stopDisplay, err := startDisplay()
 	if err != nil {
-		return fmt.Errorf("launching Xvfb: %w", err)
+		return err
 	}
-	defer func() {
-		_ = xvfb.Stop()
-		_ = xvfb.Wait()
-	}()
-	time.Sleep(1 * time.Second)
-
-	if err := os.Setenv("DISPLAY", ":99"); err != nil {
-		return fmt.Errorf("setting DISPLAY: %w", err)
-	}
+	defer stopDisplay()
 
 	sim, err := simulator.Launch(simBin, "")
 	if err != nil {
@@ -80,19 +76,6 @@ func run() error {
 
 	return nil
 }
-
-func checkSharedLibraries(binPath string) error {
-	out, err := exec.Command("ldd", binPath).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("ldd %s: %w\n%s", binPath, err, out)
-	}
-	if notFoundPattern.Match(out) {
-		return fmt.Errorf("missing shared libraries:\n%s", out)
-	}
-	return nil
-}
-
-var notFoundPattern = regexp.MustCompile(`not found`)
 
 // Matches both the correctly-spelled and the typo'd form SDL2 itself uses
 // ("could not be initalized") - seen directly in this project's own SDL2

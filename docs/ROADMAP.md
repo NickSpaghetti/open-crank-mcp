@@ -591,7 +591,7 @@ asking "yet?" instead of being told.
   Out of repo, and the order mattered: `byos` had to leave `main`'s required
   status checks *before* this merged, or every later PR would block forever on a
   check that will never report again. `shared` added after.
-- [ ] **Checkpoint 7**: Portability prep, plus one bug fix that shouldn't wait
+- [x] **Checkpoint 7**: Portability prep, plus one bug fix that shouldn't wait
   behind a feature. No behaviour change on any existing path. Everything here is
   a prerequisite for native mode that stands on its own.
 
@@ -626,10 +626,32 @@ asking "yet?" instead of being told.
   Also `make go-build` runs `go build ./...`, which writes nothing to disk.
   Native mode's client config points at a binary path, so it needs `-o`.
 
-  Done when `make go-build-cross` passes for all three platforms, `make go-build`
-  produces a binary where the README says it will, a new test fails if the embed
-  pattern breaks, and the container path is untouched: `make build`,
-  `make smoke-check`, `make sdk-contract-check`.
+  Verified by running the same `setup` call against a binary built from `main`
+  and one from this branch, both from a working directory inside an unrelated Go
+  module. `main` failed with
+  `reading /some/other/module/lua/mcp_harness.lua: no such file or directory`,
+  naming a path that has nothing to do with anything. This branch succeeded and
+  wrote the real embedded harness. That is the whole argument for the change,
+  and it is worth re-running rather than trusting, because the broken version
+  looks fine from inside the repo.
+
+  Two things turned up that were not in the plan. `Exited()` needed the split as
+  much as the two compile errors did, and needed it more quietly: signal 0 is
+  rejected by Windows for every signal but Kill, so it compiles there and always
+  answers "gone", which would have made `launch_simulator` always report that the
+  Simulator quit during startup. A cross-compile gate cannot catch that class at
+  all, which is worth remembering about what `go-build-cross` does and does not
+  prove.
+
+  And `.gremlins.yaml` had a latent trap. Its exclude list said `main.go`, which
+  gremlins matches by basename, so it was also silently excluding
+  `cmd/shared-load/main.go` and `cmd/smoke-check/main.go`. Moving `main.go` into
+  `cmd/open-crank-mcp/` made the entry specific and dropped mutant coverage from
+  95.9% to 72.9%, all of it `cmd/shared-load`'s 48 previously-hidden mutants. So
+  the score the project had been reporting was better than its own config asked
+  for. Every exclusion is now a full path with its own justification, which puts
+  coverage back at 95.8% honestly. Splitting `cmd/smoke-check` also moved code
+  out from under an existing exclusion, and those files are listed too.
 - [ ] **Checkpoint 8**: Native mode. The same binary running against a Playdate
   SDK the developer installed themselves, no Docker. This is the mode "bring your own
   simulator" always described, though the phrase stays prose only: every

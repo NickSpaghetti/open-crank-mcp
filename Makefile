@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-test mutation-test test hooks
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mutation-test test hooks
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -122,11 +122,38 @@ test-shared-browser: test-shared-types
 	$(BROWSER_TESTS) SHARED_URL=http://localhost:$(CHECK_VNC_PORT) npx playwright test"
 	COMPOSE_PROJECT_NAME=open-crank-mcp-check docker compose --profile shared down
 
+# Emits the binary, rather than just proving it compiles. An MCP client running
+# the server natively is configured with a path to this file, so a target that
+# writes nothing would leave those instructions pointing at nothing.
+#
+# ./cmd/open-crank-mcp, not ./... - the latter builds every package including
+# the two other commands, and discards all of it.
 go-build:
-	go build ./...
+	go build -o open-crank-mcp ./cmd/open-crank-mcp
 
 go-test:
 	go test ./...
+
+# Builds for every platform the server is meant to run on, plus vet, without
+# needing any of them present. This is the only cross-platform claim provable
+# from one machine, so it is the gate that keeps native mode's per-OS code
+# honest between here and a real macOS install.
+#
+# windows is in this list even though Windows-native is unsupported (see
+# docs/ROADMAP.md). Keeping it compiling is cheap, and it is what makes
+# promoting Windows later additive rather than a rewrite. Note the limit of
+# what this proves: it catches a construct that does not exist on a platform,
+# not one that exists and behaves differently. internal/simulator's Exited()
+# was exactly the second kind.
+CROSS_PLATFORMS = linux darwin windows
+
+go-build-cross:
+	@for os in $(CROSS_PLATFORMS); do \
+		printf '%-8s ' "$$os"; \
+		GOOS=$$os go build ./... || exit 1; \
+		GOOS=$$os go vet ./... || exit 1; \
+		echo 'build + vet ok'; \
+	done
 
 # Mutation testing: gremlins changes the code in small ways and checks the test
 # suite notices. Catches tests that execute a line without asserting anything

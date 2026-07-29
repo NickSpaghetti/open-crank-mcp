@@ -6,6 +6,7 @@ package setup
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -80,10 +81,16 @@ func fileHasContent(path string) bool {
 	return len(strings.TrimSpace(string(b))) > 0
 }
 
-func copyFile(src, dst string) error {
-	b, err := os.ReadFile(src)
+// copyHarnessFile writes one embedded harness source out to dst.
+//
+// name is a path inside harnessFS, so it is built with path.Join and never
+// filepath.Join: fs.FS paths are slash-separated on every platform, and
+// filepath.Join would produce backslashes on Windows that match nothing.
+// dst is a real filesystem path and does use filepath.
+func copyHarnessFile(harnessFS fs.FS, name, dst string) error {
+	b, err := fs.ReadFile(harnessFS, name)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", src, err)
+		return fmt.Errorf("reading embedded %s: %w", name, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(dst), err)
@@ -95,16 +102,24 @@ func copyFile(src, dst string) error {
 }
 
 // Setup wires the harness into sourceDir for the given language.
-func Setup(sourceDir string, language Language) (SetupResult, error) {
-	root, err := repoRoot()
-	if err != nil {
-		return SetupResult{}, err
+//
+// harnessFS carries the canonical harness sources, normally
+// opencrank.HarnessFS. It is a parameter rather than a package-level default so
+// tests can supply an fstest.MapFS, and so this package does not import the repo
+// root (which would be an import cycle in waiting).
+func Setup(sourceDir string, language Language, harnessFS fs.FS) (SetupResult, error) {
+	// Checked rather than left to panic inside fs.ReadFile. A nil here is always
+	// a wiring mistake (NewServer always supplies one), but `setup` is a
+	// model-facing tool, and a named error is diagnosable where a nil-pointer
+	// panic in a goroutine is not.
+	if harnessFS == nil {
+		return SetupResult{}, fmt.Errorf("no harness sources available: server was built without them")
 	}
 	switch language {
 	case Lua, Hybrid:
-		return setupLua(sourceDir, root, language)
+		return setupLua(sourceDir, harnessFS, language)
 	case C:
-		return setupC(sourceDir, root)
+		return setupC(sourceDir, harnessFS)
 	default:
 		return SetupResult{}, fmt.Errorf("unknown language %q", language)
 	}

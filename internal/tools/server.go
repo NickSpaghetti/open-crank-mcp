@@ -5,6 +5,7 @@ package tools
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"reflect"
 	"strconv"
 	"sync"
@@ -61,6 +62,7 @@ type Server struct {
 	mu        sync.Mutex
 	harnessMu sync.Mutex
 	sdkPath   string
+	harnessFS fs.FS
 	sim       *simulator.Simulator
 	pdxPath   string
 	dataDir   string
@@ -68,10 +70,13 @@ type Server struct {
 	nextID    int
 }
 
-// NewServer reads PLAYDATE_SDK_PATH from the environment, matching every
-// other entry point in this project (cmd/smoke-check, internal/contracttest).
-func NewServer(sdkPath string) *Server {
-	return &Server{sdkPath: sdkPath}
+// NewServer takes the SDK path already resolved by the caller, and the harness
+// sources the `setup` tool writes into a game (normally opencrank.HarnessFS).
+//
+// Both are injected rather than read here, so a test can supply a fake SDK
+// layout and an fstest.MapFS without touching the environment or the filesystem.
+func NewServer(sdkPath string, harnessFS fs.FS) *Server {
+	return &Server{sdkPath: sdkPath, harnessFS: harnessFS}
 }
 
 // notRunningResult is a recoverable, model-visible error - the caller can

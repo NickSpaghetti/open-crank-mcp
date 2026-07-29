@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"testing/fstest"
 )
 
 // mcp.AddTool panics if a tool's input/output struct can't be turned into a
@@ -12,5 +13,5 @@ import (
 // package registers has valid, inferable schemas.
 func TestRegisterAllDoesNotPanic(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test"}, nil)
-	RegisterAll(server, NewServer("/fake/sdk"))
+	RegisterAll(server, NewServer("/fake/sdk", fstest.MapFS{}))
 }

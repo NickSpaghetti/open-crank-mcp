@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 
+	opencrank "github.com/NickSpaghetti/open-crank-mcp"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -18,7 +19,7 @@ func main() {
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "open-crank-mcp"}, nil)
-	tools.RegisterAll(server, tools.NewServer(sdkPath))
+	tools.RegisterAll(server, tools.NewServer(sdkPath, opencrank.HarnessFS))
 
 	if err := server.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		log.Printf("server failed: %v", err)
