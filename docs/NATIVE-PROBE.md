@@ -1,15 +1,31 @@
 # Probing a platform for native mode
 
-Native mode runs the server directly against an SDK the developer installed,
-with no container. Where the SDK lives, and where things sit inside it, differs
-per platform. Linux is the only layout verified by running it. The macOS and
-Windows values in `internal/sdk` were written from Panic's documentation and
-platform convention, never checked against a real install.
+## Run this, and nothing else
 
-This is the checklist for checking one. Everything here is read-only except one
-optional step that builds a fixture into `/tmp`.
+**On macOS: [part 3](#macos-part-3-the-data-directory-corrected). One block, one
+paste, from the repo root.** It is the only thing outstanding.
 
-Run it on a machine with the Playdate SDK installed, then paste the output back.
+Skip parts 1 and 2. Part 1 is finished and its answers are recorded below. Part 2
+is superseded: it had three bugs, all named in part 3, and part 3 replaces it.
+
+Windows is optional and changes nothing today. If you have five spare minutes on
+that machine, [the Windows section](#windows-optional) has one question no script
+can answer.
+
+Paste the whole output back, errors included. A failure that names a path is
+worth as much as a success.
+
+## Why this exists
+
+Native mode runs the server directly against an SDK the developer installed, with
+no container. Where the SDK lives, and where things sit inside it, differs per
+platform. Linux is the only layout verified by running it. The macOS and Windows
+values in `internal/sdk` were written from Panic's documentation and platform
+convention.
+
+This is the checklist for checking one against a real install. Everything is
+read-only except part 3, which builds a copy of the test fixture into `/tmp` and
+launches it for ten seconds.
 
 ## Do not run the server binary yet
 
@@ -17,6 +33,27 @@ The point of this document is to collect facts about the machine, not to test
 the implementation. The values it corrects are the ones that decide whether the
 implementation can work at all, so they come first. Once they are right, a
 cross-compiled binary is easy to hand over and there is something worth running.
+
+## Status
+
+macOS part 1 is done. Four of the five values are confirmed against a real
+SDK 3.1.1 install, and every one matched what `internal/sdk` already guessed:
+
+| Value | Confirmed as |
+|---|---|
+| SDK install location | `~/Developer/PlaydateSDK` |
+| `~/.Playdate/config` | `SDKRoot\t<path>\n`, tab-separated |
+| Simulator bundle | `bin/Playdate Simulator.app` |
+| Simulator executable | `.../Contents/MacOS/Playdate Simulator` |
+| `pdc` | `bin/pdc`, no extension |
+| **Sandboxed data directory** | **Still unknown.** See part 3. |
+
+Two incidental findings worth keeping: that install has no plain
+`bin/PlaydateSimulator` beside the bundle, and `Contents/MacOS` also contains
+`crashpad_handler`, which sorts alphabetically *before* the Simulator.
+
+Part 2 answered nothing because the script had three bugs. Part 3 is the
+corrected version, and the data directory is all it is still after.
 
 ## What is uncertain, and what it costs to get wrong
 
@@ -32,9 +69,11 @@ search, then a warning naming `OPEN_CRANK_DATA_ROOT`), so a wrong guess should
 degrade rather than break. Confirming the real value removes the need for any of
 that to fire.
 
-## macOS, part 1: the layout
+## macOS, part 1: the layout (DONE, do not re-run)
 
-Read-only. Paste into Terminal.
+Kept for the raw output, which is the evidence behind the confirmed values in
+the Status table. The script and its response are below; nothing here needs
+running again.
 
 ```bash
 {
@@ -139,7 +178,11 @@ Section 5 is worth more once a game has run at least once, since the Simulator
 may not create the directory until then. If you have any `.pdx`, open it in the
 Simulator, quit, and run section 5 again.
 
-## macOS, part 2: does Lua print() reach stdout
+## macOS, part 2: superseded by part 3, do not re-run
+
+This produced no usable answer. Three bugs, all mine, all listed at the top of
+part 3. Kept because the failure output is what identified them: the
+`crashpad_handler` line in particular is a trap worth being able to point at.
 
 `docs/GOTCHAS.md` records that on Linux the Simulator's Lua console output never
 reaches the process's real stdout. That finding is the entire reason
@@ -224,6 +267,76 @@ find "$HOME/Library/Application Support" "$SDK/Disk" -maxdepth 5 -name "game_log
 
 Those two paths are the answer to the riskiest value in the table above.
 
+## macOS, part 3: the data directory, corrected
+
+**This is the one to run.** Everything else on this page is already answered.
+
+Part 1 confirmed four values and part 2 answered nothing, because the part 2
+script had three bugs. All three are worth naming, since two of them are traps
+anyone writing a probe on macOS will hit.
+
+1. **`pdc` cannot build the fixture on its own.** `lua/test-fixture/Source/main.lua`
+   imports `mcp_harness`, and that file is only there after `setup` copies it in.
+   The fixture is not a standalone game. Copy the harness in first.
+2. **`Contents/MacOS` holds more than one executable.** It also has
+   `crashpad_handler`, which sorts first, so `find ... | head -1` picked the crash
+   reporter and ran that instead of the Simulator. Name the file instead of
+   listing the directory.
+3. **zsh aborts on an unmatched glob.** `for d in .../*laydate*` does not fall
+   through to the literal string the way bash does; zsh reports
+   `no matches found` and stops the whole block, which is why section 5 never
+   printed the in-SDK part. Run the block under `bash`, or avoid the glob.
+
+Corrected, and it answers the one value still open. Run from the repo root:
+
+```bash
+bash <<'PROBE'
+SDK=$(awk '$1=="SDKRoot"{print $2; exit}' "$HOME/.Playdate/config" 2>/dev/null)
+[ -z "$SDK" ] && SDK="$HOME/Developer/PlaydateSDK"
+
+# Name the Simulator rather than listing the directory: crashpad_handler lives
+# next to it and sorts first.
+SIM="$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator"
+echo "simulator: $SIM"
+[ -x "$SIM" ] || echo "NOT EXECUTABLE: $SIM"
+
+# The fixture imports mcp_harness, so the harness has to be beside it before pdc
+# will build it. Built in a copy so the repo is left alone.
+rm -rf /tmp/probe-game && mkdir -p /tmp/probe-game
+cp -R lua/test-fixture/Source /tmp/probe-game/
+cp lua/mcp_harness.lua /tmp/probe-game/Source/
+"$SDK/bin/pdc" /tmp/probe-game/Source /tmp/probe-game/probe.pdx || echo "pdc failed"
+
+"$SIM" /tmp/probe-game/probe.pdx > /tmp/sim-stdout.txt 2>&1 &
+SIMPID=$!
+sleep 10
+kill -9 "$SIMPID" 2>/dev/null
+
+echo "=== did Lua print() reach real stdout? (0 means no) ==="
+grep -c "fixture print line" /tmp/sim-stdout.txt
+echo "=== what the process actually wrote ==="
+head -40 /tmp/sim-stdout.txt
+
+echo
+echo "=== WHERE DID THE DATA GO? this is the value still missing ==="
+for base in "$HOME/Library/Application Support" "$HOME/Library/Containers" "$SDK/Disk"; do
+  if [ -d "$base" ]; then
+    echo "--- under $base ---"
+    find "$base" -maxdepth 5 -name "game_logs.json" 2>/dev/null
+    find "$base" -maxdepth 4 -iname "*contractcheck*" 2>/dev/null
+    find "$base" -maxdepth 2 -iname "*laydate*" 2>/dev/null
+  else
+    echo "absent  $base"
+  fi
+done
+PROBE
+```
+
+The `game_logs.json` line is the answer. The harness writes it inside whatever
+directory the Simulator sandboxes for that game, so wherever it turns up is the
+real data directory, and its parent is what `OPEN_CRANK_DATA_ROOT` would be set
+to.
+
 ## Windows, optional
 
 Windows-native is deliberately unsupported: WSL2 already serves Windows users
@@ -257,14 +370,50 @@ rather than temporarily.
 
 ## Sending results back
 
-Paste the contents of `~/playdate-macos-report.txt` plus the output of part 2.
-Raw output is better than a summary: the exact bytes of the config file and the
-exact bundle path are the parts that matter, and both are easy to normalise by
-accident when retyping.
+Paste raw output rather than a summary. The exact bytes of a config file and the
+exact path of an executable are the parts that matter, and both are easy to
+normalise by accident when retyping. An error message that names a path is just
+as useful as a success.
+
+## Where each part stands
+
+| Part | State | Answers |
+|---|---|---|
+| macOS 1 | done | Install location, config format, bundle name, inner executable, `pdc`. All five matched what the code guessed. |
+| macOS 2 | superseded | Nothing. Three bugs, replaced by part 3. |
+| **macOS 3** | **outstanding** | The sandboxed data directory, and the Lua-stdout question part 2 failed to answer. |
+| Windows | optional | Whether promoting Windows-native later would be cheap. Nothing is blocked on it. |
+
+## What is already verified, and what is not
+
+The Go side of this is not a draft. On a Linux machine:
+
+| Check | State |
+|---|---|
+| `go build ./...`, `go vet` | Clean |
+| `go test ./internal/sdk/` | Passing |
+| macOS and Windows path logic | Exercised, on Linux, against a synthetic filesystem |
+| `make go-build-cross` | Builds for linux, darwin and windows |
+| Real macOS and Windows path *values* | **Unverified. That is what this document is for.** |
+
+The layouts are ordinary values selected at runtime rather than build-tagged
+files, specifically so all three can be tested from one machine. Two traps found
+while doing that, both worth knowing before editing `internal/sdk`:
+
+- Go applies an implicit build constraint to any file whose name ends in
+  `_darwin.go`, `_windows.go` or `_linux.go`, with or without a `//go:build`
+  line. That is why those files are named `macos_layout.go`,
+  `windows_layout.go` and `linux_layout.go`. Renaming them back would silently
+  stop the cross-platform tests from compiling the code they test.
+- The bounded search in `datadir.go` has a depth limit and a node budget. Both
+  are what make a wrong candidate list degrade into "slower" rather than "hangs
+  while walking a home directory", so both have tests pinning them. Mutation
+  testing is what pointed out that changing either limit originally broke no
+  test at all.
 
 ## After this
 
-The values get corrected in `internal/sdk`, the `fstest` suite gets cases built
+The values get corrected in `internal/sdk`, the `fstest` suite gains cases built
 from the real layout, and `docs/GOTCHAS.md` gets whatever part 2 found. Then a
 `darwin/arm64` binary and an MCP client config, so the Simulator on that machine
 can be driven by an agent for real. That is Checkpoint 11 in `docs/ROADMAP.md`.
