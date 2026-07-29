@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	opencrank "github.com/NickSpaghetti/open-crank-mcp"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/build"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/setup"
@@ -47,7 +48,7 @@ func TestSetupContract(t *testing.T) {
 		writeFile(t, filepath.Join(dir, "Source", "pdxinfo"), luaSetupFixturePdxinfo)
 		writeFile(t, filepath.Join(dir, "Source", "main.lua"), luaSetupFixtureMain)
 
-		if _, err := setup.Setup(dir, setup.Lua); err != nil {
+		if _, err := setup.Setup(dir, setup.Lua, opencrank.HarnessFS); err != nil {
 			t.Fatalf("setup.Setup: %v", err)
 		}
 
@@ -78,7 +79,7 @@ func TestSetupContract(t *testing.T) {
 		writeFile(t, filepath.Join(dir, "Source", "pdxinfo"), cSetupFixturePdxinfo)
 		writeFile(t, filepath.Join(dir, "src", "main.c"), cSetupFixtureMain)
 
-		result, err := setup.Setup(dir, setup.C)
+		result, err := setup.Setup(dir, setup.C, opencrank.HarnessFS)
 		if err != nil {
 			t.Fatalf("setup.Setup: %v", err)
 		}
@@ -122,7 +123,7 @@ func TestSetupContract(t *testing.T) {
 		writeFile(t, filepath.Join(dir, "main.c"), cFlatFixtureMain)
 		writeFile(t, filepath.Join(dir, "game.c"), cFlatFixtureGame)
 
-		result, err := setup.Setup(dir, setup.C)
+		result, err := setup.Setup(dir, setup.C, opencrank.HarnessFS)
 		if err != nil {
 			t.Fatalf("setup.Setup: %v", err)
 		}

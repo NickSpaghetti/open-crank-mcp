@@ -2,7 +2,9 @@ package setup
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -12,12 +14,11 @@ import (
 // README's "Hybrid C+Lua games" note) - so this is deliberately the same
 // steps regardless of which of those two languages was detected, and
 // never touches CMakeLists.txt or any .c file.
-func setupLua(sourceDir, repoRoot string, language Language) (SetupResult, error) {
+func setupLua(sourceDir string, harnessFS fs.FS, language Language) (SetupResult, error) {
 	result := SetupResult{Language: language}
 
-	harnessSrc := filepath.Join(repoRoot, "lua", "mcp_harness.lua")
 	harnessDst := filepath.Join(sourceDir, "Source", "mcp_harness.lua")
-	if err := copyFile(harnessSrc, harnessDst); err != nil {
+	if err := copyHarnessFile(harnessFS, path.Join("lua", "mcp_harness.lua"), harnessDst); err != nil {
 		return result, fmt.Errorf("copying mcp_harness.lua: %w", err)
 	}
 	result.FilesCopied = append(result.FilesCopied, harnessDst)

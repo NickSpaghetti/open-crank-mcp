@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
-	"syscall"
 )
 
 // Simulator is a running PlaydateSimulator child process.
@@ -50,7 +49,7 @@ func Launch(binPath, pdxPath string, extraArgs ...string) (*Simulator, error) {
 		args = extraArgs
 	}
 	cmd := exec.Command(binPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setProcAttr(cmd)
 
 	output := &syncBuffer{}
 	cmd.Stdout = output
@@ -63,17 +62,16 @@ func Launch(binPath, pdxPath string, extraArgs ...string) (*Simulator, error) {
 	return &Simulator{cmd: cmd, output: output}, nil
 }
 
-// Stop sends SIGKILL to the whole process group. PlaydateSimulator doesn't
-// exit on SIGTERM. Killing the whole group (not just cmd.Process) matters
-// because some shells fork rather than exec the final command in a `-c`
-// script, leaving an orphaned grandchild that would otherwise keep
-// stdout/stderr's pipe open and Wait() blocked until it exits on its own.
-
+// Stop kills the Simulator. PlaydateSimulator ignores SIGTERM, so this is
+// always a hard kill. Exactly what gets killed is platform-specific and lives
+// in proc_unix.go / proc_windows.go: on Unix it is the whole process group,
+// because the container launches through a shell that may fork rather than exec
+// and leave a grandchild holding the output pipe open.
 func (s *Simulator) Stop() error {
 	if s.cmd.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL); err != nil {
+	if err := killProcess(s.cmd); err != nil {
 		return fmt.Errorf("killing simulator: %w", err)
 	}
 	return nil
@@ -93,10 +91,7 @@ func (s *Simulator) Exited() bool {
 	if s.cmd.Process == nil {
 		return true
 	}
-	// Signal 0 checks for the process's existence without touching it. A
-	// released-but-unreaped child answers here too, which is what we want:
-	// either way it is gone.
-	return s.cmd.Process.Signal(syscall.Signal(0)) != nil
+	return hasExited(s.cmd)
 }
 
 // Output returns the combined stdout+stderr captured so far. Safe to call

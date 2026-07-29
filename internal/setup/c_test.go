@@ -249,7 +249,7 @@ void checkButtons(void) {
 }
 `)
 
-	result, err := Setup(dir, C)
+	result, err := Setup(dir, C, testHarnessFS())
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -679,7 +679,7 @@ func TestSetupAndTeardownCRoundTrip(t *testing.T) {
 		"add_library(${NAME} SHARED src/main.c)\n")
 	mustWrite(t, filepath.Join(dir, "src", "main.c"), fixtureStyleMain)
 
-	result, err := Setup(dir, C)
+	result, err := Setup(dir, C, testHarnessFS())
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -750,7 +750,7 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
 }
 `)
 
-	if _, err := Setup(dir, C); err != nil {
+	if _, err := Setup(dir, C, testHarnessFS()); err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
 	if !strings.Contains(mustRead(t, filepath.Join(dir, "src", "main.c")), "mcp_get_button_state(pd,") {

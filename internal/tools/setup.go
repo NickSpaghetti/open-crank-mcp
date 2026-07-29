@@ -41,7 +41,7 @@ func (s *Server) setupHarness(_ context.Context, _ *mcp.CallToolRequest, in Setu
 		}, SetupOutput{}, nil
 	}
 
-	result, err := crankSetup.Setup(in.SourceDir, language)
+	result, err := crankSetup.Setup(in.SourceDir, language, s.harnessFS)
 	out := SetupOutput{
 		Language:     string(result.Language),
 		FilesCopied:  result.FilesCopied,

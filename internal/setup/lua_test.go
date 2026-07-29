@@ -51,7 +51,7 @@ func TestSetupAndTeardownLuaRoundTrip(t *testing.T) {
 	mainPath := filepath.Join(dir, "Source", "main.lua")
 	mustWrite(t, mainPath, "function playdate.update()\nend\n")
 
-	result, err := Setup(dir, Lua)
+	result, err := Setup(dir, Lua, testHarnessFS())
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestSetupHybridOnlyTouchesLuaFiles(t *testing.T) {
 	cmakeContent := "add_library(NAME SHARED src/main.c)\n"
 	mustWrite(t, cmakePath, cmakeContent)
 
-	result, err := Setup(dir, Hybrid)
+	result, err := Setup(dir, Hybrid, testHarnessFS())
 	if err != nil {
 		t.Fatalf("Setup: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestSetupLuaMissingMainLuaIsAnError(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(dir, "Source"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if _, err := Setup(dir, Lua); err == nil {
+	if _, err := Setup(dir, Lua, testHarnessFS()); err == nil {
 		t.Fatal("Setup: expected an error when Source/main.lua doesn't exist, got nil")
 	}
 }

@@ -30,6 +30,18 @@ jobs:
           go-version-file: go.mod
       - run: go test ./...
 
+  # Builds and vets for linux, darwin and windows. Catches a platform-specific
+  # construct used outside a build-tag file, which is otherwise invisible until
+  # someone with that OS tries it. Cheap, and no Docker.
+  go-build-cross:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make go-build-cross
+
   test-c-harness:
     runs-on: ubuntu-latest
     steps:

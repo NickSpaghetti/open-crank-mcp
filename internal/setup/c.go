@@ -4,18 +4,18 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
 
-func setupC(sourceDir, repoRoot string) (SetupResult, error) {
+func setupC(sourceDir string, harnessFS fs.FS) (SetupResult, error) {
 	result := SetupResult{Language: C}
 
 	for _, name := range []string{"mcp_harness.h", "mcp_harness.c"} {
-		src := filepath.Join(repoRoot, "c-harness", name)
 		dst := filepath.Join(sourceDir, "src", name)
-		if err := copyFile(src, dst); err != nil {
+		if err := copyHarnessFile(harnessFS, path.Join("c-harness", name), dst); err != nil {
 			return result, fmt.Errorf("copying %s: %w", name, err)
 		}
 		result.FilesCopied = append(result.FilesCopied, dst)

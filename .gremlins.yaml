@@ -36,4 +36,27 @@ unleash:
     # Startup glue: reads an env var and wires the MCP server together.
     # internal/tools.RegisterAll (called from here) has its own test
     # confirming every tool's schema is valid.
-    - "main.go"
+    #
+    # Every main.go below is listed by full path on purpose. This entry used to
+    # read just "main.go", which gremlins matches by basename, so it was also
+    # silently excluding cmd/shared-load/main.go and cmd/smoke-check/main.go.
+    # The score it produced was therefore better than the config actually asked
+    # for. Full paths mean each exclusion has to be argued for on its own.
+    - "cmd/open-crank-mcp/main.go"
+    # Docker orchestration: recreates the compose service, waits for PulseAudio,
+    # then drives the MCP server over stdio. Nothing here is reachable without a
+    # real daemon, and every branch is about a container's state rather than
+    # logic of its own. Verified for real via `make shared-load` and
+    # `make shared-check`.
+    - "cmd/shared-load/main.go"
+    # The platform halves of smoke-check, split out of its main.go, which was
+    # already excluded above for exactly this reason: Xvfb, ldd and the real
+    # Simulator binary. The exclusion follows the code.
+    - "cmd/smoke-check/display_linux.go"
+    - "cmd/smoke-check/display_other.go"
+    - "cmd/smoke-check/libs_linux.go"
+    - "cmd/smoke-check/libs_other.go"
+    # Never compiled on the platform the tests run on, so no test on any Linux
+    # runner can cover it. Its Unix counterpart is covered by
+    # internal/simulator's own tests and is deliberately not excluded.
+    - "internal/simulator/proc_windows.go"

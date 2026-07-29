@@ -1,9 +1,11 @@
 package setup
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 )
 
 func TestDetectLanguageLua(t *testing.T) {
@@ -90,4 +92,19 @@ func mustRead(t *testing.T, path string) string {
 		t.Fatalf("ReadFile: %v", err)
 	}
 	return string(b)
+}
+
+// testHarnessFS stands in for opencrank.HarnessFS.
+//
+// A MapFS rather than the real embedded sources, so these tests exercise the
+// same code path without depending on the harness content. Nothing here asserts
+// what is inside a copied harness, only that the right path was written and that
+// the *game's* own files were patched correctly, which is the part with logic in
+// it. The keys must match the paths internal/setup asks for.
+func testHarnessFS() fs.FS {
+	return fstest.MapFS{
+		"lua/mcp_harness.lua":     {Data: []byte("-- test harness stand-in\n")},
+		"c-harness/mcp_harness.h": {Data: []byte("/* test harness stand-in */\n")},
+		"c-harness/mcp_harness.c": {Data: []byte("/* test harness stand-in */\n")},
+	}
 }
