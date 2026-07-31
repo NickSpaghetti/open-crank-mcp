@@ -768,3 +768,52 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
 		t.Fatal("Teardown removed mcp_harness.c even though mcp_get_button_state() still calls into it")
 	}
 }
+
+// setUpdateCallback naming a function that is defined in no .c file at all -
+// e.g. it lives in a header as a static inline, or the project is mid-refactor.
+// The callback's own definition is what patchUpdateCallback needs in order to
+// insert a first statement into it, so with no definition anywhere this has to
+// report a manual step rather than guess or fail.
+//
+// Covered because findFunctionInSourceDir, which this branch depends on, now
+// walks via the shared walkCSources helper - so the "walked everything and found
+// nothing" answer is worth asserting rather than assuming.
+func TestPatchUpdateCallbackReportsManualStepWhenCallbackDefinedNowhere(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "src", "main.c")
+	mustWrite(t, mainPath, `#include "pd_api.h"
+
+int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {
+    if (event == kEventInit) {
+        pd->system->setUpdateCallback(update_from_a_header, NULL);
+    }
+    return 0;
+}
+`)
+	// A second .c file, so the walk has something to read and reject rather
+	// than finding an empty directory.
+	mustWrite(t, filepath.Join(dir, "src", "other.c"), `#include "pd_api.h"
+static void unrelated(void) { }
+`)
+
+	changed, path, manualStep, err := patchUpdateCallback(dir, mainPath)
+	if err != nil {
+		t.Fatalf("patchUpdateCallback: %v", err)
+	}
+	if changed {
+		t.Fatal("patchUpdateCallback() changed = true, want false - there is nothing it could safely patch")
+	}
+	if path != "" {
+		t.Fatalf("patchUpdateCallback() path = %q, want empty", path)
+	}
+	if !strings.Contains(manualStep, "update_from_a_header") {
+		t.Fatalf("patchUpdateCallback() manualStep = %q, want it to name the callback it could not find", manualStep)
+	}
+	// Specifically the "no definition anywhere" message, not the
+	// "found it but no PlaydateAPI pointer is visible" one. Both name the
+	// callback, so asserting on the name alone passes either way - which is
+	// exactly what mutation testing caught here.
+	if !strings.Contains(manualStep, "own definition") {
+		t.Fatalf("patchUpdateCallback() manualStep = %q, want the could-not-find-the-definition message", manualStep)
+	}
+}

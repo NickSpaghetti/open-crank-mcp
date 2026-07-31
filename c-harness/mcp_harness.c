@@ -48,11 +48,13 @@ void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int dura
     ov->button_override_expires_at_ms[idx] = now_ms + duration_ms;
 }
 
-void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta, int docked, int duration_ms, long now_ms)
+void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
+                              int docked_set, int docked, int duration_ms, long now_ms)
 {
     ov->crank_override_active = 1;
     ov->crank_override_angle = angle;
     ov->crank_override_delta = delta;
+    ov->crank_override_docked_active = docked_set;
     ov->crank_override_docked = docked;
     ov->crank_override_expires_at_ms = now_ms + duration_ms;
 }
@@ -66,6 +68,7 @@ void mcp_override_expire(McpOverrideState *ov, long now_ms)
     }
     if (ov->crank_override_active && now_ms >= ov->crank_override_expires_at_ms) {
         ov->crank_override_active = 0;
+        ov->crank_override_docked_active = 0;
     }
 }
 
@@ -134,7 +137,10 @@ float mcp_override_get_crank_change(const McpOverrideState *ov, float real_chang
 
 int mcp_override_get_crank_docked(const McpOverrideState *ov, int real_docked)
 {
-    return ov->crank_override_active ? ov->crank_override_docked : real_docked;
+    /* Both flags: an active crank override that was not asked to touch the dock
+       must pass the real reading through. */
+    return (ov->crank_override_active && ov->crank_override_docked_active)
+        ? ov->crank_override_docked : real_docked;
 }
 
 int mcp_json_escape_string(const char *in, char *out, size_t out_len)
@@ -210,12 +216,12 @@ static int mcp_json_extract_number(const char *value_start, double *out)
     return 0;
 }
 
-static int mcp_json_extract_bool(const char *value_start, int *out)
-{
-    if (strncmp(value_start, "true", 4) == 0) { *out = 1; return 0; }
-    if (strncmp(value_start, "false", 5) == 0) { *out = 0; return 0; }
-    return -1;
-}
+/* There is deliberately no mcp_json_extract_bool. There was one, for
+   crank_docked, and it went with that field: the command protocol now has no
+   boolean values at all, because the one place that wanted a bool needed three
+   states (see crank_dock). Under -Wall -Wextra -Werror an unused static function
+   is a build failure, so leaving it "for later" was not an option, and re-adding
+   it is a few lines if a genuinely two-state field ever turns up. */
 
 static McpCommandType mcp_command_type_from_string(const char *s)
 {
@@ -275,9 +281,21 @@ int mcp_parse_command(const char *json, size_t len, McpCommand *out)
     v = mcp_json_find_value(json, "crank_delta");
     if (v && mcp_json_extract_number(v, &num) == 0) out->crank_delta = (float)num;
 
-    int b;
-    v = mcp_json_find_value(json, "crank_docked");
-    if (v && mcp_json_extract_bool(v, &b) == 0) out->crank_docked = b;
+    /* crank_dock is a three-valued string, not a bool: "docked"/"undocked" ask
+       for an override, anything else (including absent or "unchanged") leaves the
+       game's real dock reading alone. memset above already set both ints to 0,
+       which is the leave-alone case, so an unrecognised value needs no branch. */
+    char dock_str[16] = {0};
+    v = mcp_json_find_value(json, "crank_dock");
+    if (v && mcp_json_extract_string(v, dock_str, sizeof(dock_str)) >= 0) {
+        if (strcmp(dock_str, "docked") == 0) {
+            out->crank_docked_set = 1;
+            out->crank_docked = 1;
+        } else if (strcmp(dock_str, "undocked") == 0) {
+            out->crank_docked_set = 1;
+            out->crank_docked = 0;
+        }
+    }
 
     return 1;
 }
@@ -293,13 +311,17 @@ int mcp_format_response(const McpResponse *r, char *buf, size_t buflen)
     const char *state_json = (r->state[0] == '\0') ? "null" : r->state;
     const char *entities_json = (r->entities[0] == '\0') ? "null" : r->entities;
 
+    /* harness_version comes from the #define rather than from McpResponse: it is
+       the same for every response this build ever writes, so putting it in the
+       struct would grow the fat struct to carry a constant. */
     int n = snprintf(buf, buflen,
         "{\"id\":\"%s\",\"status\":\"%s\",\"error\":\"%s\",\"format\":\"%s\","
         "\"path\":\"%s\",\"width\":%d,\"height\":%d,\"row_bytes\":%d,\"state\":%s,"
-        "\"entities\":%s,\"entities_complete\":%s}",
+        "\"entities\":%s,\"entities_complete\":%s,\"harness_version\":\"%s\"}",
         id_esc, r->ok ? "ok" : "error", error_esc, format_str,
         path_esc, r->width, r->height, r->row_bytes, state_json,
-        entities_json, r->entities_complete ? "true" : "false");
+        entities_json, r->entities_complete ? "true" : "false",
+        MCP_HARNESS_VERSION);
     if (n < 0 || (size_t)n >= buflen) return -1;
     return n;
 }
@@ -388,27 +410,38 @@ void mcp_harness_update(PlaydateAPI *pd)
     mcp_override_update_edges(&g_override, real_current);
 
     FileStat st;
-    if (pd->file->stat("mcp/command.json", &st) != 0) {
+    if (pd->file->stat(MCP_COMMAND_PATH, &st) != 0) {
         return;
     }
 
     /* kFileRead alone only searches the read-only pdx bundle; our files
        live in the data folder (same place kFileWrite/kFileAppend always
        write to), which needs kFileReadData. */
-    SDFile *f = pd->file->open("mcp/command.json", kFileReadData);
+    SDFile *f = pd->file->open(MCP_COMMAND_PATH, kFileReadData);
     if (!f) return;
 
     char buf[2048];
     int n = pd->file->read(f, buf, sizeof(buf) - 1);
     pd->file->close(f);
     if (n < 0) {
-        pd->file->unlink("mcp/command.json", 0);
+        pd->file->unlink(MCP_COMMAND_PATH, 0);
         return;
     }
     buf[n] = '\0';
 
+    /* static, not automatic. McpResponse is ~12.9KB (state[4096] +
+       entities[8192] + the fixed fields) and out_buf below is another 13KB, so
+       as locals they put ~25.6KB of automatic storage in a function the game
+       calls every frame. Nothing is given up by making them static: the harness
+       is already single-instance and single-threaded (see g_override above),
+       mcp_harness_update is never reentrant, and neither buffer outlives the
+       call. This is where the fat-struct trade actually costs something, and
+       moving the storage is what keeps the payoff without the cost. No
+       measurable effect in the Simulator, which is the only supported target -
+       it matters for anyone who builds a harnessed game for the device, where
+       the stack is not this generous. */
     McpCommand cmd;
-    McpResponse resp;
+    static McpResponse resp;
     memset(&resp, 0, sizeof(resp));
 
     if (!mcp_parse_command(buf, (size_t)n, &cmd)) {
@@ -429,7 +462,8 @@ void mcp_harness_update(PlaydateAPI *pd)
                 resp.ok = 1;
                 break;
             case MCP_CMD_CRANK:
-                mcp_override_apply_crank(&g_override, cmd.crank_angle, cmd.crank_delta, cmd.crank_docked, cmd.duration_ms, now_ms);
+                mcp_override_apply_crank(&g_override, cmd.crank_angle, cmd.crank_delta,
+                                         cmd.crank_docked_set, cmd.crank_docked, cmd.duration_ms, now_ms);
                 resp.ok = 1;
                 break;
             case MCP_CMD_STATE:
@@ -476,6 +510,17 @@ void mcp_harness_update(PlaydateAPI *pd)
                 }
                 break;
             }
+            /* Unreachable in practice, and kept anyway: mcp_parse_command
+               returns 0 for a type it does not recognise, so an unknown type
+               never gets here - it is answered above with "failed to parse
+               command" instead. Verified on the wire against a real Simulator,
+               which is also the divergence to know about if you are comparing
+               the two harnesses: Lua reports "unknown command type" for the same
+               input, because its dispatch is a chain of string comparisons with
+               a real else branch. Left in place because it is the correct answer
+               for a McpCommandType that exists but has no arm here, which is
+               what a future command type looks like on the day it is added to
+               the enum and not to this switch. */
             default:
                 resp.ok = 0;
                 strncpy(resp.error, "unknown command type", sizeof(resp.error) - 1);
@@ -483,15 +528,38 @@ void mcp_harness_update(PlaydateAPI *pd)
         }
     }
 
-    pd->file->unlink("mcp/command.json", 0);
+    pd->file->unlink(MCP_COMMAND_PATH, 0);
 
-    char out_buf[13312]; /* room for the fixed fields plus state[4096] and entities[8192] */
+    /* static for the same reason as resp above. */
+    static char out_buf[13312]; /* room for the fixed fields plus state[4096] and entities[8192] */
     int len = mcp_format_response(&resp, out_buf, sizeof(out_buf));
     if (len > 0) {
-        SDFile *rf = pd->file->open("mcp/response.json", kFileWrite);
+        /* Published by rename, so response.json only ever exists complete. Written
+           in place, a reader can catch it just after the truncating open (zero
+           length) or part-written, with no way to tell short from finished.
+
+           Not a bug anyone hit - 240 calls against a 512KB response on
+           Linux/overlayfs found no partial reads - but it costs one rename, the Go
+           reader's handling of a short read used to be actively destructive, and
+           native mode will run on filesystems nobody has measured.
+
+           The useful side effect: the response becomes a commit point, so the
+           screenshot written earlier in this same dispatch is guaranteed finished
+           before response.json exists, by construction rather than by the order of
+           statements above. */
+        SDFile *rf = pd->file->open(MCP_RESPONSE_TMP_PATH, kFileWrite);
         if (rf) {
             pd->file->write(rf, out_buf, (unsigned int)len);
             pd->file->close(rf);
+            if (pd->file->rename(MCP_RESPONSE_TMP_PATH, MCP_RESPONSE_PATH) != 0) {
+                /* A response that might be read short beats no response: the Go
+                   side waits out a short read rather than failing on it. */
+                SDFile *direct = pd->file->open(MCP_RESPONSE_PATH, kFileWrite);
+                if (direct) {
+                    pd->file->write(direct, out_buf, (unsigned int)len);
+                    pd->file->close(direct);
+                }
+            }
         }
     }
 }

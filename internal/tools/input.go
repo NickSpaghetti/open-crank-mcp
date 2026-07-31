@@ -2,7 +2,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
+	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -13,11 +16,22 @@ type PressButtonInput struct {
 
 type PressButtonOutput struct{}
 
+// pressButton validates the button name here rather than trusting the harness to
+// complain, because neither harness does: an unrecognised name maps to no button
+// and is still answered with status "ok", so press_button("A") reported success
+// and did nothing. Confirmed against a real game for "x", "", "A" and "start".
+// This is the only one of the three layers that can hand a useful message back to
+// whoever asked.
 func (s *Server) pressButton(_ context.Context, _ *mcp.CallToolRequest, in PressButtonInput) (*mcp.CallToolResult, PressButtonOutput, error) {
-	_, err := s.roundTrip(map[string]any{
-		"type":        "press",
-		"button":      in.Button,
-		"duration_ms": in.DurationMs,
+	if !harness.ValidButton(in.Button) {
+		return errorResult(fmt.Sprintf("unknown button %q, want one of %s",
+			in.Button, strings.Join(harness.ButtonNames, ", "))), PressButtonOutput{}, nil
+	}
+
+	_, err := s.roundTrip(harness.Command{
+		Type:       harness.CmdPress,
+		Button:     in.Button,
+		DurationMs: in.DurationMs,
 	})
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
@@ -26,22 +40,53 @@ func (s *Server) pressButton(_ context.Context, _ *mcp.CallToolRequest, in Press
 	return nil, PressButtonOutput{}, nil
 }
 
+// SetCrankInput keeps omitempty where harness.Command deliberately dropped it,
+// because these are two different contracts and the tag does two different jobs.
+//
+// On harness.Command, omitempty decided what reached the wire, and dropping a
+// zero there made "explicitly 0" indistinguishable from "unset" for two harnesses
+// that had to guess. Here it only decides whether jsonschema-go marks the
+// property `required` in the tool schema, and optional is right: an agent asking
+// to turn the crank to 90 degrees should not also have to name a delta, a dock
+// state and a duration.
+//
+// CrankDock is a string, not a bool, and not a *bool. As a bool, omitting it and
+// passing false were the same request, so there was no way to move the angle and
+// leave the dock alone. As a *bool it would infer a `["null","boolean"]` union
+// into the tool schema - checked, not assumed - and a nullable union in a tool
+// schema is the shape that already broke a real client here once (see
+// readSaveDataOutputSchema). A named value says what it means in one type.
 type SetCrankInput struct {
-	CrankAngle  float64 `json:"crank_angle,omitempty"`
-	CrankDelta  float64 `json:"crank_delta,omitempty"`
-	CrankDocked bool    `json:"crank_docked,omitempty"`
-	DurationMs  int     `json:"duration_ms,omitempty"`
+	CrankAngle float64 `json:"crank_angle,omitempty"`
+	CrankDelta float64 `json:"crank_delta,omitempty"`
+	CrankDock  string  `json:"crank_dock,omitempty" jsonschema:"one of unchanged, docked, undocked; omit to leave the dock state as the game sees it"`
+	DurationMs int     `json:"duration_ms,omitempty"`
 }
 
 type SetCrankOutput struct{}
 
+// setCrank validates the dock mode here for the same reason pressButton validates
+// its button name: this is the only layer that can tell the caller what it should
+// have said. An unrecognised value would otherwise reach a harness, resolve to
+// "unchanged", and be answered with success.
 func (s *Server) setCrank(_ context.Context, _ *mcp.CallToolRequest, in SetCrankInput) (*mcp.CallToolResult, SetCrankOutput, error) {
-	_, err := s.roundTrip(map[string]any{
-		"type":         "crank",
-		"crank_angle":  in.CrankAngle,
-		"crank_delta":  in.CrankDelta,
-		"crank_docked": in.CrankDocked,
-		"duration_ms":  in.DurationMs,
+	if !harness.ValidDockMode(in.CrankDock) {
+		return errorResult(fmt.Sprintf("unknown crank_dock %q, want one of %s (or omit it to leave the dock alone)",
+			in.CrankDock, strings.Join(harness.DockModes, ", "))), SetCrankOutput{}, nil
+	}
+	// Normalised so the command on disk always names its mode, rather than
+	// carrying an empty string that a reader has to know means "unchanged".
+	dock := in.CrankDock
+	if dock == "" {
+		dock = harness.DockUnchanged
+	}
+
+	_, err := s.roundTrip(harness.Command{
+		Type:       harness.CmdCrank,
+		CrankAngle: in.CrankAngle,
+		CrankDelta: in.CrankDelta,
+		CrankDock:  dock,
+		DurationMs: in.DurationMs,
 	})
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)

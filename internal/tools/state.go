@@ -2,40 +2,32 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 
+	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type GetGameStateInput struct{}
 
 func (s *Server) getGameState(_ context.Context, _ *mcp.CallToolRequest, _ GetGameStateInput) (*mcp.CallToolResult, any, error) {
-	resp, err := s.roundTrip(map[string]any{"type": "state"})
+	resp, err := s.roundTrip(harness.Command{Type: harness.CmdState})
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
 		return result, nil, wrapErr
 	}
-	return nil, resp["state"], nil
+	if len(resp.State) == 0 {
+		return nil, nil, nil
+	}
+	// Passed through as the raw JSON the game produced, so the shape stays the
+	// game's own. json.RawMessage marshals back out verbatim.
+	return nil, json.RawMessage(resp.State), nil
 }
 
 type ListEntitiesInput struct{}
 
-// Entity is one flat struct covering both harnesses' fields. ClassName is
-// "Sprite" (not empty) for a plain, non-subclassed Lua sprite - that's the
-// SDK's own base class name, not a missing-value marker - and always ""
-// for C, which has no class system at all.
-type Entity struct {
-	Tag       int     `json:"tag"`
-	ClassName string  `json:"class_name"`
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
-	Width     float64 `json:"width"`
-	Height    float64 `json:"height"`
-	ZIndex    int     `json:"z_index"`
-	Visible   bool    `json:"visible"`
-}
-
 type ListEntitiesOutput struct {
-	Entities []Entity `json:"entities"`
+	Entities []harness.Entity `json:"entities"`
 	// Complete is true for Lua games (getAllSprites is a real, complete
 	// enumeration) and false for C games (querySpritesInRect only matches
 	// sprites with a collision rect set - decorative/visual sprites are
@@ -44,30 +36,17 @@ type ListEntitiesOutput struct {
 }
 
 func (s *Server) listEntities(_ context.Context, _ *mcp.CallToolRequest, _ ListEntitiesInput) (*mcp.CallToolResult, ListEntitiesOutput, error) {
-	resp, err := s.roundTrip(map[string]any{"type": "entities"})
+	resp, err := s.roundTrip(harness.Command{Type: harness.CmdEntities})
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
 		return result, ListEntitiesOutput{}, wrapErr
 	}
 
-	rawEntities, _ := resp["entities"].([]any)
-	entities := make([]Entity, 0, len(rawEntities))
-	for _, re := range rawEntities {
-		m, ok := re.(map[string]any)
-		if !ok {
-			continue
-		}
-		entities = append(entities, Entity{
-			Tag:       int(asFloat(m["tag"])),
-			ClassName: asString(m["class_name"]),
-			X:         asFloat(m["x"]),
-			Y:         asFloat(m["y"]),
-			Width:     asFloat(m["width"]),
-			Height:    asFloat(m["height"]),
-			ZIndex:    int(asFloat(m["z_index"])),
-			Visible:   asBool(m["visible"]),
-		})
+	// Never nil, so the output is an empty array rather than null: a caller
+	// distinguishing "no sprites" from "field missing" should not have to.
+	entities := resp.Entities
+	if entities == nil {
+		entities = []harness.Entity{}
 	}
-
-	return nil, ListEntitiesOutput{Entities: entities, Complete: asBool(resp["entities_complete"])}, nil
+	return nil, ListEntitiesOutput{Entities: entities, Complete: resp.EntitiesComplete}, nil
 }

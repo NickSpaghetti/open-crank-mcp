@@ -7,15 +7,19 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+
+	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 )
 
 // testHarnessFS stands in for opencrank.HarnessFS. The keys are the paths
 // internal/setup looks up; the contents are irrelevant to what these tests
-// assert, which is the tool's own wiring and reporting.
+// assert, which is the tool's own wiring and reporting - except that the two
+// stampable sources must carry the version placeholder, since CopyHarnessFile
+// refuses a source without one.
 func testHarnessFS() fs.FS {
 	return fstest.MapFS{
-		"lua/mcp_harness.lua":     {Data: []byte("-- test harness stand-in\n")},
-		"c-harness/mcp_harness.h": {Data: []byte("/* test harness stand-in */\n")},
+		"lua/mcp_harness.lua":     {Data: []byte("-- test harness stand-in\nlocal V = \"" + harness.VersionPlaceholder + "\"\n")},
+		"c-harness/mcp_harness.h": {Data: []byte("/* test harness stand-in */\n#define V \"" + harness.VersionPlaceholder + "\"\n")},
 		"c-harness/mcp_harness.c": {Data: []byte("/* test harness stand-in */\n")},
 	}
 }

@@ -31,15 +31,13 @@ func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in L
 		return nil, LaunchSimulatorOutput{}, fmt.Errorf("reading bundle ID: %w", err)
 	}
 
-	s.mu.Lock()
+	// No lock: sdkPath is immutable after NewServer. See Server's field comment.
 	dataDir := filepath.Join(s.sdkPath, "Disk", "Data", bundleID)
-	simBin := filepath.Join(s.sdkPath, "bin", "PlaydateSimulator")
-	s.mu.Unlock()
 
 	// The Data directory is the extra CLI arg the Lua harness's screenshot
 	// path needs (simulator.writeToFile resolves relative to the process's
 	// own cwd otherwise, not the sandboxed Data directory).
-	sim, err := simulator.Launch(simBin, in.PdxPath, dataDir)
+	sim, err := simulator.Launch(s.simulatorBin(), in.PdxPath, dataDir)
 	if err != nil {
 		return nil, LaunchSimulatorOutput{}, fmt.Errorf("launching simulator: %w", err)
 	}

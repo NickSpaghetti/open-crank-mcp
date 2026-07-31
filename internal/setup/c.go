@@ -15,7 +15,7 @@ func setupC(sourceDir string, harnessFS fs.FS) (SetupResult, error) {
 
 	for _, name := range []string{"mcp_harness.h", "mcp_harness.c"} {
 		dst := filepath.Join(sourceDir, "src", name)
-		if err := copyHarnessFile(harnessFS, path.Join("c-harness", name), dst); err != nil {
+		if err := CopyHarnessFile(harnessFS, path.Join("c-harness", name), dst); err != nil {
 			return result, fmt.Errorf("copying %s: %w", name, err)
 		}
 		result.FilesCopied = append(result.FilesCopied, dst)
@@ -96,21 +96,14 @@ var (
 
 func patchInputCalls(sourceDir string) ([]FileChange, error) {
 	var changes []FileChange
-	err := filepath.WalkDir(sourceDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || filepath.Base(p) == "mcp_harness.c" || !strings.HasSuffix(p, ".c") {
-			return err
-		}
-		b, readErr := os.ReadFile(p)
-		if readErr != nil {
-			return nil
-		}
+	err := walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
 		content := string(b)
 		patched := getButtonStateCallRe.ReplaceAllString(content, "mcp_get_button_state($1, ")
 		patched = getCrankAngleCallRe.ReplaceAllString(patched, "mcp_get_crank_angle($1)")
 		patched = getCrankChangeCallRe.ReplaceAllString(patched, "mcp_get_crank_change($1)")
 		patched = isCrankDockedCallRe.ReplaceAllString(patched, "mcp_get_crank_docked($1)")
 		if patched == content {
-			return nil
+			return false, nil
 		}
 		// A file other than the eventHandler one (which already got its
 		// own #include from patchEventHandlerInit) may not have any
@@ -120,10 +113,10 @@ func patchInputCalls(sourceDir string) ([]FileChange, error) {
 		// build), which breaks under a stricter toolchain or C23.
 		patched, _ = insertIncludeIfMissing(patched)
 		if writeErr := os.WriteFile(p, []byte(patched), 0o644); writeErr != nil {
-			return writeErr
+			return false, writeErr
 		}
 		changes = append(changes, FileChange{Path: p, Changed: true})
-		return nil
+		return false, nil
 	})
 	return changes, err
 }
@@ -252,19 +245,12 @@ var eventHandlerRe = regexp.MustCompile(`\beventHandler\s*\(\s*PlaydateAPI\s*\*\
 // both appear in this project's own examples - so it's captured rather
 // than assumed).
 func findEventHandler(sourceDir string) (path, pdVar string, err error) {
-	walkErr := filepath.WalkDir(sourceDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || filepath.Base(p) == "mcp_harness.c" || !strings.HasSuffix(p, ".c") {
-			return err
-		}
-		b, readErr := os.ReadFile(p)
-		if readErr != nil {
-			return nil
-		}
+	walkErr := walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
 		if m := eventHandlerRe.FindSubmatch(b); m != nil {
 			path, pdVar = p, string(m[1])
-			return fs.SkipAll
+			return true, nil
 		}
-		return nil
+		return false, nil
 	})
 	if walkErr != nil {
 		return "", "", walkErr
@@ -411,19 +397,12 @@ func patchUpdateCallback(sourceDir, eventHandlerPath string) (changed bool, path
 }
 
 func findFunctionInSourceDir(sourceDir string, funcRe *regexp.Regexp) (path, content string, err error) {
-	walkErr := filepath.WalkDir(sourceDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || filepath.Base(p) == "mcp_harness.c" || !strings.HasSuffix(p, ".c") {
-			return err
-		}
-		b, readErr := os.ReadFile(p)
-		if readErr != nil {
-			return nil
-		}
+	walkErr := walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
 		if funcRe.Match(b) {
 			path, content = p, string(b)
-			return fs.SkipAll
+			return true, nil
 		}
-		return nil
+		return false, nil
 	})
 	return path, content, walkErr
 }
@@ -482,23 +461,16 @@ func teardownC(sourceDir string) (TeardownResult, error) {
 	// files setup touched. cHasUnmarkedHarnessReference already confirmed
 	// nothing remains outside these blocks, so it's safe to remove the
 	// harness files unconditionally afterward.
-	err = filepath.WalkDir(sourceDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || filepath.Base(p) == "mcp_harness.c" || !strings.HasSuffix(p, ".c") {
-			return err
-		}
-		b, readErr := os.ReadFile(p)
-		if readErr != nil {
-			return nil
-		}
+	err = walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
 		content, changed := stripMarkerBlocks(string(b), cMarkerBegin, cMarkerEnd)
 		if !changed {
-			return nil
+			return false, nil
 		}
 		if writeErr := os.WriteFile(p, []byte(content), 0o644); writeErr != nil {
-			return writeErr
+			return false, writeErr
 		}
 		result.FilesPatched = append(result.FilesPatched, FileChange{Path: p, Changed: true})
-		return nil
+		return false, nil
 	})
 	if err != nil {
 		return result, fmt.Errorf("stripping marker blocks: %w", err)
@@ -523,14 +495,7 @@ func teardownC(sourceDir string) (TeardownResult, error) {
 // tool didn't add and can't safely remove.
 func cHasUnmarkedHarnessReference(sourceDir string) (bool, error) {
 	found := false
-	err := filepath.WalkDir(sourceDir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || filepath.Base(p) == "mcp_harness.c" || !strings.HasSuffix(p, ".c") {
-			return err
-		}
-		b, readErr := os.ReadFile(p)
-		if readErr != nil {
-			return nil
-		}
+	err := walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
 		withoutMarkers, _ := stripMarkerBlocks(string(b), cMarkerBegin, cMarkerEnd)
 		if strings.Contains(withoutMarkers, `#include "mcp_harness.h"`) ||
 			strings.Contains(withoutMarkers, "mcp_harness_init(") ||
@@ -545,9 +510,9 @@ func cHasUnmarkedHarnessReference(sourceDir string) (bool, error) {
 			strings.Contains(withoutMarkers, "mcp_get_crank_change(") ||
 			strings.Contains(withoutMarkers, "mcp_get_crank_docked(") {
 			found = true
-			return fs.SkipAll
+			return true, nil
 		}
-		return nil
+		return false, nil
 	})
 	return found, err
 }
@@ -583,4 +548,38 @@ func teardownCMakeLists(path string) (bool, error) {
 		return false, nil
 	}
 	return true, os.WriteFile(path, []byte(content), 0o644)
+}
+
+// walkCSources visits every .c file under sourceDir, handing each one's path and
+// contents to fn. Returning true stops the walk.
+//
+// Five call sites had the same four-clause skip condition written out
+// (patchInputCalls, findEventHandler, findFunctionInSourceDir, teardownC,
+// cHasUnmarkedHarnessReference), each with its own os.ReadFile and its own
+// decision about ignoring a read error. The condition is easy to get subtly
+// wrong in one copy - mcp_harness.c has to be excluded or the tool patches its
+// own harness - so it lives once, here.
+//
+// An unreadable file is skipped rather than fatal, matching what every one of
+// those call sites already did: a source tree this tool cannot fully read is
+// still one it should do its best with, and the ManualSteps in the result are
+// how anything it could not handle gets reported.
+func walkCSources(sourceDir string, fn func(path string, content []byte) (stop bool, err error)) error {
+	return filepath.WalkDir(sourceDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Base(p) == "mcp_harness.c" || !strings.HasSuffix(p, ".c") {
+			return err
+		}
+		b, readErr := os.ReadFile(p)
+		if readErr != nil {
+			return nil
+		}
+		stop, fnErr := fn(p, b)
+		if fnErr != nil {
+			return fnErr
+		}
+		if stop {
+			return fs.SkipAll
+		}
+		return nil
+	})
 }
