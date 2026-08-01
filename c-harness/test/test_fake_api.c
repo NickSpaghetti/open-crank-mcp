@@ -80,6 +80,18 @@ static int fake_mkdir(const char *path)
     return mkdir(full, 0755);
 }
 
+/* Matches the real API's contract: 0 on success. The harness publishes its
+   response by renaming a temp file into place, so without this the response would
+   only ever arrive through the fallback path and these tests would not be
+   exercising what a real game does. */
+static int fake_rename(const char *from, const char *to)
+{
+    char full_from[600], full_to[600];
+    fake_path(from, full_from, sizeof(full_from));
+    fake_path(to, full_to, sizeof(full_to));
+    return rename(full_from, full_to);
+}
+
 static struct playdate_sys fake_sys = {
     .getButtonState = fake_getButtonState,
     .getCrankChange = fake_getCrankChange,
@@ -96,6 +108,7 @@ static struct playdate_file fake_file = {
     .write = fake_write,
     .unlink = fake_unlink,
     .mkdir = fake_mkdir,
+    .rename = fake_rename,
 };
 
 static struct playdate_graphics fake_gfx = {
@@ -151,6 +164,24 @@ static void test_ping_roundtrip(void)
     assert(strstr(resp, "\"status\":\"ok\"") != NULL);
 }
 
+/* The response is published by renaming a temp file into place, so the temp path
+   must not be left behind. A lingering mcp/response.tmp.json would mean the rename
+   silently failed and the fallback wrote the response directly - which still works,
+   but loses the guarantee that a response on disk is complete. */
+static void test_response_published_by_rename_leaves_no_temp(void)
+{
+    write_file("mcp/command.json", "{\"id\":\"req1t\",\"type\":\"ping\"}");
+    mcp_harness_update(&fake_pd);
+
+    char resp[512];
+    int n = read_file("mcp/response.json", resp, sizeof(resp));
+    assert(n > 0);
+    assert(strstr(resp, "\"id\":\"req1t\"") != NULL);
+
+    char leftover[64];
+    assert(read_file("mcp/response.tmp.json", leftover, sizeof(leftover)) < 0);
+}
+
 static void test_press_overrides_real_button_state(void)
 {
     g_fake_now_ms = 1000;
@@ -178,12 +209,40 @@ static void test_release_forces_not_pressed(void)
 static void test_crank_override(void)
 {
     g_fake_now_ms = 3000;
-    write_file("mcp/command.json", "{\"id\":\"req4\",\"type\":\"crank\",\"crank_angle\":123.0,\"crank_delta\":5.0,\"crank_docked\":true,\"duration_ms\":100000}");
+    write_file("mcp/command.json", "{\"id\":\"req4\",\"type\":\"crank\",\"crank_angle\":123.0,\"crank_delta\":5.0,\"crank_dock\":\"docked\",\"duration_ms\":100000}");
     mcp_harness_update(&fake_pd);
 
     assert(mcp_get_crank_angle(&fake_pd) == 123.0f);
     assert(mcp_get_crank_change(&fake_pd) == 5.0f);
     assert(mcp_get_crank_docked(&fake_pd) == 1);
+}
+
+/* The same command without a dock mode, end to end through the harness: angle and
+   delta are overridden, the dock reading is not.
+   
+   The fake is set to report *docked* first, deliberately. The old bool-shaped
+   protocol would have resolved a missing dock to false and forced undocked, so
+   asserting against a real value of 1 is what distinguishes "passed the real
+   reading through" from "happened to agree with the default". Against a fake that
+   reports 0 this test would pass either way. */
+static void test_crank_override_leaves_dock_alone(void)
+{
+    g_fake_now_ms = 3000;
+    g_fake_crank_docked = 1;
+    write_file("mcp/command.json", "{\"id\":\"req4b\",\"type\":\"crank\",\"crank_angle\":45.0,\"crank_delta\":1.0,\"crank_dock\":\"unchanged\",\"duration_ms\":100000}");
+    mcp_harness_update(&fake_pd);
+
+    assert(mcp_get_crank_angle(&fake_pd) == 45.0f);
+    assert(mcp_get_crank_change(&fake_pd) == 1.0f);
+    assert(mcp_get_crank_docked(&fake_pd) == 1);
+
+    /* And forcing undocked still wins over a real docked reading, so the
+       passthrough above is a choice rather than an inability to override. */
+    write_file("mcp/command.json", "{\"id\":\"req4c\",\"type\":\"crank\",\"crank_angle\":45.0,\"crank_delta\":1.0,\"crank_dock\":\"undocked\",\"duration_ms\":100000}");
+    mcp_harness_update(&fake_pd);
+    assert(mcp_get_crank_docked(&fake_pd) == 0);
+
+    g_fake_crank_docked = 0;
 }
 
 static void test_screenshot(void)
@@ -259,9 +318,11 @@ int main(void)
     mcp_harness_init(&fake_pd);
 
     test_ping_roundtrip();
+    test_response_published_by_rename_leaves_no_temp();
     test_press_overrides_real_button_state();
     test_release_forces_not_pressed();
     test_crank_override();
+    test_crank_override_leaves_dock_alone();
     test_screenshot();
     test_state_callback();
     test_malformed_command_reports_error_and_cleans_up();

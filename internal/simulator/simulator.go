@@ -34,6 +34,43 @@ func (s *syncBuffer) String() string {
 	return s.buf.String()
 }
 
+// lookPath is a seam for tests, which need both answers without depending on
+// what happens to be installed on the machine running them.
+var lookPath = exec.LookPath
+
+// lineBufferedCommand wraps a command in `stdbuf -oL` when stdbuf is available, so
+// the child's stdout is line-buffered rather than block-buffered.
+//
+// What this buys, measured as an A/B against a real Simulator through this exact
+// code path: the Simulator's own `Loading: <pdx>` startup line arrives immediately
+// where before it did not (223 captured bytes without, 288 with, nothing else
+// changed). That matters for the failure launch_simulator exists to explain - a
+// Simulator that quits during startup, where the one useful message would otherwise
+// sit unflushed in a buffer that Stop()'s hard kill discards.
+//
+// What it does NOT buy, and this was checked rather than assumed: a Lua game's
+// print() output still does not appear. The original investigation in
+// docs/GOTCHAS.md found the same thing - stdbuf surfaces the Simulator's native
+// diagnostics and not its Lua console - and that is why get_game_logs exists and
+// why it cannot be retired in favour of get_logs. Curiously, a shell-launched
+// Simulator under stdbuf *does* show Lua print(); the difference from this path is
+// unexplained and deliberately not claimed either way here.
+//
+// stdbuf preloads a shim that calls setvbuf before main, so it needs no cooperation
+// from the Simulator. It is GNU coreutils: present in the container and on most
+// Linux installs, absent on a stock macOS, which native mode targets. A missing
+// stdbuf falls back to launching directly rather than failing - better logs are not
+// worth a Simulator that will not start.
+func lineBufferedCommand(binPath string, args []string) (string, []string) {
+	stdbuf, err := lookPath("stdbuf")
+	if err != nil {
+		return binPath, args
+	}
+	// Only stdout. stderr is never fully buffered per POSIX, so -eL would be
+	// stating a default.
+	return stdbuf, append([]string{"-oL", binPath}, args...)
+}
+
 // Launch starts binPath (PlaydateSimulator) against pdxPath. Any extraArgs
 // are forwarded as additional playdate.argv entries to the running game -
 // argv[1] is always the pdx path itself, so extraArgs[0] lands at
@@ -48,7 +85,8 @@ func Launch(binPath, pdxPath string, extraArgs ...string) (*Simulator, error) {
 	} else {
 		args = extraArgs
 	}
-	cmd := exec.Command(binPath, args...)
+	name, args := lineBufferedCommand(binPath, args)
+	cmd := exec.Command(name, args...)
 	setProcAttr(cmd)
 
 	output := &syncBuffer{}

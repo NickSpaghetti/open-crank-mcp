@@ -18,7 +18,7 @@ func setupLua(sourceDir string, harnessFS fs.FS, language Language) (SetupResult
 	result := SetupResult{Language: language}
 
 	harnessDst := filepath.Join(sourceDir, "Source", "mcp_harness.lua")
-	if err := copyHarnessFile(harnessFS, path.Join("lua", "mcp_harness.lua"), harnessDst); err != nil {
+	if err := CopyHarnessFile(harnessFS, path.Join("lua", "mcp_harness.lua"), harnessDst); err != nil {
 		return result, fmt.Errorf("copying mcp_harness.lua: %w", err)
 	}
 	result.FilesCopied = append(result.FilesCopied, harnessDst)

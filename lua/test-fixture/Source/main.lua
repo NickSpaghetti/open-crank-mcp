@@ -23,7 +23,17 @@ decorative:add()
 local aDownCount = 0
 local aUpCount = 0
 
-playdate.AButtonDown = function() aDownCount += 1 end
+-- Armed by the sentinel crank angle below, so the counting behaviour the other
+-- assertions rely on is unaffected until a test asks for the failure.
+local callbackErrorArmed = false
+
+playdate.AButtonDown = function()
+    aDownCount += 1
+    if callbackErrorArmed then
+        callbackErrorArmed = false
+        error("deliberate callback error")
+    end
+end
 playdate.AButtonUp = function() aUpCount += 1 end
 
 mcp.registerState(function()
@@ -56,11 +66,54 @@ print("fixture print line")
 local ERROR_TRIGGER_ANGLE = 999999
 local errorTriggered = false
 
+-- Second sentinel, same mechanism, for the log rotation. Writing past the
+-- harness's per-generation size cap is the only way to make a rotation happen, and
+-- 256KB of real print() calls at a realistic entry size would take minutes of
+-- gameplay - so this floods it deliberately with large lines instead.
+--
+-- The two markers are what the contract test looks for. ROTATION-MARKER-OLD is
+-- printed first and must end up in the rotated generation; ROTATION-MARKER-NEW is
+-- printed after the rotation and lands in the fresh one. Reading both back proves
+-- the rotation moved the old generation aside rather than deleting it, which is
+-- what the first implementation did.
+-- Arms an error inside a callback the *harness* invokes, rather than inside the
+-- game's frame logic. That distinction is the whole point: wrapUpdate protects the
+-- frame logic, and until callGameCallback existed it did not protect this.
+local CALLBACK_ERROR_TRIGGER_ANGLE = 777777
+
+local ROTATION_TRIGGER_ANGLE = 888888
+local rotationTriggered = false
+
+local function floodLogPastRotation()
+    print("ROTATION-MARKER-OLD")
+    -- Comfortably past one 256KB generation, in chunks big enough that this costs
+    -- a frame rather than a minute.
+    local filler = string.rep("x", 4096)
+    for i = 1, 80 do
+        print(filler .. " " .. i)
+    end
+    print("ROTATION-MARKER-NEW")
+end
+
 -- Latched so this throws exactly once per activation, not every single
--- frame the override stays active (which would flood game_logs.json with
--- duplicate entries and evict the print() line above out of the ring
--- buffer before the test ever reads it back).
+-- frame the override stays active (which would flood game_logs.jsonl with
+-- duplicate entries and push the print() line above out of the retained
+-- generations before the test ever reads it back).
 local function fixtureUpdate()
+    if playdate.getCrankPosition() == CALLBACK_ERROR_TRIGGER_ANGLE then
+        callbackErrorArmed = true
+    end
+
+    if playdate.getCrankPosition() == ROTATION_TRIGGER_ANGLE then
+        -- Latched for the same reason as the error below: once per activation.
+        if not rotationTriggered then
+            rotationTriggered = true
+            floodLogPastRotation()
+        end
+    else
+        rotationTriggered = false
+    end
+
     if playdate.getCrankPosition() == ERROR_TRIGGER_ANGLE then
         if not errorTriggered then
             errorTriggered = true

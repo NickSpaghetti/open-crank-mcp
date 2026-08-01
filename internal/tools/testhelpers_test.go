@@ -1,14 +1,18 @@
 package tools
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // newTestServer builds a Server backed by a trivial stand-in process (not a
@@ -121,4 +125,81 @@ func startEchoingFakeHarness(t *testing.T, dataDir string) {
 			_ = os.WriteFile(respPath, respBytes, 0o644)
 		}
 	}()
+}
+
+// renderContent flattens a tool result's text blocks, for asserting on the
+// message a recoverable failure hands back. Those messages are load-bearing here
+// rather than decoration - several of them are the only place a caller learns
+// what to do about the condition - so tests assert on their content, not just on
+// IsError.
+func renderContent(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	var b strings.Builder
+	for _, c := range result.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			b.WriteString(tc.Text)
+		}
+	}
+	return b.String()
+}
+
+// recordedCommands is what startRecordingFakeHarness collects.
+type recordedCommands struct {
+	mu  sync.Mutex
+	raw [][]byte
+}
+
+func (r *recordedCommands) add(b []byte) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.raw = append(r.raw, bytes.Clone(b))
+}
+
+func (r *recordedCommands) all() [][]byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([][]byte(nil), r.raw...)
+}
+
+// startRecordingFakeHarness answers commands like startEchoingFakeHarness does and
+// also keeps every command JSON it saw.
+//
+// Needed because the interesting property for some tests is what the server put on
+// the wire, not what came back - and the handler has no return value that reveals
+// it. Asserting on the real bytes is the only way to catch a field that was meant
+// to be sent and was not.
+func startRecordingFakeHarness(t *testing.T, dataDir string) *recordedCommands {
+	t.Helper()
+	mcpDir := filepath.Join(dataDir, "mcp")
+	cmdPath := filepath.Join(mcpDir, "command.json")
+	respPath := filepath.Join(mcpDir, "response.json")
+
+	rec := &recordedCommands{}
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			b, err := os.ReadFile(cmdPath)
+			if err != nil || len(b) == 0 {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			var cmd map[string]any
+			if err := json.Unmarshal(b, &cmd); err != nil {
+				time.Sleep(time.Millisecond)
+				continue
+			}
+			rec.add(b)
+			_ = os.Remove(cmdPath)
+			respBytes, _ := json.Marshal(map[string]any{"status": "ok", "id": cmd["id"]})
+			_ = os.WriteFile(respPath, respBytes, 0o644)
+		}
+	}()
+	return rec
 }

@@ -378,22 +378,39 @@ The `shared` profile bind-mounts the Simulator's sandboxed Data directory to
 from the host while the game runs:
 
 ```
-tail -f .shared-data/<bundle-id>/mcp/game_logs.json
+tail -f .shared-data/<bundle-id>/mcp/game_logs.jsonl
 ```
+
+At 256KB that file is renamed to `game_logs.1.jsonl` and a fresh one starts, so
+a rotation never leaves you with no history. `get_game_logs` reads both, oldest
+first; `tail -f` follows only the current one.
 
 `launch_simulator` returns the `bundle_id` and the container-side
 `data_dir`, so the agent can tell you the exact path. The file is written
 by the Lua harness on every `print()` call, not batched, so a log from the
-frame before a crash still lands.
+frame before a crash still lands. One JSON object per line, appended.
+
+**A game set up before this file was renamed needs `setup` re-run.** The
+harness is a *copy* in your game's own source tree, and an older copy writes
+`game_logs.json` (a single JSON array) instead. `get_game_logs` fails with a
+message saying exactly that rather than returning an empty list, and
+`get_status` reports a `harness_warning` for any game whose harness copy
+differs from the one this server ships. `setup` is safe to re-run and is the
+whole fix.
 
 Two asymmetries worth knowing, both covered in detail in
 `docs/GOTCHAS.md`:
 
-- Lua `print()` never reaches the process's real stdout on this SDK, so it
-  never appears in `get_logs`. `get_game_logs` exists to route around
-  that.
+- Use `get_game_logs`, not `get_logs`, for your game's own output. The harness
+  writes each entry to disk immediately, so it is complete the moment you ask,
+  and you get one timestamped stream of just your game's lines. `get_logs` shows
+  the Simulator's own stdout, which is block-buffered: the server launches it
+  line-buffered so startup diagnostics arrive, but a Lua game's `print()` still
+  does not reliably show up there. Measured; see `docs/GOTCHAS.md`.
+  `get_game_logs` also captures tracebacks from your update function *and* from
+  the button callbacks the harness invokes.
 - A C game's `printf` does reach real stdout, so `get_logs` already covers
-  it. The C harness doesn't write `game_logs.json` at all, and doesn't
+  it. The C harness doesn't write `game_logs.jsonl` at all, and doesn't
   need to.
 
 ### Rough edges
@@ -496,18 +513,27 @@ just a call:
    for a minimal, complete example. (Manually assigning `playdate.update`
    and calling `mcp.update()` yourself each frame still works, for
    backward compatibility, but doesn't get this protection.)
-3. Lua `print()` output and unhandled-error tracebacks never reach the
-   Simulator's real stdout/stderr - a platform limitation, not a bug in
-   this project, see [`docs/GOTCHAS.md`](docs/GOTCHAS.md). `mcp.run`
-   captures both into `mcp/game_logs.json` automatically; read it back
-   with the `get_game_logs` tool rather than `get_logs` (which only sees
-   the Simulator process's own OS-level output).
+3. `mcp.run` captures both `print()` output and unhandled-error tracebacks
+   into `mcp/game_logs.jsonl` automatically; read them back with the
+   `get_game_logs` tool. Tracebacks are the reason it matters - `mcp.run`
+   catches them with `xpcall`, so they never reach the Simulator's console
+   at all. `print()` output *does* also reach the Simulator's real stdout
+   and so shows up in `get_logs` too, contrary to what this README and
+   [`docs/GOTCHAS.md`](docs/GOTCHAS.md) used to claim; `get_game_logs` is
+   still the better read, since it gives one timestamped stream of just
+   your game's output rather than your lines mixed into the Simulator's.
 4. `press_button` synthesizes real button-down/up edges, so
    `buttonJustPressed`/`buttonJustReleased` and the SDK's
    `AButtonDown`/`leftButtonDown`/etc callbacks all fire correctly from
    an MCP-driven press, not just `buttonIsPressed`'s "currently held"
    bit. `AButtonHeld`/`BButtonHeld` (fired after a continuous 1-second
    hold) are a separate mechanism and aren't synthesized.
+5. `set_crank` overrides the angle and delta, and only touches the docked
+   state if you ask it to with `crank_dock` (`"docked"` or `"undocked"`).
+   Omit it and `playdate.isCrankDocked()` keeps reading whatever the game
+   would really see - which is *docked*, in the Simulator at rest. Before
+   this was a three-valued field it was a bool, so every `set_crank` call
+   silently forced the crank to read undocked.
 
 **C games:**
 1. Copy [`c-harness/mcp_harness.h`](c-harness/mcp_harness.h) and
@@ -678,7 +704,7 @@ that one you have to edit.
 | `BYOS_URL` | `SHARED_URL` | The browser tests fall back to `localhost:6080` |
 
 The bind-mounted Data directory moved from `.byos-data/` to `.shared-data/`. It
-holds each game's save data and the `mcp/game_logs.json` behind
+holds each game's save data and the `mcp/game_logs.jsonl` behind
 `get_game_logs`, so it's worth moving rather than deleting if you have anything
 in there you care about. Everything in it is root-owned, since the container
 runs as root, which is why this goes through a container instead of `sudo`:

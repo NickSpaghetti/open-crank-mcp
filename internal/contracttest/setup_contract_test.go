@@ -190,15 +190,9 @@ func runAndConfirmHarnessReachable(t *testing.T, sdkPath, pdxPath, bundleID stri
 		t.Fatalf("waiting for mcp/ directory: %v\nsimulator output:\n%s", err, sim.Output())
 	}
 
-	if err := harness.SendCommand(dataDir, map[string]any{"id": "1", "type": "ping"}); err != nil {
-		t.Fatalf("SendCommand: %v", err)
-	}
-	resp, err := harness.WaitForResponse(dataDir, responseTimeout)
-	if err != nil {
-		t.Fatalf("WaitForResponse: %v", err)
-	}
-	if resp["status"] != "ok" {
-		t.Fatalf(`ping response["status"] = %v, want "ok" (full response: %v)`, resp["status"], resp)
+	resp := mustRoundTrip(t, dataDir, harness.Command{ID: "1", Type: harness.CmdPing})
+	if resp.Failed() {
+		t.Fatalf("ping failed: %s (full response: %+v)", resp.ErrorMessage(), resp)
 	}
 }
 

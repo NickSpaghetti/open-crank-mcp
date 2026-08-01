@@ -36,6 +36,9 @@ static void check_signatures(struct playdate_sys *sys, struct playdate_file *fil
     int (*check_write)(SDFile *, const void *, unsigned int) = file->write;
     int (*check_unlink)(const char *, int) = file->unlink;
     int (*check_mkdir)(const char *) = file->mkdir;
+    /* The harness publishes a response by renaming a temp file into place, so
+       rename is a real dependency and belongs pinned here like the rest. */
+    int (*check_rename)(const char *, const char *) = file->rename;
 
     uint8_t *(*check_getDisplayFrame)(void) = gfx->getDisplayFrame;
 
@@ -51,6 +54,7 @@ static void check_signatures(struct playdate_sys *sys, struct playdate_file *fil
     (void)check_write;
     (void)check_unlink;
     (void)check_mkdir;
+    (void)check_rename;
     (void)check_getDisplayFrame;
 }
 

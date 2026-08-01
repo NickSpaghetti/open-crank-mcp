@@ -95,6 +95,135 @@ per type - that's what lets the Lua table shape, the C struct shape, and
 the future Go struct shape all agree on one schema without three different
 ideas of "shape."
 
+The Go leg of that sentence was not built until a performance and readability
+review went looking for it, and the gap is worth recording rather than quietly
+closing. The C harness had `McpCommand`/`McpResponse` from Checkpoint 2 and the
+Lua harness had `emptyResponse()`, but `internal/tools` spoke `map[string]any`
+in both directions with three unchecked type-assertion helpers
+(`asFloat`/`asString`/`asBool`), so "all three agree on one schema" described
+two implementations and an intention. Three defects were living in that gap,
+all three confirmed against a real game (missile-command, both ports) rather
+than argued from the code:
+
+- `status` and `error` were produced carefully by both harnesses and read by
+  nothing. Every tool reported success no matter what the harness said.
+- The `id` was written on every command and never compared to the response's,
+  so the stale-response detection this document already claimed - "a stale
+  leftover response from a previous run is easy to detect and ignore" - did not
+  exist. One round trip that outlived its five-second timeout left its answer
+  on disk and the next call returned it as its own: `set_crank` timed out at
+  5.005s, and the following `press_button` consumed its answer in 3ms. A
+  planted response came back as `get_game_state`'s answer in 2ms, carrying the
+  wrong payload, with its `status: "error"` dropped on the way through.
+- `button` was validated at none of the three layers, so `press_button("A")`
+  reported success and did nothing.
+
+Fixed by giving Go the same flat shape: `internal/harness/protocol.go` holds
+one `Command` and one `Response`, `SendCommand` clears any stale response
+before writing, and `WaitForResponse` takes the id it is waiting for and
+discards anything else. The field names in it were captured off the wire from
+both harnesses rather than copied from this document.
+
+One wrinkle the id check had to accommodate, and it is exactly the kind of
+thing only running it finds: when the C harness fails to parse a command it
+answers with an empty id, because `mcp_parse_command` bails before the id is
+read. Rejecting non-matching ids naively would have turned every C-side parse
+failure into a five-second timeout instead of the error message it was trying
+to return, so an empty id is accepted as uncorrelatable rather than treated as
+a mismatch.
+
+The flat shape reaches the *wire*, not just the three structs: no field on a
+command is `omitempty`, so a ping sends every field zeroed, exactly as this
+decision describes. The first version of the Go struct did use `omitempty`, which
+meant `set_crank(crank_angle: 0)` sent no `crank_angle` at all and "explicitly
+zero" was indistinguishable from "unset". It behaved correctly only because both
+harnesses independently default a missing field to zero - C memsets before
+parsing, Lua reads `cmd.crank_angle or 0` - so a Go marshaling choice was resting
+on an invariant implemented twice, in two other languages, and written down in
+none of the three. `crank_docked` is the one that makes the risk concrete: a real
+Playdate's crank is docked when idle, so a harness defaulting a missing
+`crank_docked` to true would be a reasonable thing for someone to write, and
+`set_crank(crank_docked: false)` would then mean its opposite. The harness-side
+defaults stay as tolerance for anything writing `command.json` by hand; nothing
+in Go relies on them.
+
+The same tag on the *tool* input structs is left alone and is not the same
+decision: there it only controls whether jsonschema-go marks a property
+`required`, and optional is right, since asking to turn the crank to 90 degrees
+should not oblige a caller to name a delta, a dock state and a duration.
+
+**The crank's dock state was a live bug, and finding it needed a measurement.**
+Removing `omitempty` would not have fixed it, because the problem was the type: a
+bool has two states and the protocol needs three - dock it, undock it, leave it
+alone. So every `set_crank` call sent a dock state whether the caller mentioned one
+or not. That only matters if the Simulator's resting dock reading is *docked*, and
+it is: `internal/contracttest` now asserts that at rest the crank reports docked,
+which means the old shape was silently forcing every harnessed game to read the
+crank as undocked on any call that meant to change only the angle. A game gating
+behaviour on `playdate.isCrankDocked()` was being told something nobody asked for.
+That assertion exists so a future SDK changing this fails loudly rather than
+quietly making the regression test meaningless.
+
+The wire now carries `crank_dock`, one of `unchanged`/`docked`/`undocked`, and the
+override state in both harnesses grew a separate "was the dock asked about at all"
+flag alongside the value. A string rather than the obvious value-plus-flag pair of
+booleans: that pair has four states for three meanings, so one combination is
+nonsense every reader must know to ignore, and the C harness's `strstr` key lookup
+would have distinguished `crank_docked` from `crank_docked_set` only by the closing
+quote in the pattern. One self-describing field avoids both, and it is the same
+vocabulary the tool takes, so `command.json` reads the way the caller wrote it.
+
+**The harness is a copy, and copies drift.** The review's own game-log format
+change (see `docs/GOTCHAS.md`) broke every already-set-up game silently, because
+`setup` writes the harness *into* a game's source tree and nothing compared the
+two afterwards. The durable lesson is not about a filename: it is that this
+project ships code by copying it, so any harness/server contract change has a
+silent failure available to it, and only a version marker closes that class.
+
+The marker is not a number anyone maintains. Each canonical harness source
+carries a placeholder that `setup` substitutes for a truncated SHA-256 of the
+canonical bytes as it writes the copy; the server hashes its own embedded copy
+and compares, warning through `get_status` when they differ. Change any harness
+source and every stamp changes automatically - nothing to bump, nothing to
+forget, and a hand-edited copy is caught too. A hand-maintained integer was
+considered and rejected for exactly the reason the bug happened: remembering to
+bump it is the failure mode. `internal/harness/version.go`, and the guard that
+keeps it honest is `setup` refusing to write an unstamped copy plus a test that
+every embedded source still carries its placeholder.
+
+Backward compatibility was explicitly declined - one developer, and the log is a
+regenerated debug buffer - so the old format is not read. Being *silent* was the
+defect, not being incompatible: `get_game_logs` now errors and names the remedy.
+One direction stays uncovered and is recorded rather than papered over: a current
+harness against an older server binary, which nothing here can reach.
+
+**Two things the log investigation turned up, both fixed.** The Simulator is now
+launched through `stdbuf -oL` where available, because a child's stdout on a pipe
+is block-buffered and `Stop()` is a hard kill that never flushes - so the one
+message explaining a Simulator that quit during startup used to sit in a buffer and
+die there. Measured A/B: 223 captured bytes without it, 288 with, the difference
+being the `Loading:` line. It does not make a Lua game's `print()` reliable on that
+path, which is why `get_game_logs` stays; that channel writes each entry to disk
+immediately.
+
+And `wrapUpdate` protected the game's frame logic but called `mcp.update()` bare,
+while `mcp.update()` invokes the game's own button callbacks. An error there escaped
+the harness, was never recorded by the channel that advertises tracebacks, and
+stopped the polling loop permanently. Now each callback is wrapped individually (so
+one bad callback does not cost the rest of the frame's harness work) with
+`mcp.update()` itself wrapped as a backstop. A contract test arms a throwing
+callback and requires both the traceback and a subsequent answered ping; reverting
+either layer makes it fail.
+
+The fat-struct choice itself came out of that review looking better than it
+went in, with one change. Its real cost is stack, not clarity: `McpResponse` is
+~12.9KB and `mcp_harness_update` also had a 13KB response buffer, ~25.6KB of
+automatic storage in a function every frame calls. Both are `static` now - the
+harness is single-instance and single-threaded, so nothing is given up - which
+keeps the identical-layout payoff and drops the cost. No measurable difference
+in the Simulator, which is all this project targets; it matters for anyone who
+builds a harnessed game for the device.
+
 **Contract testing against the Playdate SDK itself uses direct
 characterization tests, not Specmatic or Pact.** The actual goal: when
 `PLAYDATE_SDK_VERSION` gets bumped, know exactly what broke, before it
@@ -411,8 +540,11 @@ IPC mechanism: the Go side writes a fixed `mcp/command.json`, then waits
 for a fixed `mcp/response.json` to appear, reads and deletes it. This is a
 synchronous, one-request-at-a-time protocol - fixed filenames rather than
 per-request ones, with the `id` field *inside* the JSON correlating a
-response to the request that produced it (so a stale leftover response
-from a previous run is easy to detect and ignore). Simple, cross-platform,
+response to the request that produced it, so a stale leftover response from
+a previous run is detected and ignored. That correlation is real as of the
+performance review (see the fat-struct decision above); for Checkpoints 3-7
+it was described here and not implemented, and a single slow round trip was
+enough to make every later call return the previous one's answer. Simple, cross-platform,
 and no longer just assumed fast enough relative to the Simulator's own
 frame rate - actually stress-tested against three real games (see
 `docs/GOTCHAS.md`), which found the Simulator's own ~30fps frame period,
