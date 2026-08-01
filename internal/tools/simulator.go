@@ -27,6 +27,7 @@ func (s *Server) stopSimulator(_ context.Context, _ *mcp.CallToolRequest, _ Stop
 
 	s.mu.Lock()
 	s.sim = nil
+	s.clearScratchLocked()
 	s.mu.Unlock()
 
 	return nil, StopSimulatorOutput{}, nil
@@ -62,6 +63,7 @@ func (s *Server) restartSimulator(_ context.Context, _ *mcp.CallToolRequest, _ R
 	_ = s.sim.Stop()
 	_ = s.sim.Wait()
 	s.sim = nil
+	s.clearScratchLocked()
 
 	newSim, err := simulator.Launch(s.simulatorBin(), s.pdxPath, s.dataDir)
 	if err != nil {

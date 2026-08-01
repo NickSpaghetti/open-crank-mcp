@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -13,5 +14,5 @@ import (
 // package registers has valid, inferable schemas.
 func TestRegisterAllDoesNotPanic(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test"}, nil)
-	RegisterAll(server, NewServer("/fake/sdk", fstest.MapFS{}))
+	RegisterAll(server, NewServer(sdk.Paths{Root: "/fake/sdk"}, nil, fstest.MapFS{}))
 }

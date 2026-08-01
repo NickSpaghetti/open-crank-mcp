@@ -258,3 +258,30 @@ func isDir(env Env, path string) bool {
 	info, err := fs.Stat(env.FS, fsKey(path))
 	return err == nil && info.IsDir()
 }
+
+// Describe renders a resolved SDK for a human: where it is, which of the three
+// sources found it, and what was considered along the way.
+//
+// It lives here rather than in cmd/sdk-path because that makes it testable. The
+// command around it is a shell that prints this and exits, which is the same
+// shape as the other commands in this repo and excluded from mutation testing
+// for the same reason. The formatting is not incidental though: "which source
+// won" is the one thing a person debugging detection needs, and it is invisible
+// everywhere else.
+func (p Paths) Describe() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "root:       %s\n", p.Root)
+	fmt.Fprintf(&b, "found via:  %s\n", p.RootSource)
+	fmt.Fprintf(&b, "simulator:  %s\n", p.SimulatorBin)
+	fmt.Fprintf(&b, "pdc:        %s\n", p.PDC)
+
+	// Only worth printing when something was ruled out. A single entry means the
+	// first candidate won, and listing it again under "considered" says nothing.
+	if len(p.Tried) > 1 {
+		b.WriteString("\nconsidered, in order:\n")
+		for _, t := range p.Tried {
+			fmt.Fprintf(&b, "  %s\n", t)
+		}
+	}
+	return b.String()
+}

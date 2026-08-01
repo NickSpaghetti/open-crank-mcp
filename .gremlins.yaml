@@ -48,6 +48,10 @@ unleash:
     # The score it produced was therefore better than the config actually asked
     # for. Full paths mean each exclusion has to be argued for on its own.
     - "cmd/open-crank-mcp/main.go"
+    # Prints sdk.Paths.Describe and exits. The rendering it used to hold inline
+    # was moved into internal/sdk precisely so it could be mutation-tested; what
+    # is left is the shell around it, same as the other commands here.
+    - "cmd/sdk-path/main.go"
     # Docker orchestration: recreates the compose service, waits for PulseAudio,
     # then drives the MCP server over stdio. Nothing here is reachable without a
     # real daemon, and every branch is about a container's state rather than

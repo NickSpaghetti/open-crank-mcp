@@ -331,3 +331,43 @@ func TestExistsAgreesWithMapFS(t *testing.T) {
 }
 
 var _ fs.FS = fstest.MapFS{}
+
+// Describe is what `make sdk-path` prints, and that output is the whole product
+// of that command: it exists so a person can see which of the three sources won
+// when detection surprises them.
+func TestDescribe(t *testing.T) {
+	p := Paths{
+		Root:         "/opt/sdk",
+		RootSource:   SourceConfig,
+		SimulatorBin: "/opt/sdk/bin/PlaydateSimulator",
+		PDC:          "/opt/sdk/bin/pdc",
+		Tried:        []string{"/home/u/.Playdate/config (SDKRoot key)", "/opt/sdk (found)"},
+	}
+	got := p.Describe()
+
+	for _, want := range []string{p.Root, p.RootSource, p.SimulatorBin, p.PDC} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Describe() omits %q:\n%s", want, got)
+		}
+	}
+	// Everything ruled out has to be listed, since that is what explains a
+	// surprising answer.
+	for _, want := range p.Tried {
+		if !strings.Contains(got, want) {
+			t.Errorf("Describe() omits a considered path %q:\n%s", want, got)
+		}
+	}
+}
+
+// With a single candidate there is nothing to explain, and repeating it under
+// "considered" is noise.
+func TestDescribeOmitsCandidateListWhenThereIsOnlyOne(t *testing.T) {
+	p := Paths{
+		Root:       "/opt/sdk",
+		RootSource: SourceEnv,
+		Tried:      []string{"/opt/sdk (found)"},
+	}
+	if got := p.Describe(); strings.Contains(got, "considered") {
+		t.Errorf("Describe() lists a candidate section for a single candidate:\n%s", got)
+	}
+}

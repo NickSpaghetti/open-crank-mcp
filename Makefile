@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mutation-test test hooks
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mutation-test test hooks sdk-path smoke-check-native sdk-contract-check-native
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -58,7 +58,7 @@ smoke-check: build
 	docker compose run --rm simulator go run ./cmd/smoke-check
 
 sdk-contract-check: build
-	docker compose run --rm simulator go test ./internal/contracttest/... -v
+	docker compose run --rm simulator env OPEN_CRANK_SDK_CONTRACT=1 go test ./internal/contracttest/... -v
 
 # Recreates the container against the current GAME_DIR, then builds and launches
 # the game by driving the MCP server exactly as a client would. This is the one
@@ -179,6 +179,26 @@ hooks:
 	git config core.hooksPath .githooks
 	@echo "pre-commit hook enabled. Bypass a single commit with --no-verify."
 	@echo "disable with: git config --unset core.hooksPath"
+
+# Prints the SDK internal/sdk would resolve, and which of the three sources
+# found it. The first thing to reach for when detection picks the wrong SDK, or
+# picks none: it turns an invisible decision into one line.
+sdk-path:
+	@go run ./cmd/sdk-path
+
+# The native counterparts of smoke-check and sdk-contract-check: same subject,
+# no container. `-native` is a suffix rather than a prefix so `make smoke-check`
+# keeps meaning what it always did, and so tab completion groups by subject.
+#
+# Both need an SDK on this machine. OPEN_CRANK_SDK_CONTRACT is what tells the
+# contract tests they are wanted; without it they skip, which is what keeps them
+# from failing on a host that happens to have PLAYDATE_SDK_PATH set but no
+# display.
+smoke-check-native:
+	go run ./cmd/smoke-check
+
+sdk-contract-check-native:
+	OPEN_CRANK_SDK_CONTRACT=1 go test ./internal/contracttest/... -v
 
 # Everything, ordered so it fails as fast as it can. The three host-only suites
 # run first: a broken parser or a Go typo then fails in seconds instead of
