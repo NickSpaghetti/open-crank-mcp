@@ -34,6 +34,53 @@ calling `mcp_harness_update`/`mcp.update` that same frame.
 a separate mechanism, not synthesized - out of scope, no example needed
 it.
 
+## The harness is a copy, so it drifts, and that went unnoticed once
+
+`setup` writes `mcp_harness.lua` (or the C pair) *into a game's own source
+tree*. From then on the game's copy and this repo's canonical version are two
+different files, and nothing used to compare them.
+
+That produced a real silent failure during the performance review. Renaming
+`mcp/game_logs.json` to `mcp/game_logs.jsonl` (an unrelated, deliberate change
+- the old format rewrote the whole file on every `print()`) meant every game
+that had already been set up kept writing the old filename, while the new
+reader only looked for the new one and treated "file missing" as "the game
+hasn't logged anything". `get_game_logs` returned an empty list, no error. Both
+vendored games at the time - missile-command and scuba-sally - were byte-for-byte
+on the pre-change harness, so both would have gone quiet.
+
+**Two independent detectors now, on purpose:**
+
+- `get_game_logs` errors if it finds `game_logs.json` and no `.jsonl`, naming
+  `setup` as the fix. It does not read the old format - there is no backward
+  compatibility here by choice, only a refusal to go quiet.
+- `get_status` reports a `harness_warning` when the harness answering it is not
+  the one this binary ships. Any drift, not just this one file.
+
+They use different evidence (a file on disk vs. a field in a response) so
+neither depends on the other being right.
+
+**How the version works, since it is not a number anyone maintains.** Each
+canonical harness source carries a placeholder that `setup` substitutes for a
+truncated SHA-256 of the canonical bytes as it writes the copy. The server
+hashes its own embedded copy and compares. Change any harness source and every
+stamp differs automatically; there is nothing to bump and nothing to forget.
+It also catches a locally hand-edited copy, which is why the warning says
+"differs from the harness this server ships" rather than claiming to know
+whether it is old or modified. See `internal/harness/version.go`.
+
+One guard worth knowing about: if a harness source ever loses its placeholder,
+`setup` fails loudly rather than writing an unidentifiable copy, and a unit test
+asserts every embedded source still has exactly one. Without that, the detector
+could quietly stop detecting - the same failure mode it exists to prevent.
+
+**Known gap, in one direction only.** A *current* harness with an *older*
+`open-crank-mcp` binary still goes quiet: the old reader wants
+`game_logs.json`, a current harness deletes it, and that binary has no version
+check to fall back on. Nothing in this repo can reach that combination. If your
+logs come back empty and `get_status` says nothing, check that the server binary
+is as new as the harness.
+
 ## `read_save_data`'s schema broke every tool call from Claude Code
 
 `ReadSaveDataOutput.Data` is `any` (a save file's shape isn't known ahead
@@ -55,15 +102,20 @@ all-empty schema to `true` as a spec-legal shorthand, so the override
 needs real content (a `Description`) to survive as an actual schema
 object instead of collapsing right back to the same `true`.
 
-## `get_logs` doesn't capture Lua `print()`/error output - fixed via `get_game_logs`
+## `get_logs` and Lua `print()`/error output - `get_game_logs` exists for this
+
+> **Superseded twice, and the second correction matters more than the first.**
+> `print()` and tracebacks both do reach real stdout - but stdout is
+> block-buffered, so `get_logs` shows nothing from a quiet game and loses
+> whatever is still buffered when the Simulator is killed. Read "Superseded
+> twice" below before relying on anything in this section.
 
 `get_logs`'s own description used to say it returns "buffered stdout/stderr
 from the Simulator child process - where `print()` output and Lua
-tracebacks land." That was only half true: it only ever returned the
-Simulator process's OS-level stdout/stderr (GTK warnings, startup
-messages, that sort of thing). Lua `print()` calls and unhandled Lua
-errors during gameplay never showed up in it at all. `get_logs`'s
-description has been corrected to say so plainly.
+tracebacks land." That was believed to be only half true: that it only ever
+returned the Simulator process's OS-level stdout/stderr (GTK warnings,
+startup messages, that sort of thing), and that Lua `print()` calls and
+unhandled Lua errors during gameplay never showed up in it at all.
 
 **Consequence, before the fix below existed:** an unhandled Lua error
 inside a game's `playdate.update()` froze that game's update loop
@@ -75,13 +127,131 @@ round-trip needed), which was the tell that the Simulator process itself
 was alive and the game's own frame loop was what's stuck.
 
 **Fixed**: `lua/mcp_harness.lua` now captures both halves into a
-file-based channel (`mcp/game_logs.json`), read directly by the new
+file-based channel (`mcp/game_logs.jsonl`), read directly by the new
 `get_game_logs` tool - see "A real fix" below for how. The
 `playdate.file.write` + `read_save_data` workaround described in earlier
 versions of this doc is no longer necessary for new code, though it's
 still a generally useful pattern for surfacing custom debug state.
 
-### Root cause (confirmed)
+### Superseded twice. Read this whole section before trusting either half
+
+The short version, measured 2026-07-30: **Lua `print()` and unhandled tracebacks
+both reach the process's real stdout, but stdout is block-buffered, so low-volume
+output is invisible and `Simulator.Stop()`'s SIGKILL discards whatever is still
+buffered.** So `get_logs` is not a reliable channel for either, and
+`get_game_logs` stays.
+
+The buffering is the part nobody had found, and it explains why this section has
+now been wrong in both directions. Two games differing only in how much they
+print, same launch path, same container:
+
+| game prints | lines `get_logs` returned |
+|---|---|
+| one short line | **3** - no `Loading:`, no print output at all |
+| 300 lines (~15KB) | **299** - `Loading:` plus every print |
+
+stdout connected to a pipe is block-buffered at ~4KB by libc. Under that, a
+chatty game flushes constantly and looks fine; a quiet one looks silent. And
+because `Simulator.Stop()` is a hard kill (PlaydateSimulator ignores SIGTERM),
+the buffer is never flushed at exit, so the trailing <4KB is lost for good.
+
+A traceback is exactly the low-volume, just-happened case. That is why
+`get_game_logs` earns its keep: the harness does open/write/close per entry, so
+its content is on disk immediately.
+
+**`stdbuf` is now used, and it buys less than hoped.** `internal/simulator.Launch`
+wraps the Simulator in `stdbuf -oL` when it is available, falling back to a direct
+launch when it is not (a stock macOS has no `stdbuf`, and native mode targets
+macOS). Measured A/B through that exact code path: captured output went from 223
+bytes - the GTK warning alone - to 288 bytes including the Simulator's own
+`Loading: <pdx>` line. That is worth having, because it is the same mechanism that
+hid the one message explaining a Simulator which quits during startup.
+
+It does **not** make a Lua game's `print()` appear on that path, which was checked
+rather than assumed. So `get_logs` is still not a channel to rely on for a game's
+own output, and `get_game_logs` is not going anywhere. Oddly, a *shell*-launched
+Simulator under `stdbuf` does show Lua `print()`; the difference from the Go launch
+is unexplained and is deliberately not claimed either way. `internal/contracttest`
+asserts the `Loading:` line arrives, which is the part that was measured.
+
+**Which unhandled errors go where**, all three measured under `stdbuf`:
+
+| error raised in | traceback on stdout | captured in `game_logs` | Simulator |
+|---|---|---|---|
+| `playdate.update`, no harness | yes | n/a | `Update failed, simulator paused.` |
+| a callback the harness invokes, harnessed | yes | **yes, since the fix below** | keeps running |
+| import / top level, no harness | yes | n/a | paused |
+
+That middle row was a real gap, and it is now closed. `wrapUpdate` called
+`mcp.update()` *outside* its own `xpcall`, and `mcp.update()` invokes the game's
+`AButtonDown`/`AButtonUp` callbacks - so an error there escaped the protection that
+exists to stop exactly this, the traceback landed nowhere `get_game_logs` could see
+it, and the polling loop stopped for good (a ping issued afterwards was never
+answered). The measured stack said so directly:
+
+```
+Update error: main.lua:11: P2-CALLBACK-ERROR
+stack traceback:
+	main.lua:11: in local 'fn'
+	mcp_harness.lua:245: in upvalue 'updateButtonEdges'
+	mcp_harness.lua:486: in field 'update'
+```
+
+**Fixed in two layers.** `callGameCallback` wraps each button callback the harness
+invokes, so one broken callback no longer stops the other five buttons' edges being
+computed or the pending command being answered; and `mcp.update()` itself is now
+called inside an `xpcall`, as a backstop for anything else in there that runs game
+code (`list_entities` reads game-defined sprite fields, for instance). A contract
+test arms a throwing `AButtonDown` in the Lua fixture, presses A, and requires both
+that the traceback reaches `game_logs.jsonl` and that a ping afterwards is still
+answered. Reverting either layer makes it fail, which was checked - a test that
+passes without the fix guards nothing.
+
+### Superseded, 2026-07-29: `print()` **does** reach stdout
+
+The root cause below says Lua console output never reaches the process's
+real stdout on Linux/SDK 3.1.1. Re-measured during a performance review, on
+Linux and SDK 3.1.1, that is not what happens. A game printing once per
+frame put its output on stdout both ways it was checked:
+
+- Through this project's own capture: 153 of the 175 lines `get_logs`
+  returned were the game's own `print()` text.
+- Bypassing it entirely, the same way the original investigation did -
+  `PlaydateSimulator game.pdx > /tmp/out.txt 2>&1`, plain shell
+  redirection, no Go in the loop - 164 of 171 lines were the game's
+  `print()` output.
+
+Both runs were inside the `shared` profile container, SDK 3.1.1 (the
+Simulator's own `Release: 3.1.1` startup line), which is the configuration
+the section below describes.
+
+What has **not** been re-measured either way is the other half: whether an
+*unhandled* error's traceback reaches stdout. An attempt to check that
+failed for an unrelated reason (the probe game never loaded - no `Loading:`
+line), so there is no evidence for or against it here. That half matters
+more than the `print()` half, because a traceback is what you need at the
+exact moment the game can no longer answer anything else.
+
+Why the original conclusion was drawn is not established. It records its own
+empirical detail (100KB+ of output, `stdbuf -oL`, zero bytes observed), so
+the honest reading is that something differs between the two setups rather
+than that the earlier work was careless. Left standing below as the record
+of what was seen then.
+
+What did **not** change as a result: `get_game_logs` and `mcp.run()` both
+stay. `mcp.run()`'s value never depended on this - it is what keeps the
+harness polling after the game's own frame logic throws, and the contract
+test asserts exactly that. And because `mcp.run()` catches errors with
+`xpcall`, a traceback in a harnessed game is handled by the harness and
+never reaches the SDK's own error path at all, so the file channel is where
+it lives regardless of what the SDK would have printed.
+
+Worth revisiting: if tracebacks do reach stdout, then `get_logs` alone may
+cover both halves and this channel could be retired. That is a design
+decision with a real simplification behind it, not a bug, and it needs the
+traceback measurement first.
+
+### Root cause (as investigated originally; see the note above)
 
 PlaydateSimulator's own Lua console output does not go through the
 process's real stdout/stderr file descriptors at all, on Linux, in this
@@ -124,10 +294,36 @@ channel the earlier workaround used by hand (`playdate.file.write` +
 direct file read), rather than stdout:
 
 - `lua/mcp_harness.lua` monkey-patches `print` (same pattern as
-  `buttonIsPressed`/`getCrankPosition`/etc.) to also append each call into
-  a capped in-memory ring buffer, flushed to `mcp/game_logs.json`
-  immediately on every call - not batched into `mcp.update()` - so a log
-  written the frame before a crash still lands on disk.
+  `buttonIsPressed`/`getCrankPosition`/etc.) to also append each call to
+  `mcp/game_logs.jsonl` immediately - not batched into `mcp.update()` - so
+  a log written the frame before a crash still lands on disk.
+
+  One JSON object per line, appended. It was originally one JSON array held
+  in a capped in-memory ring buffer and rewritten in full on every call,
+  which measured at 0.855ms per `print()` at its 200-entry steady state
+  (a ~15KB re-encode plus a whole-file write, per line logged) against
+  0.0117ms to append a single line - 73x, or 2.6% of a 33ms frame per
+  logged line versus 0.04%, measured inside the Simulator. The cost also
+  scaled with how many entries were being retained, so a game logging
+  while you hunt a bug paid the most.
+
+  Unbounded growth is still prevented, in two generations: at 256KB the
+  current file is *renamed* to `mcp/game_logs.1.jsonl` and a fresh one
+  starts, and `get_game_logs` reads the rotated one first. One rename, no
+  data copied, so it stays O(1) - trimming a prefix instead would mean
+  reading the file back, which is the cost this change removed.
+
+  The first version truncated at the cap, and the comment in the harness
+  claimed it kept "the older half". It kept none. That is worst at exactly
+  the moment the log gets read, because a traceback is always appended
+  *after* whatever caused it, so a crash shortly after a rotation showed
+  the traceback with none of its run-up. Not a rare corner either: at
+  roughly 65 bytes an entry, 256KB is about 4,000 entries, so a game
+  printing once per frame rotated every ~2 minutes and reset its history to
+  zero each time. `internal/contracttest` now floods a fixture past the cap
+  and requires a marker printed *before* the rotation to still be readable
+  afterwards - the writer's half only exists in Lua inside a real
+  Simulator, so that is the only place it can be checked.
 - A new `mcp.run(gameUpdateFn)` replaces the old pattern of assigning
   `playdate.update` directly and calling `mcp.update()` manually at the
   end. It wraps the game's frame logic in `xpcall`/`debug.traceback`,
@@ -138,7 +334,7 @@ direct file read), rather than stdout:
   keeps working even when the game's own code has a bug. Calling
   `mcp.update()` manually still works for backward compatibility, it just
   doesn't get this protection.
-- The new `get_game_logs` Go tool reads `mcp/game_logs.json` directly
+- The new `get_game_logs` Go tool reads `mcp/game_logs.jsonl` directly
   (`internal/tools/gamelogs.go`), the same direct-file-access pattern
   `read_save_data` uses - deliberately, so it keeps working in exactly the
   scenario it exists to diagnose.

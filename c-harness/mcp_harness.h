@@ -4,6 +4,25 @@
 #include <stddef.h>
 #include "pd_api.h"
 
+/* Which canonical harness this copy came from, reported in every response so the
+   Go side can tell whether a game's vendored copy has drifted.
+
+   Not maintained by hand: the `setup` tool substitutes a content fingerprint of
+   the canonical sources (this header and mcp_harness.c together) as it writes
+   this file into a game, so every harness change produces a new value with
+   nothing to remember. The literal below is what ships in this repo; a copy still
+   carrying it was not installed by `setup`, which the server reports as its own
+   case. See internal/harness/version.go. */
+#define MCP_HARNESS_VERSION "@HARNESS_VERSION@"
+
+/* The IPC files, relative to the game's sandboxed data directory.
+
+   MCP_RESPONSE_TMP_PATH exists so a response can be published by rename rather
+   than written in place - see the end of mcp_harness_update. */
+#define MCP_COMMAND_PATH      "mcp/command.json"
+#define MCP_RESPONSE_PATH     "mcp/response.json"
+#define MCP_RESPONSE_TMP_PATH "mcp/response.tmp.json"
+
 typedef enum {
     MCP_CMD_UNKNOWN,
     MCP_CMD_SCREENSHOT,
@@ -22,7 +41,12 @@ typedef struct {
     int duration_ms;
     float crank_angle;
     float crank_delta;
+    /* Resolved from the command's crank_dock string by mcp_parse_command:
+       crank_docked_set says whether the dock state should be overridden at all,
+       crank_docked what to force it to. Two ints in the struct, one
+       self-describing string on the wire - see internal/harness/protocol.go. */
     int crank_docked;
+    int crank_docked_set;
 } McpCommand;
 
 typedef struct {
@@ -53,6 +77,12 @@ typedef struct {
     float crank_override_angle;
     float crank_override_delta;
     int crank_override_docked;
+    /* Separate from crank_override_active: a crank override always takes over
+       angle and delta, but takes over the dock state only when a command asked
+       it to. Without the split, moving the angle would force a dock reading the
+       game never asked for, and "docked" is the crank's resting state on real
+       hardware, so that is not a harmless default to pick. */
+    int crank_override_docked_active;
     long crank_override_expires_at_ms;
     /* Edge tracking for mcp_override_update_edges - see its definition. */
     int last_effective_pressed[6];
@@ -70,7 +100,8 @@ int mcp_json_escape_string(const char *in, char *out, size_t out_len);
 void mcp_override_init(McpOverrideState *ov);
 void mcp_override_apply_press(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms);
 void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms);
-void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta, int docked, int duration_ms, long now_ms);
+void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
+                              int docked_set, int docked, int duration_ms, long now_ms);
 void mcp_override_expire(McpOverrideState *ov, long now_ms);
 
 /* Computes this frame's pending_pushed/pending_released from the override

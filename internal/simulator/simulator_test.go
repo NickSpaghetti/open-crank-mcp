@@ -1,6 +1,8 @@
 package simulator
 
 import (
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,4 +119,60 @@ func TestStopAfterProcessAlreadyExitedDoesNotError(t *testing.T) {
 	// The process is already reaped; Stop() must not panic even though
 	// Signal() on an already-exited process typically errors.
 	_ = sim.Stop()
+}
+
+// stdbuf is an exec wrapper: it sets LD_PRELOAD and _STDBUF_O, then execs the
+// target, so the pid stays the Simulator's. That is what keeps Stop(), Exited() and
+// the `pkill -f PlaydateSimulator` in cmd/shared-load working unchanged, and it is
+// worth pinning because a wrapper that *forked* instead would silently break all
+// three.
+func TestLineBufferedCommandWrapsWhenStdbufExists(t *testing.T) {
+	original := lookPath
+	t.Cleanup(func() { lookPath = original })
+	lookPath = func(string) (string, error) { return "/usr/bin/stdbuf", nil }
+
+	name, args := lineBufferedCommand("/opt/sdk/bin/PlaydateSimulator", []string{"game.pdx", "/data"})
+	if name != "/usr/bin/stdbuf" {
+		t.Fatalf("command = %q, want the stdbuf path", name)
+	}
+	want := []string{"-oL", "/opt/sdk/bin/PlaydateSimulator", "game.pdx", "/data"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("args = %v, want %v", args, want)
+	}
+}
+
+// A stock macOS has no stdbuf, and native mode targets macOS. Falling back matters
+// more than the buffering does: worse logs beat a Simulator that will not start.
+func TestLineBufferedCommandFallsBackWithoutStdbuf(t *testing.T) {
+	original := lookPath
+	t.Cleanup(func() { lookPath = original })
+	lookPath = func(string) (string, error) { return "", errors.New("not found") }
+
+	name, args := lineBufferedCommand("/opt/sdk/bin/PlaydateSimulator", []string{"game.pdx"})
+	if name != "/opt/sdk/bin/PlaydateSimulator" {
+		t.Fatalf("command = %q, want the binary itself", name)
+	}
+	if !slices.Equal(args, []string{"game.pdx"}) {
+		t.Fatalf("args = %v, want the arguments unchanged", args)
+	}
+}
+
+// And Launch itself still works on a machine with no stdbuf, which is the part a
+// wrong fallback would break.
+func TestLaunchSucceedsWithoutStdbuf(t *testing.T) {
+	original := lookPath
+	t.Cleanup(func() { lookPath = original })
+	lookPath = func(string) (string, error) { return "", errors.New("not found") }
+
+	sim, err := Launch("sh", "", "-c", "sleep 30")
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sim.Stop()
+		_ = sim.Wait()
+	})
+	if sim.Exited() {
+		t.Fatal("Exited() = true immediately after Launch")
+	}
 }

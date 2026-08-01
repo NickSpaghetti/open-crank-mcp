@@ -5,11 +5,14 @@
 package setup
 
 import (
+	"bytes"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 )
 
 type Language string
@@ -81,24 +84,63 @@ func fileHasContent(path string) bool {
 	return len(strings.TrimSpace(string(b))) > 0
 }
 
-// copyHarnessFile writes one embedded harness source out to dst.
+// CopyHarnessFile writes one canonical harness source into a game, stamped with
+// the fingerprint identifying which version it came from.
 //
 // name is a path inside harnessFS, so it is built with path.Join and never
 // filepath.Join: fs.FS paths are slash-separated on every platform, and
 // filepath.Join would produce backslashes on Windows that match nothing.
 // dst is a real filesystem path and does use filepath.
-func copyHarnessFile(harnessFS fs.FS, name, dst string) error {
+//
+// Exported because internal/contracttest builds its fixtures without going
+// through Setup, and a fixture that skipped the stamp would be the one harness
+// copy in the project that the drift check cannot see - so it uses this instead
+// of copying the file itself.
+func CopyHarnessFile(harnessFS fs.FS, name, dst string) error {
 	b, err := fs.ReadFile(harnessFS, name)
 	if err != nil {
 		return fmt.Errorf("reading embedded %s: %w", name, err)
 	}
+	stamped, err := stampVersion(harnessFS, name, b)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(dst), err)
 	}
-	if err := os.WriteFile(dst, b, 0o644); err != nil {
+	if err := os.WriteFile(dst, stamped, 0o644); err != nil {
 		return fmt.Errorf("writing %s: %w", dst, err)
 	}
 	return nil
+}
+
+// stampVersion substitutes the version placeholder for this harness's
+// fingerprint. Files that carry no placeholder are returned unchanged.
+//
+// A missing placeholder in a file that should have one is an error rather than a
+// silent pass-through, and that is the whole reason this can be trusted: an
+// unstamped copy would report nothing recognisable, the drift check would go
+// quiet, and the next breaking harness change would land as silently as the one
+// that prompted all this. Failing here turns that into a loud failure at setup
+// time. The paired test asserting every embedded source still contains its
+// placeholder is what catches it even earlier.
+func stampVersion(harnessFS fs.FS, name string, content []byte) ([]byte, error) {
+	fingerprint, err := harness.FingerprintFor(harnessFS, name)
+	if err != nil {
+		return nil, err
+	}
+	if fingerprint == "" {
+		return content, nil
+	}
+
+	placeholder := []byte(harness.VersionPlaceholder)
+	if n := bytes.Count(content, placeholder); n != 1 {
+		return nil, fmt.Errorf(
+			"embedded %s contains %d copies of the version placeholder %s, want exactly 1 - "+
+				"without it, a game's harness copy cannot be identified and drift goes undetected",
+			name, n, harness.VersionPlaceholder)
+	}
+	return bytes.Replace(content, placeholder, []byte(fingerprint), 1), nil
 }
 
 // Setup wires the harness into sourceDir for the given language.

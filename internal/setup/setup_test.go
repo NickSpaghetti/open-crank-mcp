@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"testing/fstest"
+
+	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 )
 
 func TestDetectLanguageLua(t *testing.T) {
@@ -101,10 +103,14 @@ func mustRead(t *testing.T, path string) string {
 // what is inside a copied harness, only that the right path was written and that
 // the *game's* own files were patched correctly, which is the part with logic in
 // it. The keys must match the paths internal/setup asks for.
+//
+// The two stampable sources carry the version placeholder, because a real one
+// always does and CopyHarnessFile refuses a source without it. mcp_harness.c has
+// none on purpose - the C pair's stamp lives in the header.
 func testHarnessFS() fs.FS {
 	return fstest.MapFS{
-		"lua/mcp_harness.lua":     {Data: []byte("-- test harness stand-in\n")},
-		"c-harness/mcp_harness.h": {Data: []byte("/* test harness stand-in */\n")},
+		"lua/mcp_harness.lua":     {Data: []byte("-- test harness stand-in\nlocal V = \"" + harness.VersionPlaceholder + "\"\n")},
+		"c-harness/mcp_harness.h": {Data: []byte("/* test harness stand-in */\n#define V \"" + harness.VersionPlaceholder + "\"\n")},
 		"c-harness/mcp_harness.c": {Data: []byte("/* test harness stand-in */\n")},
 	}
 }

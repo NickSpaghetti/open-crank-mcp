@@ -25,13 +25,14 @@ static void test_parse_press(void)
 
 static void test_parse_crank(void)
 {
-    const char *json = "{\"id\":\"y\",\"type\":\"crank\",\"crank_angle\":90.5,\"crank_delta\":1.5,\"crank_docked\":true}";
+    const char *json = "{\"id\":\"y\",\"type\":\"crank\",\"crank_angle\":90.5,\"crank_delta\":1.5,\"crank_dock\":\"docked\"}";
     McpCommand cmd;
     int ok = mcp_parse_command(json, strlen(json), &cmd);
     assert(ok == 1);
     assert(cmd.type == MCP_CMD_CRANK);
     assert(cmd.crank_angle > 90.4f && cmd.crank_angle < 90.6f);
     assert(cmd.crank_delta > 1.4f && cmd.crank_delta < 1.6f);
+    assert(cmd.crank_docked_set == 1);
     assert(cmd.crank_docked == 1);
 }
 
@@ -321,7 +322,8 @@ static void test_override_crank(void)
 {
     McpOverrideState ov;
     mcp_override_init(&ov);
-    mcp_override_apply_crank(&ov, 45.0f, 2.0f, 1, 500, 0);
+    /* docked_set=1, docked=1: the caller asked for the dock to be forced. */
+    mcp_override_apply_crank(&ov, 45.0f, 2.0f, 1, 1, 500, 0);
 
     assert(mcp_override_get_crank_angle(&ov, 999.0f) == 45.0f);
     assert(mcp_override_get_crank_change(&ov, 999.0f) == 2.0f);
@@ -333,11 +335,107 @@ static void test_override_crank(void)
     assert(mcp_override_get_crank_docked(&ov, 0) == 0);
 }
 
+/* The point of splitting docked_set out: an active crank override that was not
+   asked to touch the dock must leave the game's real reading alone, in both
+   directions. Angle and delta are still overridden. */
+static void test_override_crank_leaves_dock_alone(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_crank(&ov, 45.0f, 2.0f, 0, 0, 500, 0);
+
+    assert(mcp_override_get_crank_angle(&ov, 999.0f) == 45.0f);
+    assert(mcp_override_get_crank_change(&ov, 999.0f) == 2.0f);
+    /* Real value passes straight through, whichever it is. */
+    assert(mcp_override_get_crank_docked(&ov, 0) == 0);
+    assert(mcp_override_get_crank_docked(&ov, 1) == 1);
+}
+
+/* Forcing undocked has to be distinguishable from not asking. Both leave
+   crank_override_docked at 0, so only docked_set separates them - which is
+   exactly the bug this replaced: a bool could not say "leave it". */
+static void test_override_crank_forces_undocked(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_crank(&ov, 0.0f, 0.0f, 1, 0, 500, 0);
+
+    assert(mcp_override_get_crank_docked(&ov, 1) == 0);
+    assert(mcp_override_get_crank_docked(&ov, 0) == 0);
+}
+
+/* Expiry has to clear the dock override too, or a crank command with a dock
+   would keep forcing it after the rest of the override lapsed. */
+static void test_override_crank_expiry_releases_dock(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_crank(&ov, 45.0f, 2.0f, 1, 0, 500, 0);
+    assert(mcp_override_get_crank_docked(&ov, 1) == 0);
+
+    mcp_override_expire(&ov, 600);
+    assert(mcp_override_get_crank_docked(&ov, 1) == 1);
+}
+
+/* crank_dock parsing, all three values plus the absent case. The wire carries a
+   string precisely so these are three distinct states rather than two booleans
+   with one nonsense combination. */
+static void test_parse_crank_dock_modes(void)
+{
+    McpCommand cmd;
+
+    assert(mcp_parse_command("{\"id\":\"1\",\"type\":\"crank\",\"crank_dock\":\"docked\"}", 47, &cmd) == 1);
+    assert(cmd.crank_docked_set == 1);
+    assert(cmd.crank_docked == 1);
+
+    assert(mcp_parse_command("{\"id\":\"1\",\"type\":\"crank\",\"crank_dock\":\"undocked\"}", 49, &cmd) == 1);
+    assert(cmd.crank_docked_set == 1);
+    assert(cmd.crank_docked == 0);
+
+    assert(mcp_parse_command("{\"id\":\"1\",\"type\":\"crank\",\"crank_dock\":\"unchanged\"}", 50, &cmd) == 1);
+    assert(cmd.crank_docked_set == 0);
+
+    /* Absent entirely, and an unrecognised value: both leave the dock alone,
+       which is what makes a zeroed command safe. */
+    assert(mcp_parse_command("{\"id\":\"1\",\"type\":\"crank\"}", 26, &cmd) == 1);
+    assert(cmd.crank_docked_set == 0);
+
+    assert(mcp_parse_command("{\"id\":\"1\",\"type\":\"crank\",\"crank_dock\":\"\"}", 41, &cmd) == 1);
+    assert(cmd.crank_docked_set == 0);
+
+    assert(mcp_parse_command("{\"id\":\"1\",\"type\":\"crank\",\"crank_dock\":\"sideways\"}", 49, &cmd) == 1);
+    assert(cmd.crank_docked_set == 0);
+}
+
+/* A full command, the way the Go server actually writes one: every field
+   present, including the ones this command type does not use. mcp_json_find_value
+   matches on a quoted key, so neighbouring keys that share a prefix must not
+   confuse it. */
+static void test_parse_full_command_shape(void)
+{
+    McpCommand cmd;
+    const char *json =
+        "{\"id\":\"12\",\"type\":\"crank\",\"button\":\"\",\"duration_ms\":250,"
+        "\"crank_angle\":123.5,\"crank_delta\":5,\"crank_dock\":\"docked\"}";
+    assert(mcp_parse_command(json, strlen(json), &cmd) == 1);
+    assert(cmd.type == MCP_CMD_CRANK);
+    assert(strcmp(cmd.id, "12") == 0);
+    assert(cmd.duration_ms == 250);
+    assert(cmd.crank_angle > 123.4f && cmd.crank_angle < 123.6f);
+    assert(cmd.crank_delta > 4.9f && cmd.crank_delta < 5.1f);
+    assert(cmd.crank_docked_set == 1);
+    assert(cmd.crank_docked == 1);
+    /* An empty button name maps to no button, same as absent. */
+    assert(cmd.button == 0);
+}
+
 int main(void)
 {
     test_parse_ping();
     test_parse_press();
     test_parse_crank();
+    test_parse_crank_dock_modes();
+    test_parse_full_command_shape();
     test_parse_missing_type_fails();
     test_parse_unknown_type_fails();
     test_parse_empty_fails();
@@ -362,6 +460,9 @@ int main(void)
     test_override_update_edges_expiry_produces_released();
     test_override_update_edges_untouched_button_passes_through();
     test_override_crank();
+    test_override_crank_leaves_dock_alone();
+    test_override_crank_forces_undocked();
+    test_override_crank_expiry_releases_dock();
 
     printf("pure logic: all tests passed\n");
     return 0;

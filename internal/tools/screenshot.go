@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/screenshot"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -20,25 +21,22 @@ func (s *Server) getScreenshot(_ context.Context, _ *mcp.CallToolRequest, _ GetS
 	s.harnessMu.Lock()
 	defer s.harnessMu.Unlock()
 
-	resp, err := s.roundTripLocked(map[string]any{"type": "screenshot"})
+	resp, err := s.roundTripLocked(harness.Command{Type: harness.CmdScreenshot})
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
 		return result, nil, wrapErr
 	}
-
-	format := asString(resp["format"])
-	relPath := asString(resp["path"])
 
 	dataDir, err := s.requireDataDir()
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
 		return result, nil, wrapErr
 	}
-	fullPath := filepath.Join(dataDir, relPath)
+	fullPath := filepath.Join(dataDir, resp.Path)
 
 	var pngBytes []byte
-	switch format {
-	case "raw":
+	switch resp.Format {
+	case harness.FormatRaw:
 		raw, err := os.ReadFile(fullPath)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading raw screenshot: %w", err)
@@ -47,16 +45,15 @@ func (s *Server) getScreenshot(_ context.Context, _ *mcp.CallToolRequest, _ GetS
 		if err != nil {
 			return nil, nil, fmt.Errorf("decoding screenshot: %w", err)
 		}
-	case "png":
+	case harness.FormatPNG:
 		pngBytes, err = os.ReadFile(fullPath)
 		if err != nil {
 			return nil, nil, fmt.Errorf("reading png screenshot: %w", err)
 		}
 	default:
-		return &mcp.CallToolResult{
-			IsError: true,
-			Content: []mcp.Content{&mcp.TextContent{Text: "screenshot response had neither raw nor png format"}},
-		}, nil, nil
+		return errorResult(fmt.Sprintf(
+			"screenshot response had format %q, want %q or %q",
+			resp.Format, harness.FormatRaw, harness.FormatPNG)), nil, nil
 	}
 
 	return &mcp.CallToolResult{

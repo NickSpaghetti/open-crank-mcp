@@ -35,6 +35,26 @@ const setBitIsWhite = true
 // MSB-first, 52-byte row stride, the last 2 bytes of each row being
 // alignment padding) into a PNG-encoded image.
 func DecodeRawToPNG(raw []byte) ([]byte, error) {
+	img, err := unpackGray(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("encoding PNG: %w", err)
+	}
+	return buf.Bytes(), nil
+}
+
+// unpackGray expands the 1-bpp dump into an 8-bit grayscale image.
+//
+// Split out from the PNG encoding above so the two halves can be benchmarked
+// separately, because their relative cost is the whole question about this
+// function: the obvious complaint is that it touches every one of the 96,000
+// pixels individually, and measuring says that loop is the cheap half and zlib
+// is the rest. See decode_bench_test.go.
+func unpackGray(raw []byte) (*image.Gray, error) {
 	if len(raw) != rawSize {
 		return nil, fmt.Errorf("raw screenshot is %d bytes, want %d (%d rows * %d bytes/row)", len(raw), rawSize, Height, RowBytes)
 	}
@@ -53,10 +73,5 @@ func DecodeRawToPNG(raw []byte) ([]byte, error) {
 			img.SetGray(col, row, color.Gray{Y: value})
 		}
 	}
-
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, fmt.Errorf("encoding PNG: %w", err)
-	}
-	return buf.Bytes(), nil
+	return img, nil
 }

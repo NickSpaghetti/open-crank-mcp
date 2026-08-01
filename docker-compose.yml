@@ -131,7 +131,7 @@ services:
       # this is fixed when the container starts.
       - ${GAME_DIR:-.}:/your-game
       # Exposes the Simulator's sandboxed Data directory on the host, which
-      # is where a running game's mcp/game_logs.json lands (launch.go builds
+      # is where a running game's mcp/game_logs.jsonl lands (launch.go builds
       # dataDir as $PLAYDATE_SDK_PATH/Disk/Data/<bundleID>, inside the image,
       # not under /your-game). Without this the human watching the VNC view
       # has no way to read the same Lua print()/traceback output the agent

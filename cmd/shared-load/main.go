@@ -434,7 +434,7 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 	} else {
 		fmt.Println("harness:  reachable")
 	}
-	fmt.Printf("logs:    .shared-data/%s/mcp/game_logs.json\n", launched.BundleID)
+	fmt.Printf("logs:    .shared-data/%s/mcp/game_logs.jsonl\n", launched.BundleID)
 	fmt.Println("view:    http://localhost:6080/")
 	return nil
 }
