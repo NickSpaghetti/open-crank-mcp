@@ -104,6 +104,8 @@ func TestResolveFallsBackToDefaultLocation(t *testing.T) {
 	}{
 		{"linux", "/home/u/PlaydateSDK", nil},
 		{"darwin", "/home/u/Developer/PlaydateSDK", nil},
+		// Confirmed install location. Windows also has no ~/.Playdate/config at
+		// all, so this default is the only thing resolution has to go on there.
 		{"windows", "/users/u/Documents/PlaydateSDK", map[string]string{"USERPROFILE": "/users/u"}},
 	} {
 		t.Run(tc.goos, func(t *testing.T) {

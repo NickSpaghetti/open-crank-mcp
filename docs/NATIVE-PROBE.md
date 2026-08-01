@@ -2,18 +2,37 @@
 
 ## Run this, and nothing else
 
-**On macOS: [part 3](#macos-part-3-the-data-directory-corrected). One block, one
-paste, from the repo root.** It is the only thing outstanding.
+**macOS is done. Nothing outstanding there.** Parts 1 and 3 between them
+confirmed every value, and `internal/sdk` has been corrected to match. The raw
+output is kept below as the evidence.
 
-Skip parts 1 and 2. Part 1 is finished and its answers are recorded below. Part 2
-is superseded: it had three bugs, all named in part 3, and part 3 replaces it.
+Windows is done too. Its values are corrected in `internal/sdk`, and one of its
+answers settled the scope question permanently: the SDK ships as an interactive
+installer `.exe`, with no archive. CI fetches and extracts a `.tar.gz` to
+provision Linux, so a Windows runner cannot provision itself, which means
+Windows-native could never get the per-PR verification the other platforms have.
+That turns "unsupported for now" into "unsupported". Recorded in
+`docs/ROADMAP.md`.
 
-Windows is optional and changes nothing today. If you have five spare minutes on
-that machine, [the Windows section](#windows-optional) has one question no script
-can answer.
+Nothing on this page is outstanding.
 
-Paste the whole output back, errors included. A failure that names a path is
-worth as much as a success.
+### What Windows changed
+
+| Value | First guess | Real |
+|---|---|---|
+| `~/.Playdate/config` | assumed present | **does not exist at all** |
+| SDK install location | `%LOCALAPPDATA%\Programs\PlaydateSDK` | `%USERPROFILE%\Documents\PlaydateSDK` |
+| Simulator, `pdc` | `PlaydateSimulator.exe`, `pdc.exe` | correct |
+| Simulator support dir | `%APPDATA%` | **`%LOCALAPPDATA%`**, and `%APPDATA%` holds nothing |
+
+The missing config file is the notable one. On macOS `~/.Playdate/config` is the
+primary signal and the installer writes it; on Windows there is no such file, so
+resolution has nothing but the default location to go on. Two platforms, two
+different primary signals, which is a good argument for the resolution order
+being a list rather than a single lookup.
+
+`bin/` also holds `crashpad_handler.exe`, the same trap as macOS: anything
+picking an executable out of that directory by listing it gets the crash reporter.
 
 ## Why this exists
 
@@ -39,14 +58,29 @@ cross-compiled binary is easy to hand over and there is something worth running.
 macOS part 1 is done. Four of the five values are confirmed against a real
 SDK 3.1.1 install, and every one matched what `internal/sdk` already guessed:
 
-| Value | Confirmed as |
-|---|---|
-| SDK install location | `~/Developer/PlaydateSDK` |
-| `~/.Playdate/config` | `SDKRoot\t<path>\n`, tab-separated |
-| Simulator bundle | `bin/Playdate Simulator.app` |
-| Simulator executable | `.../Contents/MacOS/Playdate Simulator` |
-| `pdc` | `bin/pdc`, no extension |
-| **Sandboxed data directory** | **Still unknown.** See part 3. |
+| Value | Confirmed as | Matched the guess? |
+|---|---|---|
+| SDK install location | `~/Developer/PlaydateSDK` | yes |
+| `~/.Playdate/config` | `SDKRoot\t<path>\n`, tab-separated | yes |
+| Simulator bundle | `bin/Playdate Simulator.app` | yes |
+| Simulator executable | `.../Contents/MacOS/Playdate Simulator` | yes |
+| `pdc` | `bin/pdc`, no extension | yes |
+| Sandboxed data directory | `<sdk>/Disk/Data/<bundleID>` | **no, and it mattered** |
+| Lua `print()` on real stdout | never, same as Linux | yes |
+
+The data directory is the interesting one. macOS convention says an app keeps
+that kind of state under `~/Library/Application Support`, so the original guess
+put two paths there ahead of the in-SDK one. The Simulator does not: a game run
+on macOS left `mcp/game_logs.json` at `<sdk>/Disk/Data/<bundleID>/`, and nothing
+whatsoever appeared under Application Support or Containers. Reasoning from
+convention had the right answer listed last. The candidate order is now corrected
+and pinned by a test.
+
+The `print()` result settles a question `docs/GOTCHAS.md` could only answer for
+Linux. The count was zero and the captured output was completely empty, so the
+Simulator withholds Lua console output from real stdout on macOS as well, and
+`get_game_logs` is necessary on both platforms rather than being a Linux
+workaround.
 
 Two incidental findings worth keeping: that install has no plain
 `bin/PlaydateSimulator` beside the bundle, and `Contents/MacOS` also contains

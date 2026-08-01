@@ -819,9 +819,16 @@ asking "yet?" instead of being told.
 
   Platform scope is linux and darwin. Windows compiles and its path logic is
   covered by the `fstest` suite, but the runtime is unsupported and says so:
-  WSL2 already serves those users through the existing profile, and claiming
-  Windows would roughly double the untested surface for a platform nobody here
-  can drive to green.
+  WSL2 already serves those users through the existing profile.
+
+  That started as a scoping choice and has since become a structural one. The
+  Windows SDK ships as an interactive installer `.exe`, with no archive
+  equivalent to the Linux `.tar.gz` that CI fetches and extracts. So a Windows
+  runner cannot provision itself, and Windows-native could never have the
+  per-PR verification the other two platforms get. "Unsupported for now" is
+  therefore "unsupported", not a queue position. Its layout values are still
+  correct (see `docs/NATIVE-PROBE.md`) because keeping them right costs nothing
+  and makes promoting Windows additive if that ever changes.
 
   Done when the `fstest` suite passes under `go-build-cross`, `make sdk-path`
   names both the resolved SDK and which source found it, `make

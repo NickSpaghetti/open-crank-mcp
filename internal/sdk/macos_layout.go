@@ -10,19 +10,34 @@ var appBundleNames = []string{
 	"PlaydateSimulator.app",
 }
 
-// The macOS layout. UNVERIFIED: written from Panic's documented install location
-// and standard macOS conventions, never run against a real install. The repo
-// already carries this kind of caveat for its WSL profile.
+// The macOS layout. Confirmed against a real SDK 3.1.1 install on macOS, except
+// for the data directory. See docs/NATIVE-PROBE.md for the raw output.
 //
-// Every guess here is recoverable without a code change, which is what makes
-// shipping it defensible:
-//   - a wrong bundle name is probed for, then overridable with
-//     OPEN_CRANK_SIMULATOR_BIN
-//   - a wrong data directory is probed for, then searched for, then reported in a
-//     warning naming OPEN_CRANK_DATA_ROOT
+// Confirmed:
+//   - the SDK installs to ~/Developer/PlaydateSDK
+//   - ~/.Playdate/config holds "SDKRoot\t<path>\n", tab-separated
+//   - the bundle is "Playdate Simulator.app" under bin/, and the executable is
+//     Contents/MacOS/Playdate Simulator
+//   - pdc is bin/pdc, with no extension
 //
-// The fstest suite exercises this logic on every platform, so what is unverified
-// is the *values*, not the code that consumes them.
+// Two things that install does NOT have, both worth knowing:
+//   - there is no plain bin/PlaydateSimulator alongside the bundle. The fallback
+//     below is kept anyway, since it costs one stat and covers a layout that may
+//     exist elsewhere.
+//   - Contents/MacOS also contains crashpad_handler, which sorts before the
+//     Simulator alphabetically. Anything that picks an executable out of that
+//     directory by listing it will pick the wrong one. This code names the file
+//     it wants, so it is immune, but a probe script written the obvious way is
+//     not: that mistake is recorded in docs/NATIVE-PROBE.md because it happened.
+//
+// The data directory is confirmed too: <root>/Disk/Data/<bundleID>, the same as
+// Linux. See the comment on dataDirCandidates, and docs/NATIVE-PROBE.md for the
+// run that established it.
+//
+// Nothing in this layout is a guess any more. The probing and the
+// OPEN_CRANK_DATA_ROOT override stay regardless, because the evidence is one
+// machine on one SDK version, and the cost of being wrong is a silent hang
+// rather than an error.
 //
 // Not build-tagged, on purpose: see layout.go.
 func darwinLayout() layout {
@@ -71,11 +86,22 @@ func darwinLayout() layout {
 			return filepath.Join(root, "bin", "pdc")
 		},
 
-		// Application Support is where a macOS app is supposed to keep this, so it
-		// goes first. The in-SDK location is listed too, because that is
-		// demonstrably where it is on Linux and the Simulator is one codebase.
+		// Confirmed: the Simulator sandboxes per-game data inside the SDK
+		// directory, exactly as it does on Linux. A game run on macOS 3.1.1 left
+		// its mcp/game_logs.json at <root>/Disk/Data/<bundleID>/, and nothing at
+		// all appeared under Application Support or Containers.
+		//
+		// So this is first, not last. It was originally third, behind two
+		// Application Support guesses made from macOS convention: an app is
+		// *supposed* to keep this kind of state there. The Simulator does not.
+		// Guessing from convention put the real answer last, which would have
+		// meant every lookup walking two dead candidates first.
+		//
+		// The Application Support paths are kept behind it rather than deleted.
+		// They cost one stat each when the first candidate misses, and the
+		// evidence is a single machine and a single SDK version.
 		dataDirCandidates: func(env Env, root, bundleID string) []string {
-			var out []string
+			out := []string{filepath.Join(root, "Disk", "Data", bundleID)}
 			if home, err := env.HomeDir(); err == nil {
 				support := filepath.Join(home, "Library", "Application Support", "Playdate Simulator")
 				out = append(out,
@@ -83,15 +109,15 @@ func darwinLayout() layout {
 					filepath.Join(support, bundleID),
 				)
 			}
-			return append(out, filepath.Join(root, "Disk", "Data", bundleID))
+			return out
 		},
 
 		searchRoots: func(env Env, root string) []string {
-			var out []string
+			out := []string{filepath.Join(root, "Disk", "Data")}
 			if home, err := env.HomeDir(); err == nil {
 				out = append(out, filepath.Join(home, "Library", "Application Support", "Playdate Simulator"))
 			}
-			return append(out, filepath.Join(root, "Disk", "Data"))
+			return out
 		},
 	}
 }

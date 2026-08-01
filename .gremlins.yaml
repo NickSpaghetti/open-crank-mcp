@@ -15,6 +15,10 @@ unleash:
   threshold:
     efficacy: 90
     mutant-coverage: 90
+  # exclude-files entries are REGEXPS, and unanchored ones at that, matched
+  # against each file's path relative to the run directory. Not globs. A "**" in
+  # here is a parse error, and a bare "main.go" silently matches every main.go in
+  # the tree. Anchor with ^ unless a substring match is what you want.
   exclude-files:
     # OS-level process orchestration (Xvfb, ldd, the real PlaydateSimulator
     # binary). Not meaningfully unit-testable without the full simulator
@@ -38,8 +42,9 @@ unleash:
     # confirming every tool's schema is valid.
     #
     # Every main.go below is listed by full path on purpose. This entry used to
-    # read just "main.go", which gremlins matches by basename, so it was also
-    # silently excluding cmd/shared-load/main.go and cmd/smoke-check/main.go.
+    # read just "main.go", and because these patterns are unanchored regexps that
+    # matched every main.go in the tree, silently excluding
+    # cmd/shared-load/main.go and cmd/smoke-check/main.go as well.
     # The score it produced was therefore better than the config actually asked
     # for. Full paths mean each exclusion has to be argued for on its own.
     - "cmd/open-crank-mcp/main.go"

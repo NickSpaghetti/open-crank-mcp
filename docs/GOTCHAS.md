@@ -287,6 +287,20 @@ simply nothing arriving on that pipe to capture, for Lua console content,
 ever - a real, permanent platform limitation to route around, not a
 transient bug to wait out.
 
+### Confirmed on macOS too
+
+Re-checked on a real macOS install (SDK 3.1.1, not a container): a game whose
+Lua called `print()` was launched straight from a shell with stdout redirected to
+a file, and the file was empty. Zero occurrences, no output at all.
+
+So this is not a Linux quirk or a container artifact. The Simulator withholds Lua
+console output from the process's real stdout on both platforms, and
+`get_game_logs` is required on both rather than being a workaround for one. The
+procedure and its raw output are in `docs/NATIVE-PROBE.md`.
+
+Windows is still unchecked. Windows-native is unsupported (see
+`docs/ROADMAP.md`), so nothing depends on the answer.
+
 ### The fix: `get_game_logs` + `mcp.run()`
 
 Routes around the console entirely using the same kind of file-based

@@ -24,7 +24,11 @@ const searchDepth = 3
 
 // searchNodeBudget bounds it again, by node count, so a search root that turns
 // out to be enormous degrades into "gave up" rather than "hung".
-const searchNodeBudget = 4000
+//
+// A var rather than a const so a test can shrink it and prove the budget
+// actually stops the walk. Building a 4000-entry filesystem to assert that would
+// be slow and would test the number rather than the behaviour.
+var searchNodeBudget = 4000
 
 // DataDirCandidates lists the plausible per-bundle data directories for this
 // platform, most likely first. Exported so a caller can report what was
