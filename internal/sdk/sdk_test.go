@@ -371,3 +371,28 @@ func TestDescribeOmitsCandidateListWhenThereIsOnlyOne(t *testing.T) {
 		t.Errorf("Describe() lists a candidate section for a single candidate:\n%s", got)
 	}
 }
+
+// A candidate that is absent and one that exists but is incomplete are different
+// problems with different fixes, so the diagnostic distinguishes them.
+func TestResolveDistinguishesAbsentFromIncomplete(t *testing.T) {
+	// Present, but with no Simulator in it.
+	files := map[string]string{"/opt/incomplete/bin/pdc": "pdc"}
+	_, err := resolveWith(testEnv("/home/u", files,
+		map[string]string{EnvVarSDKPath: "/opt/incomplete"}), linuxLayout())
+	if err == nil {
+		t.Fatal("resolveWith accepted a directory with no Simulator")
+	}
+	if !strings.Contains(err.Error(), "no Simulator executable") {
+		t.Errorf("an incomplete SDK is not reported as such: %v", err)
+	}
+
+	// Absent entirely.
+	_, err = resolveWith(testEnv("/home/u", nil,
+		map[string]string{EnvVarSDKPath: "/opt/nothing-here"}), linuxLayout())
+	if err == nil {
+		t.Fatal("resolveWith accepted a path that does not exist")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("a missing directory is not reported as missing: %v", err)
+	}
+}

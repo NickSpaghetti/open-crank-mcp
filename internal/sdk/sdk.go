@@ -177,6 +177,15 @@ func configSDKRoot(env Env, tried *[]string) string {
 // their paths. A directory that exists but has no Simulator in it is not an SDK,
 // and saying so here beats a confusing failure at launch time.
 func validate(env Env, lay layout, root, source string, tried *[]string) (Paths, bool) {
+	// "not there" and "there but not an SDK" send a person looking in different
+	// places, so they are reported differently. Saying "no Simulator executable"
+	// about a directory that does not exist invites someone to go looking inside
+	// it.
+	if !isDir(env, root) {
+		*tried = append(*tried, fmt.Sprintf("%s (does not exist)", root))
+		return Paths{}, false
+	}
+
 	simBin, ok := lay.simulatorBin(env, root)
 	if !ok {
 		*tried = append(*tried, fmt.Sprintf("%s (no Simulator executable)", root))

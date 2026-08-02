@@ -42,6 +42,105 @@ jobs:
           go-version-file: go.mod
       - run: make go-build-cross
 
+  # Native mode: the server running against an SDK installed on the machine,
+  # with no container anywhere. Everything else here proves the containerized
+  # path; this is the only job that proves the other one.
+  #
+  # The apt line below is the authoritative list of what the Simulator needs on
+  # a bare host. The README's native requirements point at this job rather than
+  # repeating it, so the two cannot drift.
+  #
+  # Fetching the SDK onto the runner is not a new licence posture: docker-build
+  # already fetches the same archive from the same place on every run. The
+  # difference is only that it lands on the runner instead of in an image layer.
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # Taken from the Dockerfile's list, minus the VNC and audio-streaming
+      # extras that only the shared profile needs. xvfb because a GitHub runner
+      # has no display; cmake and build-essential because a C game builds
+      # through the SDK's CMake support.
+      - name: install what the Simulator needs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0 libgtk-3-0 \
+            libnotify4 libnss3 libxss1 libxtst6 at-spi2-core libsecret-1-0 \
+            libpulse0 xvfb cmake build-essential
+
+      # Extracted to the default location internal/sdk looks in, deliberately.
+      # Setting PLAYDATE_SDK_PATH would make this job prove only that an
+      # environment variable works, which the container already proves. Landing
+      # it where a person's installer would put it exercises the detection this
+      # checkpoint exists for.
+      - name: install the Playdate SDK
+        run: |
+          curl -fsSL "https://download.panic.com/playdate_sdk/Linux/PlaydateSDK-${PLAYDATE_SDK_VERSION}.tar.gz" \
+            -o /tmp/playdate-sdk.tar.gz
+          mkdir -p "$HOME/PlaydateSDK"
+          tar -xzf /tmp/playdate-sdk.tar.gz --strip-components=1 -C "$HOME/PlaydateSDK"
+        env:
+          PLAYDATE_SDK_VERSION: '3.1.1'
+
+      # Fails loudly if detection found nothing, and prints which source won.
+      # First because everything after it depends on the answer, and because a
+      # detection regression is the failure this job most needs to catch.
+      - run: make sdk-path
+
+      - run: make go-build
+
+      # No xvfb-run wrapper. Both of these start their own Xvfb already
+      # (cmd/smoke-check/display_linux.go and internal/contracttest's own
+      # helper), so wrapping them would nest a second server and could collide
+      # on a display number. The xvfb *package* is still required above, because
+      # that is where the binary they launch comes from.
+      - run: make smoke-check-native
+      - run: make sdk-contract-check-native
+
+  # macOS, advisory. The platform with the real native user story, and the one
+  # nobody here can debug locally, so it reports without blocking.
+  #
+  # No SDK, and therefore no Simulator: the macOS SDK ships as an installer
+  # rather than the archive the Linux job untars, so a runner cannot provision
+  # one non-interactively. What is left still covers the things only a Mac can
+  # cover, and they are not small:
+  #
+  #   - internal/harness runs against kqueue instead of inotify. fsnotify
+  #     abstracts them, but the semantics differ, and every timing assumption in
+  #     that package was formed on Linux.
+  #   - internal/simulator's proc_unix.go runs on Darwin's process handling.
+  #   - the darwin path layout compiles and is exercised natively rather than
+  #     cross-compiled.
+  #
+  # If Panic ever publishes a macOS archive, the SDK and Simulator steps from
+  # the native job above drop straight in and this can be promoted.
+  native-macos:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make go-build
+      - run: make go-test
+      # Expected to fail on a machine with no SDK, and that is the assertion:
+      # detection has to report the failure rather than crash or hang, and has
+      # to name the paths it checked.
+      - name: sdk-path reports a missing SDK cleanly
+        run: |
+          if make sdk-path; then
+            echo "sdk-path found an SDK on a runner that has none"; exit 1
+          fi
+          make sdk-path 2>&1 | grep -q "PlaydateSDK" || {
+            echo "the failure message does not name the paths it checked"; exit 1
+          }
+
   test-c-harness:
     runs-on: ubuntu-latest
     steps:
@@ -58,6 +157,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # A filter that names a path which no longer exists matches nothing, and
+      # the job goes green having tested nothing. Nothing else notices, because
+      # a skipped step and a passing step look identical from outside. This
+      # fails the job instead.
+      - name: paths-filter globs still resolve
+        run: |
+          missing=0
+          for p in c-harness lua internal/harness internal/simulator internal/build internal/screenshot internal/contracttest; do
+            [ -e "$p" ] || { echo "paths-filter references a missing path: $p"; missing=1; }
+          done
+          exit $missing
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -82,15 +192,29 @@ jobs:
       - uses: actions/checkout@v7
       # Pure awk and bash, so this runs whether or not anything else does.
       - run: make test-shared-unit
+      # A filter that names a path which no longer exists matches nothing, and
+      # the job goes green having tested nothing. Nothing else notices, because
+      # a skipped step and a passing step look identical from outside. This
+      # fails the job instead.
+      - name: paths-filter globs still resolve
+        run: |
+          missing=0
+          for p in scripts tests/browser docker-compose.yml Dockerfile; do
+            [ -e "$p" ] || { echo "paths-filter references a missing path: $p"; missing=1; }
+          done
+          exit $missing
       - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
             shared:
-              - 'scripts/run-vnc.sh'
-              - 'scripts/shared-lib.sh'
-              - 'scripts/find-volume-slider.awk'
-              - 'scripts/shared-check.sh'
+              # scripts/** rather than four named files. Five of the six files
+              # in there are this stack, so a change to the sixth firing this
+              # leg is a cheap false positive - whereas renaming one of the four
+              # and forgetting to update this list would silently stop the leg
+              # firing, and the check would stay green while testing nothing.
+              # That nearly happened when byos was renamed to shared.
+              - 'scripts/**'
               - 'tests/browser/**'
               - 'docker-compose.yml'
               - 'Dockerfile'
