@@ -2,9 +2,15 @@
 
 ## Run this, and nothing else
 
-**macOS is done. Nothing outstanding there.** Parts 1 and 3 between them
-confirmed every value, and `internal/sdk` has been corrected to match. The raw
-output is kept below as the evidence.
+**macOS is done except for one row.** Parts 1 and 3 between them confirmed every
+path value, and `internal/sdk` has been corrected to match. The raw output is kept
+below as the evidence.
+
+The exception is whether Lua `print()` reaches real stdout. That was recorded as
+answered and is not: the probe cannot tell a withheld console apart from a
+buffered one, and its own empty capture is better explained by buffering. See the
+Status section. It blocks nothing, because the answer either way leaves
+`get_game_logs` in place.
 
 Windows is done too. Its values are corrected in `internal/sdk`, and one of its
 answers settled the scope question permanently: the SDK ships as an interactive
@@ -14,7 +20,8 @@ Windows-native could never get the per-PR verification the other platforms have.
 That turns "unsupported for now" into "unsupported". Recorded in
 `docs/ROADMAP.md`.
 
-Nothing on this page is outstanding.
+One thing on this page is outstanding: the Lua-stdout row for macOS, described
+under Status. Everything else is settled.
 
 ### What Windows changed
 
@@ -66,7 +73,7 @@ SDK 3.1.1 install, and every one matched what `internal/sdk` already guessed:
 | Simulator executable | `.../Contents/MacOS/Playdate Simulator` | yes |
 | `pdc` | `bin/pdc`, no extension | yes |
 | Sandboxed data directory | `<sdk>/Disk/Data/<bundleID>` | **no, and it mattered** |
-| Lua `print()` on real stdout | never, same as Linux | yes |
+| Lua `print()` on real stdout | **not answered, see below** | n/a |
 
 The data directory is the interesting one. macOS convention says an app keeps
 that kind of state under `~/Library/Application Support`, so the original guess
@@ -76,11 +83,48 @@ whatsoever appeared under Application Support or Containers. Reasoning from
 convention had the right answer listed last. The candidate order is now corrected
 and pinned by a test.
 
-The `print()` result settles a question `docs/GOTCHAS.md` could only answer for
-Linux. The count was zero and the captured output was completely empty, so the
-Simulator withholds Lua console output from real stdout on macOS as well, and
-`get_game_logs` is necessary on both platforms rather than being a Linux
-workaround.
+The `print()` result was read as settling a question `docs/GOTCHAS.md` could only
+answer for Linux. That reading is withdrawn. The measurement is real. What it was
+taken to mean is not supported by it.
+
+The reasoning was: the count was zero and the captured output was completely
+empty, so the Simulator withholds Lua console output from real stdout on macOS as
+well. The empty output is what breaks that. If the console were withheld and
+stdout otherwise worked, the run would still have captured the Simulator's own
+native diagnostics, the `Loading:`, `SDK:`, `Release:` and `CMD:` lines it prints
+at startup. Nothing came back at all. A stdout carrying nothing whatsoever is not
+evidence about one channel on it.
+
+What does explain it was measured on Linux afterwards and is recorded in
+`docs/GOTCHAS.md`: stdout is block-buffered at around 4KB, and the Simulator is
+stopped with `kill -9`, which never flushes. The fixture prints one short line.
+Given those two facts an empty capture is exactly what you get on any platform,
+whatever the console does. The same probe shape on Linux returns 223 bytes of GTK
+warning with no `Loading:` line, while a game printing 300 lines returns all of
+them.
+
+So this row is unanswered, and the probe as written cannot answer it. It cannot
+tell "withheld from stdout" apart from "buffered and then discarded".
+
+The conclusion it was used to support, that `get_game_logs` is necessary on both
+platforms rather than being a Linux workaround, still holds. It holds for the
+buffering reason rather than the stated one. A traceback is low-volume output read
+immediately after it happens, which is exactly the case buffering loses. This
+correction does not demote `get_game_logs`.
+
+To actually answer it, run the part 3 block twice more with these changes and
+report both:
+
+- Force line buffering: `stdbuf -oL "$SIM" ... > /tmp/sim-stdout.txt 2>&1 &`. On
+  Linux that surfaces the `Loading:` line which is otherwise missing, so you can
+  tell the instrument is working. macOS has no `stdbuf` by default. It arrives
+  with GNU coreutils from Homebrew as `gstdbuf`.
+- Or make the fixture print about 300 lines instead of one, which fills the
+  buffer and needs no `stdbuf` at all.
+
+If `Loading:` appears and `print()` still does not, the original conclusion was
+right and can go back with real evidence under it. If both appear, macOS puts
+`print()` on stdout and only buffering ever hid it.
 
 Two incidental findings worth keeping: that install has no plain
 `bin/PlaydateSimulator` beside the bundle, and `Contents/MacOS` also contains
@@ -529,7 +573,7 @@ as useful as a success.
 |---|---|---|
 | macOS 1 | done | Install location, config format, bundle name, inner executable, `pdc`. All five matched what the code guessed. |
 | macOS 2 | superseded | Nothing. Three bugs, replaced by part 3. |
-| **macOS 3** | **outstanding** | The sandboxed data directory, and the Lua-stdout question part 2 failed to answer. |
+| **macOS 3** | data directory **done**, Lua-stdout **outstanding** | Part 3 confirmed the data directory at `<sdk>/Disk/Data/<bundleID>`. It did not answer the Lua-stdout question, and the probe shape it used cannot: see Status. |
 | Windows | optional | Whether promoting Windows-native later would be cheap. Nothing is blocked on it. |
 
 ## What is already verified, and what is not

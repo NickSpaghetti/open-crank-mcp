@@ -837,6 +837,28 @@ asking "yet?" instead of being told.
   through `get_screenshot` and `press_button` to `setup`. Run `setup` from a cwd
   outside this repo and again from inside an unrelated Go module - that second
   one is the case Checkpoint 7 fixed.
+
+  Where that stands, so the unticked box reads as a fact rather than an
+  oversight. The code is complete and the per-OS logic is genuinely covered. The
+  `fstest` suite passes under `go-build-cross`, and the layouts are named
+  `linux_layout.go`/`macos_layout.go`/`windows_layout.go` rather than with GOOS
+  suffixes, so all three compile and are exercised on every platform. That naming
+  is load-bearing and was a real bug once: with `paths_darwin.go`-style names the
+  package compiled on no platform at all and the whole test-macOS-from-Linux
+  argument was void.
+
+  The `setup`-from-a-foreign-cwd clause is verified. With no SDK on the machine,
+  `setup` run with cwd `/tmp`, and again with cwd inside an unrelated Go module,
+  both wrote a full 26KB stamped harness into the target game. That is the
+  Checkpoint 7 bug and it stays fixed. It is checkable without an SDK because the
+  server now serves even when resolution fails, which is deliberate.
+
+  What is not verified, and what keeps this unticked: nothing has run against a
+  real host SDK. There is no SDK on this machine, so `make smoke-check-native`,
+  `make sdk-contract-check-native` and the end-to-end MCP client run have not
+  happened. Every macOS and Windows path value comes from a probe on a real
+  install (`docs/NATIVE-PROBE.md`), not from this project running there.
+  Installing an SDK here and running those three is the whole remaining cost.
 - [ ] **Checkpoint 9**: CI for native mode. One `native` job installing the
   Simulator's shared libraries and the SDK directly on the runner, then building
   and running the native targets. CI already fetches the SDK from Panic for
@@ -861,6 +883,17 @@ asking "yet?" instead of being told.
   Add `native` to `main`'s required checks once the ubuntu leg is green. Anything
   promoted later has to keep the always-run-the-job, conditionally-run-the-step
   shape, for the reason recorded under **Scripts rewrite** above.
+
+  Where that stands. Everything in this checkpoint that lives in the repo is
+  done and committed: the `native` job on ubuntu running both native targets,
+  the advisory `native-macos` leg under `continue-on-error`, no Windows leg, no
+  matrixing of the existing jobs, the `scripts/**` glob with a comment naming the
+  rename that nearly broke it, the path-existence assertions on both filtered
+  jobs, and the `weekly.yml` comment explaining why it stays container-only.
+
+  The one thing left is not a code change: adding `native` to `main`'s required
+  checks, which is a branch-protection setting and has to wait for the ubuntu leg
+  to go green on a real run. That is why this stays unticked.
 - [ ] **Checkpoint 10**: Documentation for two modes. The README currently
   interleaves *how the SDK runs* with *which client you configure*, which is why
   the connecting section repeats near-identical blocks. Separating those axes
