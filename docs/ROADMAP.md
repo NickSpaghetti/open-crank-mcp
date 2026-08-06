@@ -330,9 +330,23 @@ launch argument is free, not new plumbing.
 
 **Everything builds and runs inside Docker, not on the bare host.** This
 solves a real blocker: `PlaydateSimulator` needs
-`libwebkit2gtk-4.1`/`libjavascriptcoregtk-4.1`, which aren't packaged on
-Arch outside the AUR. The Debian/Ubuntu-based container sidesteps that
-entirely. Xvfb makes the Simulator run fully headless by default.
+`libwebkit2gtk-4.1`/`libjavascriptcoregtk-4.1`, and the Debian/Ubuntu-based
+container has them.
+
+Superseded in part, and worth correcting rather than leaving to mislead. This
+originally said those libraries "aren't packaged on Arch outside the AUR". They
+are: `webkit2gtk-4.1` is in Arch's `extra`, and it provides both sonames. With it
+installed, every native target passes on the Arch machine this was written on -
+see Checkpoint 8. The dependency itself is real and unavoidable, since both
+libraries are in the binary's `DT_NEEDED` and the loader refuses to start the
+process without them (exit 127, before any of Panic's code runs), but the
+packaging obstacle was overstated.
+
+Docker still stays the default, on the reasons that actually hold: it is the only
+path where the SDK version is pinned and reproducible (`PLAYDATE_SDK_VERSION` is a
+build arg, whereas a native install is whatever the developer installed), it is
+the only path CI exercises end to end on every PR, and it needs nothing installed
+on the host at all. Xvfb makes the Simulator run fully headless by default.
 Screenshots come from each harness's own SDK-provided capture (PNG for
 Lua, raw framebuffer for C), not a window capture, so headless mode is
 always enough. Audio uses SDL2's `dummy` driver, since nothing consumes
@@ -784,7 +798,7 @@ asking "yet?" instead of being told.
   for. Every exclusion is now a full path with its own justification, which puts
   coverage back at 95.8% honestly. Splitting `cmd/smoke-check` also moved code
   out from under an existing exclusion, and those files are listed too.
-- [ ] **Checkpoint 8**: Native mode. The same binary running against a Playdate
+- [x] **Checkpoint 8**: Native mode. The same binary running against a Playdate
   SDK the developer installed themselves, no Docker. This is the mode "bring your own
   simulator" always described, though the phrase stays prose only: every
   identifier says `native`, so the retired name stays retired.
@@ -838,28 +852,52 @@ asking "yet?" instead of being told.
   outside this repo and again from inside an unrelated Go module - that second
   one is the case Checkpoint 7 fixed.
 
-  Where that stands, so the unticked box reads as a fact rather than an
-  oversight. The code is complete and the per-OS logic is genuinely covered. The
-  `fstest` suite passes under `go-build-cross`, and the layouts are named
-  `linux_layout.go`/`macos_layout.go`/`windows_layout.go` rather than with GOOS
-  suffixes, so all three compile and are exercised on every platform. That naming
-  is load-bearing and was a real bug once: with `paths_darwin.go`-style names the
-  package compiled on no platform at all and the whole test-macOS-from-Linux
-  argument was void.
+  The layouts are named `linux_layout.go`/`macos_layout.go`/`windows_layout.go`
+  rather than with GOOS suffixes, and that naming is load-bearing rather than a
+  style choice. Go applies an implicit build constraint to any file whose name
+  ends in `_linux.go`, `_darwin.go` or `_windows.go`, with or without a
+  `//go:build` line, so the first attempt at this compiled on no platform at all
+  and the whole argument for testing the macOS layout from Linux was void.
+  Renaming them back would silently stop the cross-platform tests compiling the
+  code they claim to test.
 
-  The `setup`-from-a-foreign-cwd clause is verified. With no SDK on the machine,
-  `setup` run with cwd `/tmp`, and again with cwd inside an unrelated Go module,
-  both wrote a full 26KB stamped harness into the target game. That is the
-  Checkpoint 7 bug and it stays fixed. It is checkable without an SDK because the
-  server now serves even when resolution fails, which is deliberate.
+  Verified against a real SDK on Linux, which is what this box could not do until
+  `webkit2gtk-4.1` went in. Every step below ran with no container anywhere:
 
-  What is not verified, and what keeps this unticked: nothing has run against a
-  real host SDK. There is no SDK on this machine, so `make smoke-check-native`,
-  `make sdk-contract-check-native` and the end-to-end MCP client run have not
-  happened. Every macOS and Windows path value comes from a probe on a real
-  install (`docs/NATIVE-PROBE.md`), not from this project running there.
-  Installing an SDK here and running those three is the whole remaining cost.
-- [ ] **Checkpoint 9**: CI for native mode. One `native` job installing the
+  - `make sdk-path` resolved `~/PlaydateSDK` via *default install location*, with
+    no `PLAYDATE_SDK_PATH` set. That exercises the fallback chain rather than the
+    env var the container already proves.
+  - `make smoke-check-native` passed: libraries resolve, `pdc` reports 3.1.1, and
+    the Simulator launched under Xvfb and stayed up without logging an error.
+  - `make sdk-contract-check-native` passed `TestSDKContract` and
+    `TestSetupContract`, C and Lua both, driving real games through a real
+    Simulator.
+  - A real MCP client over stdio ran `setup`, `build_game`, `launch_simulator`,
+    `get_status`, `get_screenshot`, `press_button`, `set_crank`, `get_game_state`,
+    `get_game_logs` and `stop_simulator` against a real game.
+
+  Three things only a real SDK could establish. `launch_simulator` reported
+  `data_dir_source: observed`, so the post-launch probe found the sandboxed
+  directory rather than falling back to the assumption - the mechanism that
+  replaced the hardcoded guess works against a real install. `setup` run with cwd
+  `/tmp`, outside any Go module, wrote the harness correctly, which is the
+  Checkpoint 7 `go:embed` fix confirmed where it used to fail. And the input
+  overrides genuinely reach the game rather than merely returning success:
+  `a_down_count` went to 1 after `press_button`, and `crank_angle` read back 123
+  with `crank_docked` false after `set_crank`.
+
+  One usability edge found by getting it wrong. `set_crank` with no `duration_ms`
+  returns success and has no observable effect: the override expires before the
+  next frame, so a following `get_game_state` still reads the real crank. Fine for
+  `press_button`, which reads as a tap, but surprising for the crank, which reads
+  as a position. Worth either a default or a word in the tool description.
+
+  Still unverified, and deliberately: no macOS or Windows *run*. Every path value
+  for those platforms comes from a probe on a real install
+  (`docs/NATIVE-PROBE.md`) plus `fstest` coverage of the logic, not from this
+  project executing there. Checkpoint 11 is where that changes for macOS. Windows
+  never will - see the note under this checkpoint's platform scope.
+- [x] **Checkpoint 9**: CI for native mode. One `native` job installing the
   Simulator's shared libraries and the SDK directly on the runner, then building
   and running the native targets. CI already fetches the SDK from Panic for
   `docker-build`, so this is not a new licence posture. The job doubles as the
@@ -884,16 +922,34 @@ asking "yet?" instead of being told.
   promoted later has to keep the always-run-the-job, conditionally-run-the-step
   shape, for the reason recorded under **Scripts rewrite** above.
 
-  Where that stands. Everything in this checkpoint that lives in the repo is
-  done and committed: the `native` job on ubuntu running both native targets,
-  the advisory `native-macos` leg under `continue-on-error`, no Windows leg, no
-  matrixing of the existing jobs, the `scripts/**` glob with a comment naming the
-  rename that nearly broke it, the path-existence assertions on both filtered
-  jobs, and the `weekly.yml` comment explaining why it stays container-only.
+  The ubuntu `native` job was validated by running its steps by hand on this
+  machine rather than by pushing and watching. Every library in its apt line
+  resolves for the real Simulator binary (`ldd` clean, 21 of 21), the SDK fetch
+  and extract to `~/PlaydateSDK` is byte-for-byte what the job does, and
+  `make sdk-path`, `make go-build`, `make smoke-check-native` and
+  `make sdk-contract-check-native` all pass in that state. See Checkpoint 8.
 
-  The one thing left is not a code change: adding `native` to `main`'s required
-  checks, which is a branch-protection setting and has to wait for the ubuntu leg
-  to go green on a real run. That is why this stays unticked.
+  Doing it that way caught two bugs that would otherwise have shipped as red
+  builds. `cmd/smoke-check` still read `PLAYDATE_SDK_PATH` from the environment
+  and built its paths by string concatenation - converted everywhere else and
+  missed here - so `make smoke-check-native` could not work at all, which is the
+  one thing it exists for. And the job originally wrapped both native targets in
+  `xvfb-run`, but each already starts its own Xvfb, so that would have nested a
+  second server and could have collided on a display number. Neither was findable
+  by reading.
+
+  The path-existence guard was checked both ways: it passes against the real tree
+  and fails against a deliberately bogus path. Worth doing, because its whole
+  purpose is catching the case where a stale glob matches nothing and the job goes
+  green having tested nothing.
+
+  Two things this checkpoint cannot close by itself, both stated rather than
+  quietly dropped. The advisory `native-macos` leg has never run - nothing here is
+  a Mac - so it is written from what a macOS runner provides and will be judged on
+  its first real run; that is exactly why it is `continue-on-error`. And adding
+  `native` to `main`'s required checks is a branch-protection setting, not a code
+  change, so it waits for a push and a green run. The tick here means the repo
+  work is done and verified, not that GitHub has agreed yet.
 - [ ] **Checkpoint 10**: Documentation for two modes. The README currently
   interleaves *how the SDK runs* with *which client you configure*, which is why
   the connecting section repeats near-identical blocks. Separating those axes
@@ -928,9 +984,9 @@ asking "yet?" instead of being told.
   Docker in the loop. This is the checkpoint that turns assumptions into either
   confirmations or bugs, so it is where the unverified macOS paths get found.
   Linux first, since it is the only platform anything here has been verified on.
-  Note that on Arch this needs the AUR WebKit packages, which is the same
-  blocker that made Docker the default in the first place. Delete Checkpoint 6's
-  tombstone targets here.
+  Note that on Arch this needs `webkit2gtk-4.1` from `extra` - one pacman
+  install, not the AUR, contrary to what the Docker decision above used to say.
+  Delete Checkpoint 6's tombstone targets here.
 - [ ] **Docs drift pass**: Unrelated to the above and safe to do at any time.
   The IPC poll interval is recorded as three different numbers in three files:
   this document says 10ms, `docs/GOTCHAS.md` records 10ms then 1ms then the

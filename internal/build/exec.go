@@ -3,11 +3,22 @@ package build
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 )
+
+// isStaleCMakeCache reports whether cmake's output is the "this cache was
+// generated somewhere else" complaint, as opposed to any other configure
+// failure. Matched on cmake's own wording, which has been stable for years, and
+// on both halves it prints so a single stray mention cannot trigger a delete.
+func isStaleCMakeCache(out string) bool {
+	return strings.Contains(out, "CMakeCache.txt directory") &&
+		strings.Contains(out, "is different than the directory")
+}
 
 // BuildResult is the outcome of building a game's source directory.
 type BuildResult struct {
@@ -59,10 +70,7 @@ func buildC(sourceDir string, paths sdk.Paths) (BuildResult, error) {
 	}
 
 	var output bytes.Buffer
-	for _, args := range [][]string{
-		{"-S", ".", "-B", "build"},
-		{"--build", "build"},
-	} {
+	runCMake := func(args []string) error {
 		cmd := exec.Command("cmake", args...)
 		cmd.Dir = sourceDir
 		// The game's own CMakeLists.txt reads $ENV{PLAYDATE_SDK_PATH}. Without
@@ -74,9 +82,39 @@ func buildC(sourceDir string, paths sdk.Paths) (BuildResult, error) {
 		cmd.Env = paths.BuildEnv()
 		cmd.Stdout = &output
 		cmd.Stderr = &output
-		if err := cmd.Run(); err != nil {
-			return BuildResult{Output: output.String()}, fmt.Errorf("cmake %v: %w", args, err)
+		return cmd.Run()
+	}
+
+	configure := []string{"-S", ".", "-B", "build"}
+	if err := runCMake(configure); err != nil {
+		// A CMakeCache.txt records the absolute paths it was generated with, and
+		// cmake refuses to reuse one generated somewhere else. That is not an
+		// exotic case here: this project deliberately supports building the same
+		// game directory two ways, and the container sees it at /workspace while a
+		// native run sees it at its real path. Build in one mode, then the other,
+		// and the second fails on a cache the user never knew existed.
+		//
+		// So: on that specific failure, discard the stale cache and configure
+		// again. Scoped to the mismatch message rather than any cmake error, since
+		// deleting a build directory is not something to do on a compile error, and
+		// reported in the output rather than silently.
+		if !isStaleCMakeCache(output.String()) {
+			return BuildResult{Output: output.String()}, fmt.Errorf("cmake %v: %w", configure, err)
 		}
+		buildDir := filepath.Join(sourceDir, "build")
+		fmt.Fprintf(&output, "\n[open-crank-mcp] cmake cache in %s was generated for a different "+
+			"path, most likely by building this game in the other mode. Removing it and "+
+			"reconfiguring.\n", buildDir)
+		if rmErr := os.RemoveAll(buildDir); rmErr != nil {
+			return BuildResult{Output: output.String()}, fmt.Errorf("removing stale cmake cache: %w", rmErr)
+		}
+		if err := runCMake(configure); err != nil {
+			return BuildResult{Output: output.String()}, fmt.Errorf("cmake %v after clearing a stale cache: %w", configure, err)
+		}
+	}
+
+	if err := runCMake([]string{"--build", "build"}); err != nil {
+		return BuildResult{Output: output.String()}, fmt.Errorf("cmake --build: %w", err)
 	}
 
 	pdxPath, err := locatePDX(sourceDir)

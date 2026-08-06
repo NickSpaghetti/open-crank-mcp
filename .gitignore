@@ -40,6 +40,20 @@ go.work.sum
 # clean `git status`. See the README's migration note.
 /.byos-data/
 
+# Artifacts the contract tests leave in the fixtures.
+#
+# internal/contracttest builds lua/test-fixture and c-harness/test/fixture-game
+# in place rather than in a copy, and runs `setup` against them, which vendors a
+# harness into each. Inside the container that touched a copy of the repo baked
+# into the image, so it was invisible. `make sdk-contract-check-native` runs in
+# the real working tree, so it is not.
+#
+# Generated either way, and never worth committing.
+/c-harness/test/fixture-game/build/
+/c-harness/test/fixture-game/src/mcp_harness.c
+/c-harness/test/fixture-game/src/mcp_harness.h
+/lua/test-fixture/Source/mcp_harness.lua
+
 # Editor/IDE
 # .vscode/
 
