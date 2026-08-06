@@ -223,25 +223,3 @@ test:
 	$(MAKE) smoke-check
 	$(MAKE) sdk-contract-check
 	$(MAKE) test-shared-browser
-
-# Tombstones for the pre-rename target names. The profile was called `byos`,
-# for "bring your own simulator", through Checkpoint 4. It runs its own
-# Simulator and shares it, which is not that, so it is `shared` now.
-#
-# These exist because a doc only helps someone who reads it. Muscle memory and
-# any wrapper script of your own get a pointer here instead of make's own "No
-# rule to make target", which says nothing about where the target went. One
-# rule covers all seven: every old name maps to its new one by substitution.
-#
-# Delete these at Checkpoint 11, per docs/ROADMAP.md. They are a migration aid,
-# not a permanent fixture.
-RENAMED_TARGETS = up-byos byos-load byos-watch byos-check test-byos-unit test-byos-types test-byos-browser
-# Declared here rather than in the .PHONY at the top of this file: make expands
-# a rule's prerequisites as it reads them, so a variable defined further down
-# would expand to nothing there.
-.PHONY: $(RENAMED_TARGETS)
-
-$(RENAMED_TARGETS):
-	@echo "make $@ is now make $(subst byos,shared,$@)."
-	@echo "The byos profile was renamed to shared. See \"If you used the byos profile\" in README.md."
-	@exit 1

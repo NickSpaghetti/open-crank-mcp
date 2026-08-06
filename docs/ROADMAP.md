@@ -1032,7 +1032,7 @@ asking "yet?" instead of being told.
   way, and the practical conclusion unchanged. Two documents agreeing on a wrong
   reading is worse than one being silent, so it is worth stating that the file now
   contradicted itself for several days.
-- [ ] **Checkpoint 11**: End-to-end verification, native. The same two example
+- [x] **Checkpoint 11**: End-to-end verification, native. The same two example
   games as Checkpoint 5, every tool confirmed against real gameplay, with no
   Docker in the loop. This is the checkpoint that turns assumptions into either
   confirmations or bugs, so it is where the unverified macOS paths get found.
@@ -1040,6 +1040,39 @@ asking "yet?" instead of being told.
   Note that on Arch this needs `webkit2gtk-4.1` from `extra` - one pacman
   install, not the AUR, contrary to what the Docker decision above used to say.
   Delete Checkpoint 6's tombstone targets here.
+
+  Done on Linux, against two of the SDK's own examples rather than this repo's
+  fixtures. That distinction was the point: the fixtures were written for the
+  harness, and these were not. `Asheteroids` is a five-file Lua game;
+  `Sprite Game` is C that reads input in code Panic wrote years before this
+  project existed.
+
+  Both went through every tool - `setup`, `build_game`, `launch_simulator`,
+  `get_status`, `get_screenshot`, `press_button`, `set_crank`, `get_game_state`,
+  `get_game_logs`, `stop_simulator` - with `harness_reachable: true` and
+  `data_dir_source: observed` on each.
+
+  The C result is the one worth reading, because `setup` had to edit a stranger's
+  code and got it right in a way that is easy to get wrong. It rewrote both
+  `pd->system->getButtonState` calls in `game.c` to `mcp_get_button_state`, added
+  the include and `mcp_harness_init` to `main.c`, added `src/mcp_harness.c` to
+  *both* the `add_executable` and `add_library` target lists in `CMakeLists.txt`,
+  and added `include_directories(src)` because this project keeps its sources at
+  the root rather than under `src/`. Then the part that could most plausibly have
+  failed: `setUpdateCallback(update, NULL)` is in `main.c` while `update()` itself
+  is defined in `game.c`, and the per-frame `mcp_harness_update` call landed
+  correctly as that function's first statement, in the other file.
+
+  One real bug found, which is what this checkpoint is for. `Asheteroids` ships
+  with **no `pdxinfo` at all**, and `pdc` builds it anyway, synthesising one that
+  carries `pdxversion` and `buildtime` and no `bundleID`. So `setup` and
+  `build_game` both succeeded and `launch_simulator` then failed two calls later
+  with `no bundleID found in .../pdxinfo` - accurate, and useless. Everything the
+  harness does is keyed on the bundle ID, so there is no proceeding without one;
+  the error now says that, says `pdc` does not require one which is why it
+  surfaces so late, and gives the line to add. Covered by a test built from
+  exactly what `pdc` emits. Worth knowing that the SDK's own examples are not all
+  launchable as shipped.
 - [ ] **Docs drift pass**: Unrelated to the above and safe to do at any time.
   The IPC poll interval is recorded as three different numbers in three files:
   this document says 10ms, `docs/GOTCHAS.md` records 10ms then 1ms then the

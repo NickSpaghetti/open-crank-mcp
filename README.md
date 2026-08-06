@@ -835,13 +835,13 @@ not bringing your own anything, so the name described something it never did.
 `byos` is now retired entirely rather than reused, so there is no version of
 this repo where the word means two things.
 
-Nothing carries over automatically. The old `make` targets print a pointer to
-this section and fail, but an MCP client config is just a file on your disk, so
-that one you have to edit.
+Nothing carries over automatically, and nothing warns you either: the old `make`
+targets briefly existed as tombstones pointing at this section, and were removed
+at Checkpoint 11 as planned, so they now fail the way any unknown target does.
 
 | Old | New | What you see if you don't change it |
 |---|---|---|
-| `make up-byos` | `make up-shared` | The tombstone target, pointing here |
+| `make up-byos` | `make up-shared` | `No rule to make target 'up-byos'` |
 | `make byos-load` / `byos-watch` | `make shared-load` / `shared-watch` | Same |
 | `make byos-check` | `make shared-check` | Same |
 | `make test-byos-unit` / `-types` / `-browser` | `make test-shared-*` | Same |
