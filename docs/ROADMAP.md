@@ -17,6 +17,14 @@ management, ~10ms file polling, JSON/PNG shuttling) is I/O-bound. Not chosen
 for raw throughput over C#/.NET. Chosen for the simpler distribution story
 across three OSes.
 
+Native mode is what makes this argument pay. Until it existed the cross-compilation
+and "no runtime to install" reasoning applied to a binary that ran inside a Linux
+container regardless of the host OS, which is a distribution story the container was
+already telling on its own - `GOOS`/`GOARCH` reach bought nothing. A host binary on
+Linux and macOS is the thing this language choice was made for. Also correct the
+"~10ms file polling" above: the IPC wait blocks on a filesystem notification now, and
+polls only as a bounded backstop. See `docs/GOTCHAS.md`.
+
 **Input and screenshots go through a Lua harness, not OS-level automation.**
 No documented Playdate API injects button or crank input from outside the
 Simulator process. `playdate.buttonIsPressed`, `getCrankPosition`, and
@@ -244,7 +252,10 @@ generate a mock from. Instead:
   later.
 - Runtime/behavioral, both languages, needs the real Simulator
   (`internal/contracttest`, a `go test` skipped unless `PLAYDATE_SDK_PATH`
-  is set, i.e. run inside the full simulator image, not on a plain
+  is set. The full simulator image is one way to satisfy that; a host SDK is
+  another, which is what makes `make sdk-contract-check-native` possible on a
+  developer's machine with no Docker at all. Not, as this used to say, only
+  inside the image and never on a plain
   runner): a constant matching doesn't mean
   `file->stat` still behaves the same, or that `simulator.writeToFile`
   still produces a valid PNG. Builds two minimal fixture games (one C, one
@@ -386,6 +397,14 @@ That is a Docker artifact, not a feature. A native host mode gets the same
 property for free: one host, one display, one process, nothing to attach to. The
 profile exists to give container users what native users would have by default.
 
+The same goes for the whole per-platform spot-check apparatus above. Native mode
+dissolves that problem class rather than solving it: the Simulator is an ordinary
+application on your desktop, with your window manager and your audio device.
+Nothing is bind-mounted, bridged or re-streamed, and the openbox configuration,
+the VNC workspace geometry and the framebuffer slider scan are all container
+concerns that simply do not exist there. That includes the thing the macOS bullet
+says is missing - no XQuartz, no PulseAudio-over-TCP, no browser tab.
+
 It was called `byos`, for "bring your own simulator", through Checkpoint 4. That
 name described something it never did, since it runs its own Simulator, and it
 misled its own author while reviewing this document. Renamed at Checkpoint 6.
@@ -400,7 +419,15 @@ survives as prose, where it is finally accurate.
 bundled in this repo.** The Playdate SDK License bans redistributing the
 SDK. The Dockerfile here is just source that `curl`s `download.panic.com`
 during each user's own local `docker build`. That user downloads and
-accepts Panic's license, not this project. Holds only as long as a built
+accepts Panic's license, not this project.
+
+In native mode the question is structurally absent rather than mitigated: this
+repo never fetches, extracts or ships the SDK at all. The developer installed it
+themselves under their own acceptance of Panic's licence, and the server only
+reads a path. That makes native the licence-cleanest of the two paths, though it
+changes nothing about the container path below.
+
+Holds only as long as a built
 image is never published to any registry. That would flip it into
 redistribution. See `README.md`.
 
@@ -950,7 +977,7 @@ asking "yet?" instead of being told.
   `native` to `main`'s required checks is a branch-protection setting, not a code
   change, so it waits for a push and a green run. The tick here means the repo
   work is done and verified, not that GitHub has agreed yet.
-- [ ] **Checkpoint 10**: Documentation for two modes. The README currently
+- [x] **Checkpoint 10**: Documentation for two modes. The README currently
   interleaves *how the SDK runs* with *which client you configure*, which is why
   the connecting section repeats near-identical blocks. Separating those axes
   means adding a third mode reduces the block count rather than growing it.
@@ -974,11 +1001,37 @@ asking "yet?" instead of being told.
 
   `docs/GOTCHAS.md` needs a file-level note that everything in it was found on
   containerized Linux and is nonetheless SDK behaviour that applies natively,
-  plus five inline exceptions where the platform genuinely matters. The
-  PulseAudio entry is the interesting one: it is container-specific by
-  construction, since it follows from the profiles forcing
-  `SDL_AUDIODRIVER=pulseaudio`, but the mitigation it describes is general and
-  right to keep.
+  plus inline exceptions where the platform genuinely matters. The PulseAudio
+  entry is the interesting one: it is container-specific by construction, since
+  it follows from the profiles forcing `SDL_AUDIODRIVER=pulseaudio`, but the
+  mitigation it describes is general and right to keep.
+
+  Done. The README now splits by mode wherever a claim differs and leaves it
+  alone wherever it does not, which mattered more than the restructure: several
+  statements had become wrong rather than merely incomplete. Docker was listed as
+  the only requirement. `### Linux (native X11/XWayland)` titled a section about a
+  container reaching a host X11 socket, which is the one heading a native user
+  would go to first. One paragraph argued against a native path on macOS on
+  grounds that only apply to reaching into a container. `## Local development`
+  claimed the only host requirements were Docker and Go.
+
+  The connecting section was the structural fix. It had a config block per client
+  with the container command inlined into each, so adding a mode would have meant
+  a block per mode per client. Splitting it into "the command" (three, by mode)
+  and "the config shape" (three, by client, with placeholders) means the third
+  mode *reduced* the block count.
+
+  One correction found while re-scoping `docs/GOTCHAS.md`, and it was mine.
+  A "Confirmed on macOS too" section asserted the Simulator withholds Lua console
+  output from stdout on macOS as well - directly contradicting the same file's
+  later, better measurement that `print()` does reach stdout and is merely
+  block-buffered. The macOS probe returned a completely empty capture, missing even
+  the Simulator's own native startup lines, which is a stdout that was never
+  flushed rather than evidence about one channel on it. Rewritten to say what the
+  measurement supports: consistent with buffering, no independent evidence either
+  way, and the practical conclusion unchanged. Two documents agreeing on a wrong
+  reading is worse than one being silent, so it is worth stating that the file now
+  contradicted itself for several days.
 - [ ] **Checkpoint 11**: End-to-end verification, native. The same two example
   games as Checkpoint 5, every tool confirmed against real gameplay, with no
   Docker in the loop. This is the checkpoint that turns assumptions into either
