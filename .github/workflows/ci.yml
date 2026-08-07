@@ -127,6 +127,49 @@ jobs:
       #
       # Whichever it is, the tree below distinguishes them in one run instead of
       # a push per guess.
+  native-macos:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make go-build
+      - run: make go-test
+
+      # Pinned rather than PlaydateSDK-latest.zip, so this job fails when the
+      # SDK changes under it instead of drifting silently. weekly.yml is where
+      # `latest` belongs.
+      - name: install the Playdate SDK
+        run: |
+          curl -fsSL "https://download.panic.com/playdate_sdk/PlaydateSDK-${PLAYDATE_SDK_VERSION}.zip" \
+            -o /tmp/sdk.zip
+          unzip -q /tmp/sdk.zip -d /tmp/sdk
+          sudo installer -pkg /tmp/sdk/PlaydateSDK.pkg -target /
+        env:
+          PLAYDATE_SDK_VERSION: '3.1.1'
+
+      # Printed before anything depends on it. If the .pkg puts the SDK
+      # somewhere other than ~/Developer/PlaydateSDK, this is where that shows
+      # up, and the candidate list says exactly where detection looked.
+      - name: where did it land
+        run: |
+          ls -la "$HOME/Developer" 2>/dev/null || echo "no ~/Developer"
+          make sdk-path
+
+      # SDL_AUDIODRIVER=dummy for the same reason the Linux native job sets it:
+      # the Simulator treats SDL initialisation as fatal and a runner has no
+      # audio device. Whether a macOS runner can open a window at all is the
+      # other open question, and the one most likely to make this leg red.
+      - run: make smoke-check-native
+        env:
+          SDL_AUDIODRIVER: dummy
+      - run: make sdk-contract-check-native
+        id: contract
+        env:
+          SDL_AUDIODRIVER: dummy
+
       # A dedicated experiment, not a test. The contract suite can only say "no
       # response in 5s", which does not distinguish a game that never ran from
       # one that ran slowly or wrote somewhere else. This asks the question
@@ -217,47 +260,6 @@ jobs:
   #   - internal/simulator's proc_unix.go runs on Darwin's process handling.
   #   - the darwin path layout is exercised natively rather than cross-compiled,
   #     against a real install rather than an fstest.MapFS.
-  native-macos:
-    runs-on: macos-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - run: make go-build
-      - run: make go-test
-
-      # Pinned rather than PlaydateSDK-latest.zip, so this job fails when the
-      # SDK changes under it instead of drifting silently. weekly.yml is where
-      # `latest` belongs.
-      - name: install the Playdate SDK
-        run: |
-          curl -fsSL "https://download.panic.com/playdate_sdk/PlaydateSDK-${PLAYDATE_SDK_VERSION}.zip" \
-            -o /tmp/sdk.zip
-          unzip -q /tmp/sdk.zip -d /tmp/sdk
-          sudo installer -pkg /tmp/sdk/PlaydateSDK.pkg -target /
-        env:
-          PLAYDATE_SDK_VERSION: '3.1.1'
-
-      # Printed before anything depends on it. If the .pkg puts the SDK
-      # somewhere other than ~/Developer/PlaydateSDK, this is where that shows
-      # up, and the candidate list says exactly where detection looked.
-      - name: where did it land
-        run: |
-          ls -la "$HOME/Developer" 2>/dev/null || echo "no ~/Developer"
-          make sdk-path
-
-      # SDL_AUDIODRIVER=dummy for the same reason the Linux native job sets it:
-      # the Simulator treats SDL initialisation as fatal and a runner has no
-      # audio device. Whether a macOS runner can open a window at all is the
-      # other open question, and the one most likely to make this leg red.
-      - run: make smoke-check-native
-        env:
-          SDL_AUDIODRIVER: dummy
-      - run: make sdk-contract-check-native
-        env:
-          SDL_AUDIODRIVER: dummy
 
   test-c-harness:
     runs-on: ubuntu-latest
