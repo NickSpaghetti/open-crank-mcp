@@ -1,6 +1,11 @@
 mutants:
-  # Only ever mutates the 100ms poll interval in internal/harness; any
-  # positive duration works identically, so there's nothing worth asserting.
+  # Only ever mutates the two timing constants in internal/harness, and any
+  # positive duration works identically for both, so there is nothing worth
+  # asserting. They are the 1ms bootstrap poll (used once per launch, only while
+  # the data directory does not exist yet) and the 10ms backstop re-check that
+  # runs alongside the filesystem notification. Neither is a polling loop: the
+  # wait blocks on a real notification. This comment used to say "the 100ms poll
+  # interval", which stopped being true three changes ago.
   arithmetic-base: false
 
 unleash:

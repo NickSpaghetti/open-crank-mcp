@@ -13,7 +13,7 @@ reading and writing source code blind.
 Cross-platform reach (Windows 11, macOS, Linux) through `GOOS`/`GOARCH`
 cross-compilation to small, dependency-free static binaries. No runtime to
 install on the end user's machine. The actual workload (subprocess
-management, ~10ms file polling, JSON/PNG shuttling) is I/O-bound. Not chosen
+management, file-notification waits, JSON/PNG shuttling) is I/O-bound. Not chosen
 for raw throughput over C#/.NET. Chosen for the simpler distribution story
 across three OSes.
 
@@ -21,9 +21,9 @@ Native mode is what makes this argument pay. Until it existed the cross-compilat
 and "no runtime to install" reasoning applied to a binary that ran inside a Linux
 container regardless of the host OS, which is a distribution story the container was
 already telling on its own - `GOOS`/`GOARCH` reach bought nothing. A host binary on
-Linux and macOS is the thing this language choice was made for. Also correct the
-"~10ms file polling" above: the IPC wait blocks on a filesystem notification now, and
-polls only as a bounded backstop. See `docs/GOTCHAS.md`.
+Linux and macOS is the thing this language choice was made for. The workload description above has been corrected in place: the IPC wait blocks
+on a filesystem notification, and polls only as a bounded backstop. See
+`docs/GOTCHAS.md`.
 
 **Input and screenshots go through a Lua harness, not OS-level automation.**
 No documented Playdate API injects button or crank input from outside the
@@ -681,8 +681,10 @@ asking "yet?" instead of being told.
   existing smoke-check/contracttest callers (they always stop the process
   first) but not for `get_logs` reading a still-running simulator. It's
   now backed by a mutex-guarded buffer instead, proven race-free under
-  `go test -race`. `internal/harness`'s poll interval was 100ms; tightened to
-  10ms, matching what `docs/ROADMAP.md` always said the design should be.
+  `go test -race`. `internal/harness`'s poll interval was 100ms, tightened to
+  10ms here. It went to 1ms afterwards and was then replaced outright by a
+  filesystem notification, so the number in this entry is history rather than
+  current behaviour - see `docs/GOTCHAS.md` for the sequence.
 - [x] **Shared session**: One persistent container an agent and a human both
   drive. Every profile above gives you one or the other, because an MCP client
   runs `docker compose run`, which creates a new container per connection: a
@@ -731,11 +733,34 @@ asking "yet?" instead of being told.
   anything, and `launch_simulator` checks the process is still alive shortly
   after starting it and returns the captured output if it isn't. Written up in
   `docs/GOTCHAS.md`.
-- [ ] **Checkpoint 5**: End-to-end verification, container. Build one of the
+- [x] **Checkpoint 5**: End-to-end verification, container. Build one of the
   SDK's Lua `Examples/` and one of its C `Examples/` (both with the matching
   harness wired in), run each through the containerized stack, confirm every
   tool against real gameplay for both. Independent of Checkpoints 6-11: those
   are the native-mode track and neither blocks this.
+
+  Done with `Asheteroids` (Lua) and `Sprite Game` (C), the same two as Checkpoint
+  11, so the two modes are compared on identical inputs rather than on whatever
+  each happened to reach for. Every tool passed on both, with
+  `harness_reachable: true` and `data_dir_source: observed`.
+
+  No bind mount and no `GAME_DIR`. The image already carries the SDK, so it
+  already carries its `Examples/`, and the container copies one into `/tmp` and
+  works on that. That is a better test than mounting a game from the host as well
+  as a simpler one: nothing on the host is touched, and the copy is discarded with
+  the container.
+
+  The two modes agreed on everything that matters and differed only where they
+  should. `data_dir` resolved to `/opt/playdate-sdk/Disk/Data/<bundle>` here
+  against `~/PlaydateSDK/Disk/Data/<bundle>` natively, which is the per-machine
+  resolution working rather than a hardcoded path. The C example built under GCC
+  13.3.0 in the container and 16.1.1 natively, so `setup`'s patches to Panic's own
+  code compile across two compiler generations. Same bundle IDs, same tool
+  results, same observed data directories.
+
+  Worth recording that the missing-`bundleID` problem from Checkpoint 11 is not
+  mode-specific: `Asheteroids` needs the same one-line `pdxinfo` addition here.
+  That confirms it is a property of the SDK's example, not of either stack.
 - [x] **Checkpoint 6**: Renamed the `byos` profile to `shared`. No behaviour
   change, and the point of doing it alone was that `grep -rni byos` is the whole
   review. `byos` stood for "bring your own simulator", which is not what that
@@ -1073,9 +1098,14 @@ asking "yet?" instead of being told.
   surfaces so late, and gives the line to add. Covered by a test built from
   exactly what `pdc` emits. Worth knowing that the SDK's own examples are not all
   launchable as shipped.
-- [ ] **Docs drift pass**: Unrelated to the above and safe to do at any time.
-  The IPC poll interval is recorded as three different numbers in three files:
-  this document says 10ms, `docs/GOTCHAS.md` records 10ms then 1ms then the
-  fsnotify wait that replaced polling, and `.gremlins.yaml` still says 100ms.
-  `.gremlins.yaml` also justifies two exclusions by "the full simulator Docker
-  environment", which becomes "a real SDK install, container or native".
+- [x] **Docs drift pass**: The IPC poll interval was recorded as three different
+  numbers in three files: this document said 10ms in two places, `.gremlins.yaml`
+  said 100ms, and `docs/GOTCHAS.md` traced 10ms then 1ms then the fsnotify wait
+  that replaced polling. None of them described the code, which has two constants
+  and no polling loop: a 1ms bootstrap used once per launch while the data
+  directory does not exist yet, and a 10ms backstop re-check running alongside the
+  notification.
+
+  Fixed by saying that in each place rather than by picking one number. The
+  Checkpoint 4 entry keeps its 100ms-to-10ms history, since that is what happened,
+  but now says so instead of reading as current behaviour.
