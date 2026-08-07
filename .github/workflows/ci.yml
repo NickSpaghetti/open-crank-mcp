@@ -190,6 +190,15 @@ jobs:
           echo "--- what the Simulator will read ---"
           defaults read "$BID" || echo "  (nothing written)"
 
+      # The SDK installer opens a Finder window on the install directory when it
+      # finishes, and it keeps the front. Closing it is not cosmetic: the
+      # previous run's screenshot showed the Simulator running behind it with a
+      # blank Playdate screen, and a simulator that pauses while backgrounded
+      # would produce exactly the symptoms this job has been showing.
+      - name: close the installer's Finder window
+        continue-on-error: true
+        run: osascript -e 'tell application "Finder" to close every window'
+
       - run: make smoke-check-native
         env:
           SDL_AUDIODRIVER: dummy
@@ -244,7 +253,22 @@ jobs:
           sleep 25; pkill -9 -f "Playdate Simulator" 2>/dev/null
           [ -d "$DATA/mcp" ] && echo "  RAN" || echo "  DID NOT RUN"
 
-          # 3. Is there a window server session at all for this user?
+          # 3. Frontmost. The screenshot from the previous run showed the
+          #    Simulator running with its device frame drawn and the Playdate
+          #    screen blank, behind a Finder window that the SDK installer opens
+          #    on completion. A simulator pausing its update loop while not
+          #    frontmost is ordinary, and would explain all of it: loads but does
+          #    not tick, 25s no better than 5s, `open -a` no different because
+          #    Finder still owns the front.
+          rm -rf "$DATA"; echo "=== direct exec + activate, 25s ==="
+          osascript -e 'tell application "Finder" to close every window' 2>/dev/null
+          "$SIM" /tmp/tick/probe.pdx > /tmp/tick/sim3.log 2>&1 & p3=$!
+          sleep 3
+          osascript -e 'tell application "Playdate Simulator" to activate' 2>&1 | sed 's/^/    activate: /'
+          sleep 22; kill -9 $p3 2>/dev/null
+          [ -d "$DATA/mcp" ] && echo "  RAN" || echo "  DID NOT RUN"
+
+          # 4. Is there a window server session at all for this user?
           echo "=== session context ==="
           launchctl managername 2>/dev/null || echo "  launchctl managername unavailable"
           echo "  SSH_CONNECTION=${SSH_CONNECTION:-unset}  TERM_SESSION_ID=${TERM_SESSION_ID:-unset}"
