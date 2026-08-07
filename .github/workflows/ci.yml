@@ -127,9 +127,48 @@ jobs:
       #
       # Whichever it is, the tree below distinguishes them in one run instead of
       # a push per guess.
+  # macOS, natively. Everything here passes; what is deliberately absent is
+  # explained below, because the absence is the interesting part.
+  #
+  # What this proves, none of which any other job can:
+  #
+  #   - the SDK provisions non-interactively from Panic's .zip, via the .pkg it
+  #     contains. The earlier claim that a macOS runner could not do this was
+  #     simply wrong.
+  #   - detection finds it the way a person's machine would, through the SDKRoot
+  #     key in ~/.Playdate/config that the installer writes - not through an
+  #     environment variable a CI file set for itself.
+  #   - the .app bundle path resolves to the inner Mach-O, which is the value in
+  #     internal/sdk that could not be verified by running until now.
+  #   - internal/harness runs against kqueue rather than inotify, and
+  #     internal/simulator's proc_unix.go against Darwin process handling. Every
+  #     timing assumption in that code was formed on Linux.
+  #   - smoke-check-native passes: the libraries resolve, pdc runs, and the
+  #     Simulator starts and stays up.
+  #
+  # What is missing, and why: sdk-contract-check-native. Those tests need a game
+  # to actually execute, and on a fresh macOS install the Simulator opens a
+  # first-run modal - "Heads up! Regularly test your game on a Playdate during
+  # development" - and waits on it forever. A screenshot from CI confirms it
+  # directly. The game loads behind the dialog and never ticks, which is why the
+  # C harness gets its directory created at kEventInit while the Lua harness,
+  # which needs main.lua to run, gets nothing.
+  #
+  # Ruled out along the way, so nobody repeats it: it is not timing (25s is no
+  # better than 5s), not the launch method (`open -a` behaves identically), not
+  # focus (the Simulator activates and the dialog stays), and not a missing GUI
+  # session (`launchctl managername` reports Aqua). Writing ShowPerfWarning into
+  # ~/Library/Preferences/date.play.simulator.plist does not suppress it either,
+  # as a boolean or as the string "0", even though that plist is demonstrably
+  # what the Simulator reads and rewrites. The Linux INI equivalent in
+  # run-vnc.sh does work, so either the key differs on macOS or the dialog is
+  # gated on something else entirely.
+  #
+  # Finding the real key needs someone at a Mac who can dismiss the dialog once
+  # and diff the plist. Until then this job covers everything up to running a
+  # game, which is most of what it was added for. See docs/GOTCHAS.md.
   native-macos:
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -139,8 +178,7 @@ jobs:
       - run: make go-test
 
       # Pinned rather than PlaydateSDK-latest.zip, so this job fails when the
-      # SDK changes under it instead of drifting silently. weekly.yml is where
-      # `latest` belongs.
+      # SDK changes under it instead of drifting silently.
       - name: install the Playdate SDK
         run: |
           curl -fsSL "https://download.panic.com/playdate_sdk/PlaydateSDK-${PLAYDATE_SDK_VERSION}.zip" \
@@ -150,223 +188,19 @@ jobs:
         env:
           PLAYDATE_SDK_VERSION: '3.1.1'
 
-      # Printed before anything depends on it. If the .pkg puts the SDK
-      # somewhere other than ~/Developer/PlaydateSDK, this is where that shows
-      # up, and the candidate list says exactly where detection looked.
-      - name: where did it land
-        run: |
-          ls -la "$HOME/Developer" 2>/dev/null || echo "no ~/Developer"
-          make sdk-path
+      # Fails loudly if detection found nothing, and prints which of the three
+      # sources won. A detection regression is the failure this job most needs
+      # to catch, and it is invisible everywhere else.
+      - run: make sdk-path
 
       # SDL_AUDIODRIVER=dummy for the same reason the Linux native job sets it:
       # the Simulator treats SDL initialisation as fatal and a runner has no
-      # audio device. Whether a macOS runner can open a window at all is the
-      # other open question, and the one most likely to make this leg red.
-      # Suppress the Simulator's first-run dialog.
-      #
-      # Confirmed necessary by a screenshot: the Simulator sits on a "Heads up!
-      # Regularly test your game on a Playdate during development" modal, which
-      # is the ShowPerfWarning dialog run-vnc.sh already suppresses for the
-      # container via an INI. A game loads behind it and never executes, which is
-      # every symptom this job has had.
-      #
-      # `defaults write` was the first attempt and does nothing: the settings
-      # land in the plist (verified by reading them back) and the Simulator shows
-      # the dialog anyway, so it reads a config file rather than NSUserDefaults -
-      # consistent with Linux, where it is a plain INI. Both are written here,
-      # since writing a file the Simulator ignores costs nothing and being wrong
-      # again costs a whole run.
-      - name: suppress the Simulator's first-run dialogs
-        run: |
-          APP="$HOME/Developer/PlaydateSDK/bin/Playdate Simulator.app"
-          BID=$(defaults read "$APP/Contents/Info" CFBundleIdentifier)
-          echo "bundle identifier: $BID"
-
-          # The plist is confirmed to be what the Simulator reads: it rewrites
-          # this exact file on every run. What is unconfirmed is the value type.
-          # `-bool false` was tried alone and the dialog still appeared, so try
-          # the other two representations a config layer might expect. Only one
-          # can win, and a plist key the app ignores is inert.
-          # Written as strings, not booleans. `-bool false` was tried and the
-          # dialog still appeared; the Linux side of this is a plain INI where
-          # every value is text, so a config layer storing "0" rather than
-          # <false/> is the likelier shape. If this is still wrong, the plist
-          # dump in the next step shows the Simulator's own keys and types and
-          # settles it without another guess.
-          defaults write "$BID" ShowPerfWarning -string "0"
-          defaults write "$BID" ShowElist -string "0"
-
-          # The INI route, mirroring scripts/run-vnc.sh. Written to every
-          # plausible macOS location for a wxWidgets-style config, because the
-          # exact one is unknown and a stray file is harmless.
-          for d in "$HOME/Library/Application Support/Playdate Simulator" \
-                   "$HOME/Library/Preferences/Playdate Simulator" \
-                   "$HOME/.config/Playdate Simulator"; do
-            mkdir -p "$d"
-            printf 'Zoom=1\nShowDeviceControls=1\nShowPerfWarning=0\nShowElist=0\n' \
-              > "$d/Playdate Simulator.ini"
-            echo "wrote $d/Playdate Simulator.ini"
-          done
-
-      # Which of those the Simulator actually reads, established rather than
-      # guessed: run it once, then look at what it touched. Whatever it rewrites
-      # is its real config, and that is the only one worth keeping.
-      - name: find the Simulator's real config location
-        continue-on-error: true
-        run: |
-          SDK="$HOME/Developer/PlaydateSDK"
-          touch /tmp/marker
-          sleep 1
-          "$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator" > /dev/null 2>&1 &
-          sleep 8
-          pkill -9 -f "Playdate Simulator" 2>/dev/null || true
-          echo "--- files the Simulator created or rewrote ---"
-          find "$HOME/Library" "$HOME/.config" -newer /tmp/marker \
-            \( -iname "*laydate*" -o -iname "*simulator*" \) 2>/dev/null | head -20
-          # The plist is what it rewrote, so the plist is what it reads. Dumping
-          # it after a run shows the Simulator's own key names and value types,
-          # which is the thing still unknown: `defaults write ShowPerfWarning
-          # -bool false` targeted the right file and the dialog appeared anyway,
-          # so either the key differs on this platform or it wants a string or
-          # integer rather than a boolean.
-          echo "--- the plist the Simulator itself wrote ---"
-          plutil -p "$HOME/Library/Preferences/date.play.simulator.plist" 2>/dev/null \
-            || defaults read date.play.simulator 2>/dev/null \
-            || echo "  could not read it"
-
-          echo "--- every key it knows about, with types ---"
-          plutil -convert xml1 -o - "$HOME/Library/Preferences/date.play.simulator.plist" 2>/dev/null | head -40
-
-      - name: close the installer's Finder window
-        continue-on-error: true
-        run: osascript -e 'tell application "Finder" to close every window'
-
+      # audio device.
       - run: make smoke-check-native
         env:
           SDL_AUDIODRIVER: dummy
-      - run: make sdk-contract-check-native
-        id: contract
-        env:
-          SDL_AUDIODRIVER: dummy
 
-      # A dedicated experiment, not a test. The contract suite can only say "no
-      # response in 5s", which does not distinguish a game that never ran from
-      # one that ran slowly or wrote somewhere else. This asks the question
-      # directly, three ways, so one run settles it.
-      #
-      # The signal is the Lua harness's mcp/ directory. Lua creates it at import,
-      # which happens when main.lua *executes*. The C harness creates its own at
-      # kEventInit, which happens while the binary *loads* - and C's already
-      # appears, which is what suggests loading works and running does not.
-      #
-      # Never fails the job: it exists to produce evidence, and a red step here
-      # would just hide the evidence behind a red X.
-      - name: does a game execute, or only load
-        if: always()
-        continue-on-error: true
-        run: |
-          set +e
-          SDK="$HOME/Developer/PlaydateSDK"
-          SIM="$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator"
 
-          rm -rf /tmp/tick && mkdir -p /tmp/tick
-          cp -R lua/test-fixture/Source /tmp/tick/
-          cp lua/mcp_harness.lua /tmp/tick/Source/
-          "$SDK/bin/pdc" -sdkpath "$SDK" /tmp/tick/Source /tmp/tick/probe.pdx
-          BUNDLE=$(awk -F= '$1=="bundleID"{print $2}' /tmp/tick/probe.pdx/pdxinfo)
-          DATA="$SDK/Disk/Data/$BUNDLE"
-          echo "bundle=$BUNDLE"
-
-          # 1. Exactly what the server does, with a generous wait. Rules out
-          #    "the game ticks, just slower than the 5s the tests allow".
-          rm -rf "$DATA"; echo "=== direct exec, 25s ==="
-          "$SIM" /tmp/tick/probe.pdx > /tmp/tick/sim1.log 2>&1 & p1=$!
-          sleep 25; kill -9 $p1 2>/dev/null
-          [ -d "$DATA/mcp" ] && echo "  RAN" || echo "  DID NOT RUN"
-          sed 's/^/    /' /tmp/tick/sim1.log
-
-          # 2. Through LaunchServices. This is the one thing the server
-          #    deliberately does not do, because `open` detaches and get_logs
-          #    goes permanently empty. But if a game ticks this way and not the
-          #    other, the cause is the GUI session rather than anything in this
-          #    project, and that is worth knowing even though it is not a fix.
-          rm -rf "$DATA"; echo "=== via open -a, 25s ==="
-          open -a "$SDK/bin/Playdate Simulator.app" --args /tmp/tick/probe.pdx
-          sleep 25; pkill -9 -f "Playdate Simulator" 2>/dev/null
-          [ -d "$DATA/mcp" ] && echo "  RAN" || echo "  DID NOT RUN"
-
-          # 3. Frontmost. The screenshot from the previous run showed the
-          #    Simulator running with its device frame drawn and the Playdate
-          #    screen blank, behind a Finder window that the SDK installer opens
-          #    on completion. A simulator pausing its update loop while not
-          #    frontmost is ordinary, and would explain all of it: loads but does
-          #    not tick, 25s no better than 5s, `open -a` no different because
-          #    Finder still owns the front.
-          rm -rf "$DATA"; echo "=== direct exec + activate, 25s ==="
-          osascript -e 'tell application "Finder" to close every window' 2>/dev/null
-          "$SIM" /tmp/tick/probe.pdx > /tmp/tick/sim3.log 2>&1 & p3=$!
-          sleep 3
-          osascript -e 'tell application "Playdate Simulator" to activate' 2>&1 | sed 's/^/    activate: /'
-          sleep 22; kill -9 $p3 2>/dev/null
-          [ -d "$DATA/mcp" ] && echo "  RAN" || echo "  DID NOT RUN"
-
-          # 4. Is there a window server session at all for this user?
-          echo "=== session context ==="
-          launchctl managername 2>/dev/null || echo "  launchctl managername unavailable"
-          echo "  SSH_CONNECTION=${SSH_CONNECTION:-unset}  TERM_SESSION_ID=${TERM_SESSION_ID:-unset}"
-
-      # If a dialog is still blocking, it is on screen and this shows it. Cheaper
-      # than another round of inference, and the artifact survives the job.
-      - name: screenshot the desktop
-        if: always()
-        continue-on-error: true
-        run: |
-          SDK="$HOME/Developer/PlaydateSDK"
-          "$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator" \
-            /tmp/tick/probe.pdx > /dev/null 2>&1 &
-          sleep 12
-          screencapture -x /tmp/screen.png || echo "screencapture failed"
-          pkill -9 -f "Playdate Simulator" 2>/dev/null || true
-          ls -la /tmp/screen.png 2>/dev/null || echo "no screenshot produced"
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        continue-on-error: true
-        with:
-          name: macos-desktop
-          path: /tmp/screen.png
-          if-no-files-found: ignore
-
-      - name: what did the harness actually write
-        # always(), not failure(): this job is continue-on-error, so the job
-        # status never becomes failed and failure() never fires. That is why
-        # this step silently did not run the first time it was added.
-        if: always()
-        run: |
-          echo "--- resolved SDK ---"
-          make sdk-path || true
-          echo "--- anything under the SDK's Disk/Data ---"
-          find "$HOME/Developer/PlaydateSDK/Disk" -maxdepth 4 2>/dev/null || echo "no Disk directory"
-          echo "--- anywhere else a sandbox might have gone ---"
-          find "$HOME/Library/Application Support" -maxdepth 4 -iname "*laydate*" 2>/dev/null || true
-          find "$HOME/Library/Containers" -maxdepth 3 -iname "*laydate*" 2>/dev/null || true
-          echo "--- any mcp/ directory at all under HOME ---"
-          find "$HOME" -maxdepth 8 -type d -name mcp 2>/dev/null | head -20 || true
-
-  # macOS, advisory. The platform with the real native user story, and the one
-  # nobody here can debug locally, so it reports without blocking.
-  #
-  # This job used to say a macOS runner could not provision an SDK, because the
-  # macOS download is an installer rather than the tarball the Linux job untars.
-  # That was a category error: the download is a .zip containing a .pkg, and a
-  # .pkg installs non-interactively with `installer -pkg`. So it can, and does,
-  # below.
-  #
-  # Still advisory. Nobody here has a Mac, so everything past `go test` is
-  # written from what a macOS runner is documented to provide and is judged on
-  # its first real run. Being non-blocking is what makes that acceptable rather
-  # than reckless.
-  #
   # What only this job can cover, whether or not the SDK steps work:
   #
   #   - internal/harness runs against kqueue instead of inotify. fsnotify
