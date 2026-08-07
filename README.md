@@ -544,9 +544,11 @@ Two asymmetries worth knowing, both covered in detail in
   `-9` is required. The Simulator ignores `SIGTERM`, which is why the server's own
   `stop_simulator` uses `SIGKILL` too. Natively, note this also kills a Simulator
   you started by hand.
-- `set_crank` with no `duration_ms` returns success and has no visible effect: the
-  override expires before the next frame, so a following `get_game_state` reads
-  the real crank. Pass a duration you actually want it held for.
+- A button cannot be held open-endedly. `press_button` is a tap: omit
+  `duration_ms` and it holds for a default that is long enough for the game to
+  see a real press, then releases. Ask for a long one and it still releases when
+  that elapses, because nothing exposes a release, so a button held with no
+  expiry could never be let go.
 
 **Container mode only**
 
@@ -663,7 +665,14 @@ just a call:
    an MCP-driven press, not just `buttonIsPressed`'s "currently held"
    bit. `AButtonHeld`/`BButtonHeld` (fired after a continuous 1-second
    hold) are a separate mechanism and aren't synthesized.
-5. `set_crank` overrides the angle and delta, and only touches the docked
+5. `set_crank` leaves the crank where you put it. Omit `duration_ms` and the
+   override holds until another `set_crank` replaces it, which is what a real
+   crank does. Pass one to have it lapse back to the game's own reading after
+   that many milliseconds. This used to be the other way round: an omitted
+   duration was read as a zero-length one, so the override was created and
+   expired before any frame could read it, and `set_crank` reported success
+   while the game saw nothing.
+6. `set_crank` overrides the angle and delta, and only touches the docked
    state if you ask it to with `crank_dock` (`"docked"` or `"undocked"`).
    Omit it and `playdate.isCrankDocked()` keeps reading whatever the game
    would really see - which is *docked*, in the Simulator at rest. Before

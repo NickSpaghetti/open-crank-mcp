@@ -40,6 +40,40 @@ calling `mcp_harness_update`/`mcp.update` that same frame.
 a separate mechanism, not synthesized - out of scope, no example needed
 it.
 
+## An omitted `duration_ms` meant "expire immediately", so `set_crank` did nothing
+
+Both harnesses expire overrides at the top of every frame, and both computed the
+deadline as `now + duration_ms`. A command with no duration therefore carried a
+deadline of `now + 0`, which is already past on the very next expiry sweep. The
+override was created and destroyed before any frame could read it. `set_crank`
+reported success, and `get_game_state` read the game's real crank back.
+
+Found on a real Simulator during native end-to-end verification, and only
+findable there: it is a frame-timing bug, and both harnesses' unit tests drive the
+clock by hand, so every one of them passed by naming a duration the trap could not
+reach. The existing contract test passed `duration_ms: 10000` for the same
+reason - not to work around the bug, which nobody knew about, but because writing
+the test from the tool's own vocabulary made an explicit duration the obvious
+thing to send.
+
+**Fixed, differently for each tool, because they are different things.** For
+`set_crank` a non-positive duration is now a sentinel meaning no expiry
+(`MCP_NO_EXPIRY` / `NO_EXPIRY`, negative so it cannot collide with a real
+deadline). A crank is a position: it stays where it is put until something else
+moves it, and the next `set_crank` replaces it. For `press_button` the Go layer
+substitutes a real duration instead, because a button held with no expiry could
+never be let go - `harness.CmdRelease` exists on the wire, but no MCP tool sends
+it.
+
+**The default cannot be a token amount.** `mcp_override_update_edges` deliberately
+defers a fresh command's edge to the *next* frame (see the first entry in this
+file), so an override that expires inside one frame produces no press at all - the
+same silent success in a different place. 100ms is about three frames at 30fps.
+
+The general shape, worth keeping: a duration of zero is not a small duration. Any
+deadline compared against a clock that only advances between frames needs to say
+what "none" means, rather than letting it fall out of the arithmetic.
+
 ## The harness is a copy, so it drifts, and that went unnoticed once
 
 `setup` writes `mcp_harness.lua` (or the C pair) *into a game's own source

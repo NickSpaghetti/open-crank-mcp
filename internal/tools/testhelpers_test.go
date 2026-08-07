@@ -94,6 +94,42 @@ func startFakeHarness(t *testing.T, dataDir string, resp map[string]any) {
 	}()
 }
 
+// startCapturingFakeHarness answers one command like startFakeHarness does, but
+// hands back what it was sent. The other two helpers delete command.json without
+// reading it, which is fine when the assertion is on the response - here the
+// assertion is on the request itself, because what press_button puts on the wire
+// when the caller omitted a duration is the whole behavior under test.
+func startCapturingFakeHarness(t *testing.T, dataDir string, resp map[string]any) <-chan map[string]any {
+	t.Helper()
+	mcpDir := filepath.Join(dataDir, "mcp")
+	cmdPath := filepath.Join(mcpDir, "command.json")
+	respPath := filepath.Join(mcpDir, "response.json")
+
+	got := make(chan map[string]any, 1)
+	go func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			b, err := os.ReadFile(cmdPath)
+			if err != nil || len(b) == 0 {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			var cmd map[string]any
+			if err := json.Unmarshal(b, &cmd); err != nil {
+				time.Sleep(5 * time.Millisecond)
+				continue
+			}
+			_ = os.Remove(cmdPath)
+			got <- cmd
+			respBytes, _ := json.Marshal(resp)
+			_ = os.WriteFile(respPath, respBytes, 0o644)
+			return
+		}
+		close(got)
+	}()
+	return got
+}
+
 // startEchoingFakeHarness continuously watches dataDir/mcp/command.json and,
 // for each one seen, echoes its "id" field back as response.json before
 // deleting the command file - unlike startFakeHarness's single canned

@@ -12,6 +12,11 @@ local override = {
     crank = {active = false, angle = 0, delta = 0, docked = false, dockedActive = false, expiresAt = 0},
 }
 
+-- Sentinel expiry meaning "never". Negative so it cannot collide with a real
+-- deadline, which is always nowMs plus a duration. Matches MCP_NO_EXPIRY in
+-- c-harness/mcp_harness.h.
+local NO_EXPIRY = -1
+
 local stateFn = nil
 
 local realButtonIsPressed = playdate.buttonIsPressed
@@ -445,13 +450,25 @@ end
 -- so this mirrors the C harness's mcp_override_apply_crank exactly - the two are
 -- read side by side often enough that matching shapes is worth more than saving a
 -- line.
+--
+-- durationMs <= 0 holds the crank until something else moves it, rather than
+-- expiring it immediately.
+--
+-- The crank is a position, not an event: "set the crank to 123 degrees" means
+-- leave it there, the way a real crank stays where it was left. Treating an
+-- omitted duration as a zero-length one made set_crank report success and do
+-- nothing, because expireOverrides runs at the top of every frame and
+-- nowMs >= nowMs + 0 is immediately true.
+--
+-- Buttons keep expiring, deliberately: nothing exposes a release, so a button
+-- held indefinitely could never be let go. Mirrors mcp_override_apply_crank.
 local function applyCrank(angle, delta, dockedActive, docked, durationMs, nowMs)
     override.crank.active = true
     override.crank.angle = angle
     override.crank.delta = delta
     override.crank.dockedActive = dockedActive
     override.crank.docked = docked
-    override.crank.expiresAt = nowMs + durationMs
+    override.crank.expiresAt = durationMs > 0 and (nowMs + durationMs) or NO_EXPIRY
 end
 
 -- Resolves a crank_dock wire value into "override the dock at all" and "force it
@@ -474,7 +491,8 @@ local function expireOverrides(nowMs)
             o.active = false
         end
     end
-    if override.crank.active and nowMs >= override.crank.expiresAt then
+    if override.crank.active and override.crank.expiresAt ~= NO_EXPIRY
+        and nowMs >= override.crank.expiresAt then
         override.crank.active = false
         override.crank.dockedActive = false
     end

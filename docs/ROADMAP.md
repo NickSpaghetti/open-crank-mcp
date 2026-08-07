@@ -949,10 +949,10 @@ asking "yet?" instead of being told.
   with `crank_docked` false after `set_crank`.
 
   One usability edge found by getting it wrong. `set_crank` with no `duration_ms`
-  returns success and has no observable effect: the override expires before the
-  next frame, so a following `get_game_state` still reads the real crank. Fine for
+  returned success and had no observable effect: the override expired before the
+  next frame, so a following `get_game_state` still read the real crank. Fine for
   `press_button`, which reads as a tap, but surprising for the crank, which reads
-  as a position. Worth either a default or a word in the tool description.
+  as a position. Fixed under **Input duration defaults** below.
 
   Still unverified, and deliberately: no macOS or Windows *run*. Every path value
   for those platforms comes from a probe on a real install
@@ -1130,3 +1130,42 @@ asking "yet?" instead of being told.
   Fixed by saying that in each place rather than by picking one number. The
   Checkpoint 4 entry keeps its 100ms-to-10ms history, since that is what happened,
   but now says so instead of reading as current behaviour.
+- [x] **Input duration defaults**: `duration_ms` meant the same thing to both
+  input tools, and it should not have. Omitting it produced a command that both
+  harnesses read as "expire in zero milliseconds", and since each expires
+  overrides at the top of every frame, `now >= now + 0` is already true before any
+  frame can read the override. So the tool reported success and the game saw
+  nothing. Checkpoint 8 found this on a real Simulator and left it recorded rather
+  than fixed.
+
+  The two tools got different answers, because they are different things.
+
+  `set_crank` is a position. "Turn the crank to 123 degrees" means leave it there,
+  the way a real crank stays where it was left, so a non-positive duration is now
+  a sentinel for no expiry rather than an instant one (`MCP_NO_EXPIRY` in the C
+  header, `NO_EXPIRY` in the Lua harness, negative so it cannot collide with a
+  real deadline). Held is not stuck: the next `set_crank` replaces it, including
+  one that does have a duration.
+
+  `press_button` is an event, and it keeps expiring. It has to: nothing exposes a
+  release. `harness.CmdRelease` exists on the wire and the contract test drives
+  it, but no MCP tool does, so a button held with no expiry could never be let go.
+  Instead the Go layer substitutes a real duration when the caller omits one. It
+  cannot be a token amount - the harnesses defer a fresh command's edge to the
+  *next* frame, so an override shorter than a frame produces no press at all. 100ms
+  is roughly three frames at 30fps, enough that jitter in the round trip cannot
+  swallow it.
+
+  Verified at three levels, since the bug is a frame-timing one that unit tests
+  driving the clock by hand would not have caught. `test_pure_logic.c` walks the
+  clock far past a held crank to prove the sentinel is not just a long deadline,
+  and asserts the button asymmetry so anyone copying the crank change down to
+  buttons argues with a test first. `internal/tools` asserts what reaches the wire
+  rather than the constant, since the failure was a zero arriving at a harness.
+  And `sdk_contract_check` sets a duration-less crank against a real Simulator,
+  sleeps past several frames, and reads the angle back - which is the assertion
+  that would have failed before.
+
+  No version bump needed: the fingerprint is content-derived, so changing either
+  harness source changes it automatically. Every game already set up will report
+  `harness_warning` until `setup` is re-run, which is the mechanism working.

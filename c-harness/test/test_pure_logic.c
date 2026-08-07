@@ -377,6 +377,70 @@ static void test_override_crank_expiry_releases_dock(void)
     assert(mcp_override_get_crank_docked(&ov, 1) == 1);
 }
 
+/* A crank set with no duration is the case that omitting duration_ms produces,
+   and it used to be the case that quietly did nothing: the override was created
+   and destroyed before any frame could read it, because expire runs at the top
+   of every frame and now_ms >= now_ms + 0. Held forever now. The clock is walked
+   far out to prove it is a sentinel and not just a long deadline. */
+static void test_override_crank_zero_duration_holds(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_crank(&ov, 45.0f, 2.0f, 1, 1, 0, 0);
+
+    mcp_override_expire(&ov, 1);
+    assert(mcp_override_get_crank_angle(&ov, 999.0f) == 45.0f);
+
+    mcp_override_expire(&ov, 100000000);
+    assert(mcp_override_get_crank_angle(&ov, 999.0f) == 45.0f);
+    assert(mcp_override_get_crank_change(&ov, 999.0f) == 2.0f);
+    assert(mcp_override_get_crank_docked(&ov, 0) == 1);
+}
+
+/* A negative duration is the same request as zero. Nothing in the Go layer sends
+   one, but the harness parses whatever is on disk, and "-1" reaching a naive
+   now_ms + duration_ms would expire in the past. */
+static void test_override_crank_negative_duration_holds(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_crank(&ov, 45.0f, 2.0f, 0, 0, -1, 5000);
+
+    mcp_override_expire(&ov, 5001);
+    assert(mcp_override_get_crank_angle(&ov, 999.0f) == 45.0f);
+}
+
+/* A held crank is not permanent, it is just not on a timer. The next crank
+   command replaces it, including one that does have a duration. */
+static void test_override_crank_held_is_replaceable(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_crank(&ov, 45.0f, 2.0f, 0, 0, 0, 0);
+    mcp_override_apply_crank(&ov, 90.0f, 3.0f, 0, 0, 500, 0);
+
+    assert(mcp_override_get_crank_angle(&ov, 999.0f) == 90.0f);
+    mcp_override_expire(&ov, 600);
+    assert(mcp_override_get_crank_angle(&ov, 999.0f) == 999.0f);
+}
+
+/* Buttons deliberately do not get the crank's treatment. Nothing exposes a
+   release, so a button held with no expiry could never be let go - the Go layer
+   substitutes a real duration instead. This asserts the asymmetry is on purpose,
+   so that anyone copying the crank change down to buttons has to argue with a
+   test first. */
+static void test_override_press_zero_duration_still_expires(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_press(&ov, kButtonA, 0, 0);
+
+    mcp_override_expire(&ov, 1);
+    PDButtons cur, pushed, released;
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((cur & kButtonA) == 0);
+}
+
 /* crank_dock parsing, all three values plus the absent case. The wire carries a
    string precisely so these are three distinct states rather than two booleans
    with one nonsense combination. */
@@ -463,6 +527,10 @@ int main(void)
     test_override_crank_leaves_dock_alone();
     test_override_crank_forces_undocked();
     test_override_crank_expiry_releases_dock();
+    test_override_crank_zero_duration_holds();
+    test_override_crank_negative_duration_holds();
+    test_override_crank_held_is_replaceable();
+    test_override_press_zero_duration_still_expires();
 
     printf("pure logic: all tests passed\n");
     return 0;

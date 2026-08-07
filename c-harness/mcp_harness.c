@@ -48,6 +48,18 @@ void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int dura
     ov->button_override_expires_at_ms[idx] = now_ms + duration_ms;
 }
 
+/* duration_ms <= 0 holds the crank until something else moves it, rather than
+   expiring it immediately.
+
+   The crank is a position, not an event: "set the crank to 123 degrees" means
+   leave it there, the way a real crank stays where it was left. Treating an
+   omitted duration as a zero-length one made set_crank report success and do
+   nothing at all, because mcp_override_expire runs at the top of every frame
+   and now_ms >= now_ms + 0 is immediately true - so the override was created and
+   destroyed before the game ever read it.
+
+   Buttons keep expiring, deliberately. Nothing exposes a release to whoever is
+   driving this, so a button held indefinitely could never be let go. */
 void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
                               int docked_set, int docked, int duration_ms, long now_ms)
 {
@@ -56,7 +68,8 @@ void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
     ov->crank_override_delta = delta;
     ov->crank_override_docked_active = docked_set;
     ov->crank_override_docked = docked;
-    ov->crank_override_expires_at_ms = now_ms + duration_ms;
+    ov->crank_override_expires_at_ms =
+        duration_ms > 0 ? now_ms + duration_ms : MCP_NO_EXPIRY;
 }
 
 void mcp_override_expire(McpOverrideState *ov, long now_ms)
@@ -66,7 +79,9 @@ void mcp_override_expire(McpOverrideState *ov, long now_ms)
             ov->button_override_active[i] = 0;
         }
     }
-    if (ov->crank_override_active && now_ms >= ov->crank_override_expires_at_ms) {
+    if (ov->crank_override_active &&
+        ov->crank_override_expires_at_ms != MCP_NO_EXPIRY &&
+        now_ms >= ov->crank_override_expires_at_ms) {
         ov->crank_override_active = 0;
         ov->crank_override_docked_active = 0;
     }
