@@ -11,7 +11,7 @@ import (
 
 // setupLua covers both Lua and Hybrid: a hybrid C+Lua project only needs
 // the Lua harness, since a real Lua VM still drives the update loop (see
-// README's "Hybrid C+Lua games" note) - so this is deliberately the same
+// guides/harness-wiring.md's "Hybrid C+Lua games" note), so this is the same
 // steps regardless of which of those two languages was detected, and
 // never touches CMakeLists.txt or any .c file.
 func setupLua(sourceDir string, harnessFS fs.FS, language Language) (SetupResult, error) {

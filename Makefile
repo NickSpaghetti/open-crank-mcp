@@ -23,8 +23,8 @@ up-vnc: build
 	docker compose --profile vnc up simulator-vnc
 
 # Detached, unlike every other up* target. Stays running in the background
-# so an MCP client can attach to it separately afterward. See the README's
-# "Shared, watchable session" section.
+# so an MCP client can attach to it separately afterward. See
+# guides/shared-session.md.
 #
 # GAME_DIR is checked here rather than in docker-compose.yml. A compose-level
 # `${GAME_DIR:?}` guard would also fire on `make down`, which parses the shared
@@ -199,16 +199,34 @@ GREMLINS_VERSION ?= v0.6.0
 mutation-test:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash
 
-# The same run, split in two, for CI.
+# The same run, split in two, for CI. The split is not about making the run
+# shorter - it is about how much a hung mutant costs.
 #
-# A hosted runner has not survived mutating the whole module since internal/scan
-# landed and took the mutant count from ~240 to ~560: the job dies partway with
-# "the runner has received a shutdown signal", at a different mutant each time.
-# Memory (3.6GB peak), CPU (completes pinned to four cores), disk (926MB of
-# build cache) and hung mutants (the timeout fires and the run continues) were
-# each measured and ruled out, so what is left is the length of the run itself.
-# Each half here is close to the size of the last run that did survive, and the
-# two run on separate runners at the same time.
+# Gremlins sizes its per-mutant timeout from how long the test suite takes in
+# whatever scope it was given. Those two scopes are nowhere near each other:
+#
+#   whole module      12.02s baseline  ->  60s per hang (coefficient 5)
+#   ./internal/scan    0.62s baseline  ->   3s per hang
+#
+# internal/scan is byte-loop code, and about six of its mutants hang rather than
+# fail - flip a comparison and the loop stops advancing. Run as part of the
+# whole module, each of those pinned a worker for a minute running a hung
+# whole-module test binary, and with two workers a cluster of them left the job
+# making no progress for minutes at a time. That is the state the runner died
+# in, reporting "the runner has received a shutdown signal". All four failures
+# were while mutating internal/scan. Scoped to the package, the same six hangs
+# cost about three seconds each.
+#
+# Ruled out first, each measured rather than assumed: memory (3.6GB peak), CPU
+# (completes pinned to four cores), disk (926MB of build cache), and the run's
+# length - the half without internal/scan runs 189s and passes, longer than any
+# failure managed.
+#
+# Worth knowing if you try to reproduce this locally and cannot: a warm build
+# cache puts the whole-module baseline at ~0.09s instead of CI's 12s, so the
+# timeout budget is well under a second and every hang dies instantly. The
+# mutants that hang show up as harmless TIMED OUT lines and the run completes.
+# The bug only exists on a cold cache.
 #
 # The second config is derived from .gremlins.yaml rather than copied, so the
 # exclude list and the thresholds cannot drift apart. Deriving it is worth the

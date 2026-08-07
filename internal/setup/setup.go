@@ -45,8 +45,9 @@ type TeardownResult struct {
 
 // DetectLanguage inspects sourceDir for the harness install pattern it
 // needs: Source/main.lua + CMakeLists.txt both present means a hybrid
-// C+Lua project (only main.lua needs anything - Lua drives the update
-// loop even when C extensions are present, see the README). Deliberately
+// C+Lua project (only main.lua needs anything, since Lua drives the update
+// loop even when C extensions are present, see guides/harness-wiring.md).
+// Deliberately
 // separate from internal/build.DetectProjectType, whose "prefers C"
 // tie-break answers a different question (which toolchain builds this),
 // not "which harness(es) does it need."
