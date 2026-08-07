@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mutation-test mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test no-regex mutation-test mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -134,6 +134,37 @@ go-build:
 go-test:
 	go test ./...
 
+# Guards the no-regex rule (https://regexlicensing.org/).
+#
+# There is no allowlist, deliberately. An exemption mechanism is how a rule like
+# this rots: the first entry is always "just until the port lands", and the list
+# only ever grows. The port did land, so the rule is now absolute and the only
+# way to add a pattern is to argue for deleting this target.
+#
+# Why: a pattern reads a source file as a flat byte string, so it cannot tell
+# code from a comment or a string literal, and cannot be widened to accept
+# ordinary spacing without becoming unreadable. internal/setup hit both walls
+# patching real games - calls rewritten inside comments, a call inserted into a
+# commented-out branch where it never compiled, and legal C the patterns refused
+# outright. internal/scan holds the byte-level scanning that replaced them.
+#
+# Grep on the command line is fine. This is about patterns compiled into the
+# binary.
+#
+# Files come from git rather than a bare find, so a new file that is not
+# committed yet is still checked while an ignored working copy of the repo
+# (.claude/worktrees, a vendored tree) is not.
+no-regex:
+	@bad=$$(git ls-files --cached --others --exclude-standard '*.go' \
+		| xargs -r grep -lE '"regexp(/[a-z]+)?"' 2>/dev/null || true); \
+	if [ -n "$$bad" ]; then \
+		echo "regexp is imported by:"; \
+		echo "$$bad" | sed 's/^/  /'; \
+		echo "there is no allowlist - use internal/scan"; \
+		exit 1; \
+	fi; \
+	echo "no-regex: ok"
+
 # Builds for every platform the server is meant to run on, plus vet, without
 # needing any of them present. This is the only cross-platform claim provable
 # from one machine, so it is the gate that keeps native mode's per-OS code
@@ -239,6 +270,7 @@ sdk-contract-check-native:
 # they each want Docker, and shared-check and test-shared-browser share one
 # fixed port and one compose project name.
 test:
+	$(MAKE) no-regex
 	$(MAKE) go-test
 	$(MAKE) test-shared-unit
 	$(MAKE) mutation-test

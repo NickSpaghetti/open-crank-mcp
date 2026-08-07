@@ -33,7 +33,7 @@ void checkCrank(void) {
 }
 `)
 
-	changes, err := patchInputCalls(dir)
+	changes, _, err := patchInputCalls(dir)
 	if err != nil {
 		t.Fatalf("patchInputCalls: %v", err)
 	}
@@ -62,12 +62,12 @@ func TestPatchInputCallsIsIdempotent(t *testing.T) {
 	path := filepath.Join(dir, "src", "game.c")
 	mustWrite(t, path, "void f(void) { pd->system->getButtonState(&c, NULL, NULL); }\n")
 
-	if _, err := patchInputCalls(dir); err != nil {
+	if _, _, err := patchInputCalls(dir); err != nil {
 		t.Fatalf("first patchInputCalls: %v", err)
 	}
 	firstContent := mustRead(t, path)
 
-	changes, err := patchInputCalls(dir)
+	changes, _, err := patchInputCalls(dir)
 	if err != nil {
 		t.Fatalf("second patchInputCalls: %v", err)
 	}
@@ -97,7 +97,7 @@ void checkButtons(void) {
 }
 `)
 
-	changes, err := patchInputCalls(dir)
+	changes, _, err := patchInputCalls(dir)
 	if err != nil {
 		t.Fatalf("patchInputCalls: %v", err)
 	}
@@ -127,7 +127,7 @@ void checkButtons(void) {
 }
 `)
 
-	if _, err := patchInputCalls(dir); err != nil {
+	if _, _, err := patchInputCalls(dir); err != nil {
 		t.Fatalf("patchInputCalls: %v", err)
 	}
 	content := mustRead(t, path)
@@ -143,7 +143,7 @@ func TestPatchCMakeListsAddsIncludeDirectories(t *testing.T) {
 		"project(Game C ASM)\n\n"+
 		"add_library(${NAME} SHARED main.c)\n")
 
-	changed, err := patchCMakeLists(path)
+	changed, err := patchCMakeLists(path, "main.c")
 	if err != nil {
 		t.Fatalf("patchCMakeLists: %v", err)
 	}
@@ -174,12 +174,12 @@ func TestPatchCMakeListsIncludeDirectoriesIsIdempotent(t *testing.T) {
 	path := filepath.Join(dir, "CMakeLists.txt")
 	mustWrite(t, path, "project(Game C ASM)\n\nadd_library(${NAME} SHARED main.c)\n")
 
-	if _, err := patchCMakeLists(path); err != nil {
+	if _, err := patchCMakeLists(path, "main.c"); err != nil {
 		t.Fatalf("first patchCMakeLists: %v", err)
 	}
 	firstContent := mustRead(t, path)
 
-	changed, err := patchCMakeLists(path)
+	changed, err := patchCMakeLists(path, "main.c")
 	if err != nil {
 		t.Fatalf("second patchCMakeLists: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestTeardownCStripsIncludeDirectories(t *testing.T) {
 	}
 
 	// Now with the block actually present, as patchCMakeLists would leave it.
-	if _, err := patchCMakeLists(path); err != nil {
+	if _, err := patchCMakeLists(path, "main.c"); err != nil {
 		t.Fatalf("patchCMakeLists: %v", err)
 	}
 	if !strings.Contains(mustRead(t, path), "include_directories(src)") {
@@ -298,7 +298,7 @@ func TestPatchCMakeListsInlineStyle(t *testing.T) {
 		"\tadd_library(${NAME} SHARED src/main.c)\n"+
 		"endif()\n")
 
-	changed, err := patchCMakeLists(path)
+	changed, err := patchCMakeLists(path, "src/main.c")
 	if err != nil {
 		t.Fatalf("patchCMakeLists: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestPatchCMakeListsVariableStyle(t *testing.T) {
 		")\n\n"+
 		"add_library(${NAME} SHARED ${GAME_SOURCES})\n")
 
-	changed, err := patchCMakeLists(path)
+	changed, err := patchCMakeLists(path, "src/main.c")
 	if err != nil {
 		t.Fatalf("patchCMakeLists: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestPatchCMakeListsIsIdempotent(t *testing.T) {
 	path := filepath.Join(dir, "CMakeLists.txt")
 	mustWrite(t, path, "add_library(${NAME} SHARED src/main.c src/mcp_harness.c)\n")
 
-	changed, err := patchCMakeLists(path)
+	changed, err := patchCMakeLists(path, "src/main.c")
 	if err != nil {
 		t.Fatalf("patchCMakeLists: %v", err)
 	}
@@ -357,7 +357,7 @@ func TestPatchCMakeListsNoMatchDoesNotGuess(t *testing.T) {
 	original := "# a totally custom build file with no add_library/add_executable at all\n"
 	mustWrite(t, path, original)
 
-	changed, err := patchCMakeLists(path)
+	changed, err := patchCMakeLists(path, "src/main.c")
 	if err != nil {
 		t.Fatalf("patchCMakeLists: %v", err)
 	}
@@ -504,7 +504,7 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {
 }
 `)
 
-	changed, err := patchEventHandlerInit(path, "pd")
+	changed, _, err := patchEventHandlerInit(path, "pd")
 	if err != nil {
 		t.Fatalf("patchEventHandlerInit: %v", err)
 	}
@@ -533,12 +533,12 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {
 }
 `)
 
-	if _, err := patchEventHandlerInit(path, "pd"); err != nil {
+	if _, _, err := patchEventHandlerInit(path, "pd"); err != nil {
 		t.Fatalf("first patchEventHandlerInit: %v", err)
 	}
 	firstContent := mustRead(t, path)
 
-	changed, err := patchEventHandlerInit(path, "pd")
+	changed, _, err := patchEventHandlerInit(path, "pd")
 	if err != nil {
 		t.Fatalf("second patchEventHandlerInit: %v", err)
 	}
@@ -571,7 +571,7 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {
 `
 	mustWrite(t, path, original)
 
-	changed, err := patchEventHandlerInit(path, "pd")
+	changed, _, err := patchEventHandlerInit(path, "pd")
 	if err != nil {
 		t.Fatalf("patchEventHandlerInit: %v", err)
 	}

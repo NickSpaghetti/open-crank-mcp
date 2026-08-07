@@ -6,8 +6,9 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/NickSpaghetti/open-crank-mcp/internal/scan"
 )
 
 func setupC(sourceDir string, harnessFS fs.FS) (SetupResult, error) {
@@ -21,8 +22,22 @@ func setupC(sourceDir string, harnessFS fs.FS) (SetupResult, error) {
 		result.FilesCopied = append(result.FilesCopied, dst)
 	}
 
+	// Located before CMakeLists.txt is touched, not after, because which
+	// build target counts as "the game" is decided by whether it lists this
+	// file - see patchCMakeSourceList. A project with no eventHandler at all
+	// still gets its CMakeLists patched (with the looser rule) and the
+	// ManualStep below: the harness has to be compiled in either way for a
+	// hand-written init/update call to link.
+	eventHandlerPath, pdVar, ehErr := findEventHandler(sourceDir)
+	gameSource := ""
+	if ehErr == nil {
+		if rel, relErr := filepath.Rel(sourceDir, eventHandlerPath); relErr == nil {
+			gameSource = filepath.ToSlash(rel)
+		}
+	}
+
 	cmakePath := filepath.Join(sourceDir, "CMakeLists.txt")
-	cmakeChanged, err := patchCMakeLists(cmakePath)
+	cmakeChanged, err := patchCMakeLists(cmakePath, gameSource)
 	if err != nil {
 		return result, fmt.Errorf("patching CMakeLists.txt: %w", err)
 	}
@@ -31,14 +46,13 @@ func setupC(sourceDir string, harnessFS fs.FS) (SetupResult, error) {
 	// flag can be true purely from the include_directories(src) patch (see
 	// patchCMakeLists) even when the source-list patch itself found nothing
 	// to touch, which would otherwise wrongly suppress this ManualStep.
-	if !fileContains(cmakePath, "src/mcp_harness.c") {
+	if !cmakeListsContains(cmakePath, "src/mcp_harness.c") {
 		result.ManualSteps = append(result.ManualSteps, fmt.Sprintf(
 			"could not find a source list to patch in %s - add src/mcp_harness.c to your add_library/add_executable call yourself",
 			cmakePath))
 	}
 
-	eventHandlerPath, pdVar, err := findEventHandler(sourceDir)
-	if err != nil {
+	if ehErr != nil {
 		result.ManualSteps = append(result.ManualSteps, fmt.Sprintf(
 			"could not find a file defining eventHandler(PlaydateAPI*, ...) under %s - add #include \"mcp_harness.h\", "+
 				"call mcp_harness_init(pd) on kEventInit, and call mcp_harness_update(pd) once per frame from your update "+
@@ -46,11 +60,14 @@ func setupC(sourceDir string, harnessFS fs.FS) (SetupResult, error) {
 		return result, nil
 	}
 
-	initChanged, err := patchEventHandlerInit(eventHandlerPath, pdVar)
+	initChanged, initStep, err := patchEventHandlerInit(eventHandlerPath, pdVar)
 	if err != nil {
 		return result, fmt.Errorf("patching %s: %w", eventHandlerPath, err)
 	}
 	result.FilesPatched = append(result.FilesPatched, FileChange{Path: eventHandlerPath, Changed: initChanged})
+	if initStep != "" {
+		result.ManualSteps = append(result.ManualSteps, initStep)
+	}
 
 	updateChanged, updatePath, manualStep, err := patchUpdateCallback(sourceDir, eventHandlerPath)
 	if err != nil {
@@ -63,13 +80,28 @@ func setupC(sourceDir string, harnessFS fs.FS) (SetupResult, error) {
 		result.ManualSteps = append(result.ManualSteps, manualStep)
 	}
 
-	inputChanges, err := patchInputCalls(sourceDir)
+	inputChanges, inputSteps, err := patchInputCalls(sourceDir)
 	if err != nil {
 		return result, fmt.Errorf("patching input calls: %w", err)
 	}
 	result.FilesPatched = append(result.FilesPatched, inputChanges...)
+	result.ManualSteps = append(result.ManualSteps, inputSteps...)
 
 	return result, nil
+}
+
+// The four SDK input calls, each with the wrapper that replaces it. Only
+// getButtonState takes arguments of its own, so only its replacement leaves the
+// argument list open for them.
+var inputCallPatterns = []struct {
+	sdkCall   string
+	wrapper   string
+	takesArgs bool
+}{
+	{sdkCall: "getButtonState", wrapper: "mcp_get_button_state", takesArgs: true},
+	{sdkCall: "getCrankAngle", wrapper: "mcp_get_crank_angle"},
+	{sdkCall: "getCrankChange", wrapper: "mcp_get_crank_change"},
+	{sdkCall: "isCrankDocked", wrapper: "mcp_get_crank_docked"},
 }
 
 // patchInputCalls replaces direct pd->system->getButtonState/getCrankAngle/
@@ -83,25 +115,20 @@ func setupC(sourceDir string, harnessFS fs.FS) (SetupResult, error) {
 // take effect through these wrapper functions, never by patching
 // pd->system itself. See the design note in mcp_harness.h.
 //
+// Anything it could not rewrite comes back as a ManualStep rather than being
+// left silent - see leftoverInputCallSteps.
+//
 // Not reversed by teardown - see cHasUnmarkedHarnessReference, which
 // treats any mcp_get_* call as a reason to leave the harness files (and
 // everything else) in place, the same conservative "don't guess" choice
 // applied to hand-written init/update calls.
-var (
-	getButtonStateCallRe = regexp.MustCompile(`(\w+)->system->getButtonState\(`)
-	getCrankAngleCallRe  = regexp.MustCompile(`(\w+)->system->getCrankAngle\(\)`)
-	getCrankChangeCallRe = regexp.MustCompile(`(\w+)->system->getCrankChange\(\)`)
-	isCrankDockedCallRe  = regexp.MustCompile(`(\w+)->system->isCrankDocked\(\)`)
-)
-
-func patchInputCalls(sourceDir string) ([]FileChange, error) {
+func patchInputCalls(sourceDir string) ([]FileChange, []string, error) {
 	var changes []FileChange
+	var manualSteps []string
 	err := walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
 		content := string(b)
-		patched := getButtonStateCallRe.ReplaceAllString(content, "mcp_get_button_state($1, ")
-		patched = getCrankAngleCallRe.ReplaceAllString(patched, "mcp_get_crank_angle($1)")
-		patched = getCrankChangeCallRe.ReplaceAllString(patched, "mcp_get_crank_change($1)")
-		patched = isCrankDockedCallRe.ReplaceAllString(patched, "mcp_get_crank_docked($1)")
+		patched := patchInputCallsInContent(content)
+		manualSteps = append(manualSteps, leftoverInputCallSteps(p, patched)...)
 		if patched == content {
 			return false, nil
 		}
@@ -118,15 +145,173 @@ func patchInputCalls(sourceDir string) ([]FileChange, error) {
 		changes = append(changes, FileChange{Path: p, Changed: true})
 		return false, nil
 	})
-	return changes, err
+	return changes, manualSteps, err
 }
 
-func fileContains(path, substr string) bool {
+// patchInputCallsInContent rewrites every input call it can reach. Matches
+// are applied last-to-first so each edit leaves the offsets of the ones still
+// to come untouched, and a receiver that turns out to be part of a larger
+// expression is skipped rather than mangled - leftoverInputCallSteps then
+// reports it.
+func patchInputCallsInContent(content string) string {
+	for _, pat := range inputCallPatterns {
+		// Reclassified per pattern rather than once up front: an earlier
+		// pattern's rewrites have already changed the file, and a stale map
+		// would be reading the wrong bytes. Within one pattern it stays valid,
+		// because the rewrites run last-to-first and so only ever touch text
+		// after the part still being searched.
+		code := scan.CCode(content)
+		// Last occurrence first, so each rewrite leaves the offsets of the ones
+		// still to come untouched.
+		anchor := "->system->" + pat.sdkCall + "("
+		for limit := len(content); ; {
+			at := code.LastIndex(content, anchor, limit)
+			if at < 0 {
+				break
+			}
+			limit = at
+			callEnd := at + len(anchor)
+			if !pat.takesArgs {
+				// The crank calls take none, so the "()" is part of what gets
+				// replaced. Anything between the parens means this is not the
+				// call it looks like.
+				end, ok := scan.Literal(content, callEnd, ")")
+				if !ok {
+					continue
+				}
+				callEnd = end
+			}
+			recvStart, ok := receiverChainStart(content, at)
+			if !ok || !receiverIsWhole(content, recvStart) {
+				continue
+			}
+			call := pat.wrapper + "(" + content[recvStart:at]
+			if pat.takesArgs {
+				call += ", "
+			} else {
+				call += ")"
+			}
+			content = content[:recvStart] + call + content[callEnd:]
+			// Everything from here on has moved; only the text in front of the
+			// receiver is still at the offsets it was.
+			limit = recvStart
+		}
+	}
+	return content
+}
+
+// receiverChainStart walks leftward from the "->system->" anchor at to the start
+// of the member-access chain in front of it, so game->pd->system->... yields
+// "game->pd" rather than just "pd".
+//
+// Whitespace is allowed between the links of the chain but not before the anchor
+// itself, which is where the calls this tool has actually seen put it. A chain
+// that stops at something other than an identifier (a call or a subscript, as in
+// api()->pd->system->...) reports the last identifier as the start; receiverIsWhole
+// is what then declines to rewrite it.
+func receiverChainStart(content string, at int) (int, bool) {
+	name, start := scan.IdentifierBefore(content, at)
+	if name == "" {
+		return 0, false
+	}
+	for {
+		linkEnd := scan.SkipSpaceBefore(content, start)
+		arrowStart := linkEnd - 2
+		if linkEnd >= 1 && content[linkEnd-1] == '.' {
+			arrowStart = linkEnd - 1
+		} else if arrowStart < 0 || content[arrowStart:linkEnd] != "->" {
+			return start, true
+		}
+		prev, prevStart := scan.IdentifierBefore(content, scan.SkipSpaceBefore(content, arrowStart))
+		if prev == "" {
+			return start, true
+		}
+		start = prevStart
+	}
+}
+
+// receiverIsWhole reports whether the match starting at at begins the whole
+// receiver expression. A match that starts immediately after "->", ".", ")"
+// or "]" is the tail of something bigger - foo(x)->pd->system->getButtonState
+// captures only "pd", and rewriting that much would leave foo(x)-> attached
+// to a function call. Two bytes are compared for "->" rather than one for ">"
+// so a greater-than (a > pd->system->getCrankAngle()) still counts as whole.
+func receiverIsWhole(content string, at int) bool {
+	if at >= 2 && content[at-2:at] == "->" {
+		return false
+	}
+	if at >= 1 {
+		switch content[at-1] {
+		case '.', ')', ']':
+			return false
+		}
+	}
+	return true
+}
+
+// leftoverInputCallSteps reports every input call that survived patching,
+// whatever shape it is in - spacing the rewriter doesn't accept, a receiver it
+// can't rewrite ((*pdp)->system->..., api()->pd->system->...), or a line split.
+//
+// It only ever reports, never rewrites: a silently unpatched input call means
+// press_button/set_crank do nothing at runtime while setup reports success,
+// which is the hardest failure in this tool to diagnose from the outside. Being
+// loose is the point - a false report costs the user one line of advisory text,
+// a miss costs them an afternoon.
+func leftoverInputCallSteps(path, content string) []string {
+	var steps []string
+	// Loose about shape, strict about being code. A call named in a comment is
+	// not one this tool failed to rewrite - it is not a call at all, and
+	// reporting it would send the user looking for something to fix in a line
+	// that is already fine.
+	code := scan.CCode(content)
+	for i := 0; ; {
+		at := code.Index(content, "system", i)
+		if at < 0 {
+			return steps
+		}
+		i = at + len("system")
+
+		j := scan.SkipSpace(content, i)
+		j, ok := scan.Literal(content, j, "->")
+		if !ok {
+			continue
+		}
+		j = scan.SkipSpace(content, j)
+		name, j := scan.Identifier(content, j)
+		wrapper, isInputCall := wrapperFor(name)
+		if !isInputCall {
+			continue
+		}
+		if _, ok := scan.Literal(content, scan.SkipSpace(content, j), "("); !ok {
+			continue
+		}
+		steps = append(steps, fmt.Sprintf(
+			"%s:%d reads input directly through ->system->%s(...) in a form this tool could not rewrite - "+
+				"replace it with %s(<your PlaydateAPI pointer>, ...) yourself, or press_button and set_crank "+
+				"will have no effect on it",
+			path, scan.LineNumber(content, at), name, wrapper))
+	}
+}
+
+func wrapperFor(sdkCall string) (string, bool) {
+	for _, pat := range inputCallPatterns {
+		if pat.sdkCall == sdkCall {
+			return pat.wrapper, true
+		}
+	}
+	return "", false
+}
+
+// cmakeListsContains reports whether a CMakeLists names substr as part of the
+// build rather than in a comment about it.
+func cmakeListsContains(path, substr string) bool {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(b), substr)
+	content := string(b)
+	return scan.CMakeCode(content).Contains(content, substr)
 }
 
 // patchCMakeLists makes two independent edits, in one read/write pass:
@@ -134,7 +319,7 @@ func fileContains(path, substr string) bool {
 // include_directories(src) line so #include "mcp_harness.h" resolves from
 // any .c file in the project - not just ones that happen to already live
 // in src/ alongside it (see patchCMakeIncludeDirectories).
-func patchCMakeLists(path string) (bool, error) {
+func patchCMakeLists(path, gameSource string) (bool, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return false, err
@@ -142,8 +327,10 @@ func patchCMakeLists(path string) (bool, error) {
 	content := string(b)
 	changed := false
 
-	if !strings.Contains(content, "src/mcp_harness.c") {
-		if newContent, ok := patchCMakeSourceList(content); ok {
+	// Code only, for the same reason as the include_directories guard: a comment
+	// naming the harness source is not an entry in a source list.
+	if !scan.CMakeCode(content).Contains(content, "src/mcp_harness.c") {
+		if newContent, ok := patchCMakeSourceList(content, gameSource); ok {
 			content = newContent
 			changed = true
 		}
@@ -171,40 +358,110 @@ func patchCMakeLists(path string) (bool, error) {
 // examples: an inline list (add_library(NAME SHARED src/main.c ...)) and
 // a set(GAME_SOURCES ...) variable referenced by ${GAME_SOURCES}. Doesn't
 // guess at anything else - see setupC's ManualSteps fallback.
-var (
-	setBlockRe = regexp.MustCompile(`(?s)set\(\s*[A-Za-z_][A-Za-z0-9_]*\s*\n(.*?)\n(\s*)\)`)
-	addCallRe  = regexp.MustCompile(`(?s)(?:add_library|add_executable)\(([^()]*)\)`)
-)
-
-func patchCMakeSourceList(content string) (string, bool) {
-	if loc := setBlockRe.FindStringSubmatchIndex(content); loc != nil {
-		body := content[loc[2]:loc[3]]
-		if strings.Contains(body, ".c") {
-			indent := content[loc[4]:loc[5]]
-			insertion := "\n" + indent + "\tsrc/mcp_harness.c"
-			bodyEnd := loc[3]
-			return content[:bodyEnd] + insertion + content[bodyEnd:], true
+// patchCMakeSourceList adds src/mcp_harness.c to the source list that builds
+// the game. gameSource is the project-relative path of the file defining
+// eventHandler ("src/main.c" in every shape this tool has seen), which is what
+// makes "the game's source list" identifiable at all - see targetBuildsGame.
+// An empty gameSource means it could not be determined, and the looser rule
+// applies: any list that already holds sources.
+func patchCMakeSourceList(content, gameSource string) (string, bool) {
+	for _, block := range scan.CMakeSetBlocks(content) {
+		if !sourceListBuildsGame(block.Body(content), gameSource) {
+			continue
 		}
+		insertion := "\n" + block.Indent(content) + "\tsrc/mcp_harness.c"
+		return content[:block.BodyEnd] + insertion + content[block.BodyEnd:], true
 	}
 
-	matches := addCallRe.FindAllStringSubmatchIndex(content, -1)
-	if len(matches) == 0 {
+	calls := scan.CMakeCalls(content, "add_library", "add_executable")
+	if len(calls) == 0 {
 		return content, false
 	}
 	changed := false
-	for i := len(matches) - 1; i >= 0; i-- {
-		m := matches[i]
-		argsStart, argsEnd := m[2], m[3]
-		if strings.Contains(content[argsStart:argsEnd], "mcp_harness.c") {
+	// Last to first, so each insertion leaves the offsets of the calls still to
+	// come untouched.
+	for i := len(calls) - 1; i >= 0; i-- {
+		args := content[calls[i].ArgsStart:calls[i].ArgsEnd]
+		if strings.Contains(args, "mcp_harness.c") {
 			continue
 		}
-		content = content[:argsEnd] + " src/mcp_harness.c" + content[argsEnd:]
+		if !targetBuildsGame(content, args, gameSource) {
+			continue
+		}
+		at := calls[i].ArgsEnd
+		content = content[:at] + " src/mcp_harness.c" + content[at:]
 		changed = true
 	}
 	return content, changed
 }
 
-var projectLineRe = regexp.MustCompile(`(?m)^project\([^)]*\)\s*$`)
+// sourceListBuildsGame reports whether a set() body is the game's source list.
+// Every multi-line set() in the file is now considered rather than only the
+// first: a project that lists something else multi-line before its sources
+// (compiler flags, a tool's inputs) used to abandon the set() path entirely on
+// that first non-matching block.
+func sourceListBuildsGame(body, gameSource string) bool {
+	sawSource := false
+	for _, tok := range scan.CMakeArgTokens(body) {
+		if !scan.IsCSourceFile(tok) {
+			continue
+		}
+		if gameSource != "" && scan.SamePath(tok, gameSource) {
+			return true
+		}
+		sawSource = true
+	}
+	return gameSource == "" && sawSource
+}
+
+// targetBuildsGame reports whether an add_library/add_executable argument list
+// builds the game, i.e. whether the harness belongs in it.
+//
+// Every target used to get the entry, which broke two ordinary layouts: an
+// INTERFACE library (CMake rejects a source on one outright) and an unrelated
+// tool target in the same file (mcp_harness.c needs pd_api.h on its include
+// path, which a host-side tool target has no reason to have). Both are now
+// skipped, and a project where no target can be identified gets the
+// "add it yourself" ManualStep instead of a build that fails on the first
+// compile.
+//
+// A ${VAR} that isn't set in this file counts as "yes". It could be a
+// file(GLOB ...) result or a parent-scope variable, neither of which is
+// resolvable here, and refusing to patch would break projects that work
+// today. The cost of guessing wrong in that direction is a harness source
+// compiled into a target that didn't need it; the cost in the other direction
+// is a game that never answers the harness.
+func targetBuildsGame(content, args, gameSource string) bool {
+	sawSource := false
+	for _, tok := range scan.CMakeArgTokens(args) {
+		values := []string{tok}
+		if name, ok := scan.CMakeVarReference(tok); ok {
+			body, found := scan.CMakeSetBody(content, name)
+			if !found {
+				return true
+			}
+			values = scan.CMakeArgTokens(body)
+		}
+		for _, v := range values {
+			// A variable inside a resolved variable is only followed one level
+			// deep, then given the same benefit of the doubt as an
+			// unresolvable one - a project that keeps its sources in
+			// set(GAME_SOURCES ${COMMON_SRC}) builds today and has to keep
+			// building.
+			if _, nested := scan.CMakeVarReference(v); nested {
+				return true
+			}
+			if !scan.IsCSourceFile(v) {
+				continue
+			}
+			if gameSource != "" && scan.SamePath(v, gameSource) {
+				return true
+			}
+			sawSource = true
+		}
+	}
+	return gameSource == "" && sawSource
+}
 
 // patchCMakeIncludeDirectories inserts a marker-wrapped
 // include_directories(src) line right after the project(...) line -
@@ -226,18 +483,59 @@ var projectLineRe = regexp.MustCompile(`(?m)^project\([^)]*\)\s*$`)
 // hasMarkerBlock, so a project that already has this line by hand isn't
 // duplicated.
 func patchCMakeIncludeDirectories(content string) (string, bool) {
-	if strings.Contains(content, "include_directories(src)") {
+	// Lowercased for the same reason the command patterns are
+	// case-insensitive: INCLUDE_DIRECTORIES(src) is the same statement, and
+	// adding a second copy of it is pointless noise in the user's file.
+	// Code only: a commented-out attempt ("# include_directories(src)  # tried
+	// this, did not help") is a note about something that is not there, and
+	// reading it as "already present" suppressed the real insertion entirely.
+	if scan.CMakeCode(content).Contains(strings.ToLower(content), "include_directories(src)") {
 		return content, false
 	}
-	loc := projectLineRe.FindStringIndex(content)
-	if loc == nil {
+	afterProject, ok := scan.CMakeCallOnOwnLine(content, "project")
+	if !ok {
 		return content, false
 	}
 	block := markerBlock(cmakeMarkerBegin, cmakeMarkerEnd, "include_directories(src)")
-	return content[:loc[1]] + "\n" + block + content[loc[1]:], true
+	return content[:afterProject] + "\n" + block + content[afterProject:], true
 }
 
-var eventHandlerRe = regexp.MustCompile(`\beventHandler\s*\(\s*PlaydateAPI\s*\*\s*(\w+)`)
+// eventHandlerParam returns the name the file's eventHandler gives its
+// PlaydateAPI pointer parameter. Real projects differ ("pd" and "playdate" both
+// appear in this project's own examples), so it is read rather than assumed.
+func eventHandlerParam(content string) (string, bool) {
+	// A commented-out prototype used to win, and the damage landed downstream:
+	// this file was then designated "the" eventHandler file, no kEventInit
+	// branch could be found in it, and setup failed the whole call after having
+	// already copied the harness in and patched CMakeLists.
+	code := scan.CCode(content)
+	for i := 0; ; {
+		at := code.TokenIndex(content, "eventHandler", i)
+		if at < 0 {
+			return "", false
+		}
+		i = at + len("eventHandler")
+
+		j := scan.SkipSpace(content, i)
+		j, ok := scan.Literal(content, j, "(")
+		if !ok {
+			continue
+		}
+		j, ok = scan.Literal(content, scan.SkipSpace(content, j), "PlaydateAPI")
+		if !ok {
+			continue
+		}
+		j, ok = scan.Literal(content, scan.SkipSpace(content, j), "*")
+		if !ok {
+			continue
+		}
+		name, _ := scan.Identifier(content, scan.SkipSpace(content, j))
+		if name == "" {
+			continue
+		}
+		return name, true
+	}
+}
 
 // findEventHandler walks sourceDir for the .c file defining eventHandler,
 // returning its path and the actual parameter name it uses for the
@@ -246,8 +544,8 @@ var eventHandlerRe = regexp.MustCompile(`\beventHandler\s*\(\s*PlaydateAPI\s*\*\
 // than assumed).
 func findEventHandler(sourceDir string) (path, pdVar string, err error) {
 	walkErr := walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
-		if m := eventHandlerRe.FindSubmatch(b); m != nil {
-			path, pdVar = p, string(m[1])
+		if v, ok := eventHandlerParam(string(b)); ok {
+			path, pdVar = p, v
 			return true, nil
 		}
 		return false, nil
@@ -261,8 +559,6 @@ func findEventHandler(sourceDir string) (path, pdVar string, err error) {
 	return path, pdVar, nil
 }
 
-var includeRe = regexp.MustCompile(`(?m)^#include\s*[<"][^>"]+[>"]\s*$`)
-
 // insertIncludeIfMissing inserts a marker-wrapped #include "mcp_harness.h"
 // into content - after the last existing #include line if any, otherwise
 // prepended - unless the literal include is already present. Shared by
@@ -270,54 +566,232 @@ var includeRe = regexp.MustCompile(`(?m)^#include\s*[<"][^>"]+[>"]\s*$`)
 // mcp_harness.h is reachable from whatever file they're touching, not just
 // the one file setup happens to designate as "the" eventHandler file.
 func insertIncludeIfMissing(content string) (string, bool) {
-	if strings.Contains(content, `#include "mcp_harness.h"`) {
+	code := scan.CCode(content)
+	if code.Contains(content, `#include "mcp_harness.h"`) {
 		return content, false
 	}
 	includeBlock := markerBlock(cMarkerBegin, cMarkerEnd, `#include "mcp_harness.h"`)
-	if allIncludes := includeRe.FindAllStringIndex(content, -1); len(allIncludes) > 0 {
-		last := allIncludes[len(allIncludes)-1]
-		return content[:last[1]] + "\n" + includeBlock + content[last[1]:], true
+	if at, ok := lastIncludeLineEnd(content, code); ok {
+		return content[:at] + "\n" + includeBlock + content[at:], true
 	}
 	return includeBlock + "\n" + content, true
 }
-
-var kEventInitRe = regexp.MustCompile(`event\s*==\s*kEventInit\s*\)\s*\{`)
 
 // patchEventHandlerInit inserts the #include and the mcp_harness_init()
 // call independently, each checked against the file's literal existing
 // content (not hasMarkerBlock) - a project already hand-wired before this
 // tool existed (no markers) would otherwise get a duplicate of either.
-func patchEventHandlerInit(path, pdVar string) (bool, error) {
+//
+// A file whose init branch can't be found is reported as a ManualStep, never
+// as an error. It used to fail the whole setup call, which left the harness
+// files copied and CMakeLists patched but nothing wired - a worse state than
+// "here is the one line to add yourself", and reachable from several ordinary
+// ways of writing the handler (see findInitInsertionPoint). The #include is
+// still inserted in that case, so the hand-written call has a declaration to
+// use, and it is marker-wrapped so teardown reverses it.
+func patchEventHandlerInit(path, pdVar string) (changed bool, manualStep string, err error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	content := string(b)
-	changed := false
 
 	if newContent, ok := insertIncludeIfMissing(content); ok {
 		content = newContent
 		changed = true
 	}
 
-	if !strings.Contains(content, "mcp_harness_init(") {
-		loc := kEventInitRe.FindStringIndex(content)
-		if loc == nil {
-			return false, fmt.Errorf("found eventHandler but not its kEventInit branch in %s", path)
+	// Code only: a comment saying the call was removed is not the call.
+	if !scan.CCode(content).Contains(content, "mcp_harness_init(") {
+		insertAt, found := findInitInsertionPoint(content)
+		switch {
+		case !found:
+			manualStep = fmt.Sprintf(
+				"could not find where %s handles kEventInit - call mcp_harness_init(%s) yourself when your game "+
+					"initializes, before its first frame", path, pdVar)
+		case insertAt < 0:
+			manualStep = fmt.Sprintf(
+				"found the kEventInit branch in %s but it has no braces to insert into - give it a { } body and "+
+					"call mcp_harness_init(%s) as its first statement", path, pdVar)
+		default:
+			initBlock := markerBlock(cMarkerBegin, cMarkerEnd, fmt.Sprintf("mcp_harness_init(%s);", pdVar))
+			content = content[:insertAt] + "\n" + initBlock + content[insertAt:]
+			changed = true
 		}
-		initBlock := markerBlock(cMarkerBegin, cMarkerEnd, fmt.Sprintf("mcp_harness_init(%s);", pdVar))
-		insertAt := loc[1]
-		content = content[:insertAt] + "\n" + initBlock + content[insertAt:]
-		changed = true
 	}
 
 	if !changed {
-		return false, nil
+		return false, manualStep, nil
 	}
-	return true, os.WriteFile(path, []byte(content), 0o644)
+	return true, manualStep, os.WriteFile(path, []byte(content), 0o644)
 }
 
-var setUpdateCallbackRe = regexp.MustCompile(`setUpdateCallback\s*\(\s*(\w+)\s*,`)
+// findInitInsertionPoint returns the offset at which mcp_harness_init() can be
+// inserted as the first statement of the branch handling kEventInit, and
+// whether the kEventInit token was there to begin with. The two are reported
+// separately because "this file never mentions kEventInit" and "it does, but
+// not in a form with a body to insert into" need different advice.
+//
+// It works from the kEventInit token outward rather than matching a whole
+// branch shape, because the shapes are not enumerable in practice. The old
+// pattern (event == kEventInit) followed by ") {" refused a switch/case, a
+// compound condition (event == kEventInit && !inited), a reversed comparison
+// (kEventInit == event) and redundant parens - all ordinary C, all of which
+// made setup fail outright.
+//
+// Two positions are valid, and which one applies is decided by whether the
+// token sits in a case label:
+//
+//	case kEventInit:      insert straight after the colon. A label may be
+//	                      followed by any statement, so this works whether or
+//	                      not the case body is wrapped in braces.
+//	if (... kEventInit ...) {   insert after the opening brace.
+//
+// For the condition form, a ";" reached before any "{" means there is no
+// block: either a braceless branch, or kEventInit used in an expression this
+// function has no business rewriting (int wantInit = event == kEventInit;).
+// Both return a negative offset rather than guessing.
+func findInitInsertionPoint(content string) (offset int, found bool) {
+	// The first match in *code*, not the first in the file. A commented-out
+	// branch above the live one used to win, putting the init call inside the
+	// comment where it never compiles - and setup still reported success, so
+	// the symptom was a harness that never answers, which reads like a
+	// transport bug rather than a patching one. The worst outcome in this file.
+	code := scan.CCode(content)
+	at := code.TokenIndex(content, "kEventInit", 0)
+	if at < 0 {
+		return -1, false
+	}
+	afterToken := at + len("kEventInit")
+
+	if scan.PrecededByKeyword(content, at, "case") {
+		if end, ok := scan.Literal(content, scan.SkipSpace(content, afterToken), ":"); ok {
+			return end, true
+		}
+		return -1, true
+	}
+
+	brace, ok := code.BlockOpenAfter(content, afterToken)
+	if !ok {
+		return -1, true
+	}
+	return brace + 1, true
+}
+
+// registeredUpdateCallback returns the name passed as the first argument to
+// pd->system->setUpdateCallback. A cast in front of it (setUpdateCallback(
+// (PDCallbackFunction *)update, NULL)) is not read, and reports not-found -
+// which becomes a ManualStep rather than a wrong guess.
+func registeredUpdateCallback(content string) (string, bool) {
+	// A commented-out registration used to win the match, sending the tool
+	// looking for a callback the user had already deleted and reporting a
+	// ManualStep that named it.
+	code := scan.CCode(content)
+	for i := 0; ; {
+		at := code.TokenIndex(content, "setUpdateCallback", i)
+		if at < 0 {
+			return "", false
+		}
+		i = at + len("setUpdateCallback")
+
+		j, ok := scan.Literal(content, scan.SkipSpace(content, i), "(")
+		if !ok {
+			continue
+		}
+		name, j := scan.Identifier(content, scan.SkipSpace(content, j))
+		if name == "" {
+			continue
+		}
+		if _, ok := scan.Literal(content, scan.SkipSpace(content, j), ","); !ok {
+			continue
+		}
+		return name, true
+	}
+}
+
+// functionBodyStart finds the definition of the named function and returns the
+// offset just past the "{" that opens its body, which is where a first statement
+// goes.
+//
+// A declaration is skipped, since it has no "{". Counting the parameter list's
+// parens rather than requiring it to contain none is what makes a
+// function-pointer parameter work - int update(int (*tick)(void), void *ud) was
+// invisible to the pattern this replaced, so the harness never got wired into
+// the games that have one.
+func functionBodyStart(content, name string) (offset int, ok bool) {
+	code := scan.CCode(content)
+	for i := 0; ; {
+		at := code.TokenIndex(content, name, i)
+		if at < 0 {
+			return 0, false
+		}
+		i = at + len(name)
+
+		_, closeAt, found := scan.CallParens(content, i)
+		if !found {
+			continue
+		}
+		brace, found := scan.Literal(content, scan.SkipSpace(content, closeAt+1), "{")
+		if !found {
+			continue
+		}
+		return brace, true
+	}
+}
+
+// lastIncludeLineEnd returns the offset at the end of the file's last #include
+// line, where another include can be added.
+//
+// An include inside a comment does not count, and the reason is worse than
+// tidiness. The block this tool inserts is itself a /* */ pair, so landing it
+// inside an existing block comment ends that comment early and strands the
+// original "*/" as a stray token: a hard compile error pointing at a line the
+// user never wrote. A commented-out include is a completely ordinary thing to
+// find at the top of a game's main.c.
+func lastIncludeLineEnd(content string, code scan.Code) (int, bool) {
+	found := false
+	end := 0
+	for i := 0; i < len(content); {
+		lineEnd := len(content)
+		if nl := strings.IndexByte(content[i:], '\n'); nl >= 0 {
+			lineEnd = i + nl
+		}
+		if code.IsCode(i) && isIncludeLine(content[i:lineEnd]) {
+			found = true
+			// The newline itself, not the byte before it: on a CRLF file,
+			// stopping short of the "\r" would rewrite the include's own line
+			// ending as a bare "\n".
+			end = lineEnd
+		}
+		i = lineEnd + 1
+	}
+	return end, found
+}
+
+// isIncludeLine reports whether a whole line is nothing but an #include
+// directive. Deliberately as strict as the pattern it replaces: this only
+// decides where the harness include is placed, and a line it declines to
+// recognize just means the include goes at the top of the file instead, which
+// compiles the same.
+func isIncludeLine(line string) bool {
+	rest, ok := scan.Literal(line, 0, "#include")
+	if !ok {
+		return false
+	}
+	rest = scan.SkipSpace(line, rest)
+	if rest >= len(line) || (line[rest] != '<' && line[rest] != '"') {
+		return false
+	}
+	rest++
+	start := rest
+	for rest < len(line) && line[rest] != '>' && line[rest] != '"' {
+		rest++
+	}
+	if rest == start || rest >= len(line) {
+		return false
+	}
+	return scan.SkipSpace(line, rest+1) == len(line)
+}
 
 // patchUpdateCallback finds the function registered via
 // pd->system->setUpdateCallback and, if a PlaydateAPI pointer is visible
@@ -335,20 +809,18 @@ func patchUpdateCallback(sourceDir, eventHandlerPath string) (changed bool, path
 	}
 	content := string(b)
 
-	m := setUpdateCallbackRe.FindStringSubmatch(content)
-	if m == nil {
+	callbackName, ok := registeredUpdateCallback(content)
+	if !ok {
 		return false, "", fmt.Sprintf(
 			"could not find a pd->system->setUpdateCallback(...) call to identify your update function - " +
 				"call mcp_harness_update(pd) yourself as the first line of whatever function you register"), nil
 	}
-	callbackName := m[1]
 
-	funcRe := regexp.MustCompile(`(?s)\b` + regexp.QuoteMeta(callbackName) + `\s*\([^)]*\)\s*\{`)
-	funcLoc := funcRe.FindStringIndex(content)
+	funcEnd, found := functionBodyStart(content, callbackName)
 	funcFile := eventHandlerPath
-	if funcLoc == nil {
+	if !found {
 		// The callback might be defined in a different .c file.
-		found, foundContent, ferr := findFunctionInSourceDir(sourceDir, funcRe)
+		found, foundContent, ferr := findFunctionInSourceDir(sourceDir, callbackName)
 		if ferr != nil {
 			return false, "", "", ferr
 		}
@@ -360,7 +832,7 @@ func patchUpdateCallback(sourceDir, eventHandlerPath string) (changed bool, path
 		}
 		funcFile = found
 		content = foundContent
-		funcLoc = funcRe.FindStringIndex(content)
+		funcEnd, _ = functionBodyStart(content, callbackName)
 	}
 
 	// Checked before the PlaydateAPI-variable heuristic below, not after -
@@ -374,7 +846,7 @@ func patchUpdateCallback(sourceDir, eventHandlerPath string) (changed bool, path
 	// marker blocks (include/init) to this same file when the update
 	// callback and eventHandler share a file, which would otherwise look
 	// identical to "already patched" here.
-	if strings.Contains(content, "mcp_harness_update(") {
+	if scan.CCode(content).Contains(content, "mcp_harness_update(") {
 		return false, "", "", nil
 	}
 
@@ -387,7 +859,7 @@ func patchUpdateCallback(sourceDir, eventHandlerPath string) (changed bool, path
 	}
 
 	block := markerBlock(cMarkerBegin, cMarkerEnd, fmt.Sprintf("mcp_harness_update(%s);", pdVar))
-	insertAt := funcLoc[1]
+	insertAt := funcEnd
 	content = content[:insertAt] + "\n" + block + content[insertAt:]
 
 	if err := os.WriteFile(funcFile, []byte(content), 0o644); err != nil {
@@ -396,9 +868,9 @@ func patchUpdateCallback(sourceDir, eventHandlerPath string) (changed bool, path
 	return true, funcFile, "", nil
 }
 
-func findFunctionInSourceDir(sourceDir string, funcRe *regexp.Regexp) (path, content string, err error) {
+func findFunctionInSourceDir(sourceDir, name string) (path, content string, err error) {
 	walkErr := walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
-		if funcRe.Match(b) {
+		if _, ok := functionBodyStart(string(b), name); ok {
 			path, content = p, string(b)
 			return true, nil
 		}
@@ -407,18 +879,49 @@ func findFunctionInSourceDir(sourceDir string, funcRe *regexp.Regexp) (path, con
 	return path, content, walkErr
 }
 
-var playdateVarRe = regexp.MustCompile(`(?:static\s+)?PlaydateAPI\s*\*\s*(\w+)\s*(?:=|;)`)
-
 // findAccessiblePlaydateVar looks for a global/static PlaydateAPI pointer
 // declaration in content - the pattern this project's own examples all
 // use (g_pd, mc_pd, a file-static "pd", etc.) to reach the API from
 // inside a callback that doesn't receive it as a parameter.
+//
+// A typedef is skipped rather than taken for a declaration: typedef
+// PlaydateAPI *PDRef; reads identically to the pattern, and using "PDRef" as
+// the argument to mcp_harness_update() produced a file that does not compile,
+// with the error landing in the user's own source and nothing pointing back at
+// setup as the cause.
 func findAccessiblePlaydateVar(content string) (string, bool) {
-	m := playdateVarRe.FindStringSubmatch(content)
-	if m == nil {
-		return "", false
+	// Skipping comments matters in both directions here: a commented-out
+	// declaration is not a variable that exists (so passing its name to
+	// mcp_harness_update produces a file that does not compile), and a
+	// commented-out old name sitting above the live one used to shadow it.
+	code := scan.CCode(content)
+	for i := 0; ; {
+		at := code.TokenIndex(content, "PlaydateAPI", i)
+		if at < 0 {
+			return "", false
+		}
+		i = at + len("PlaydateAPI")
+
+		if scan.PrecededByKeyword(content, at, "typedef") {
+			continue
+		}
+		j, ok := scan.Literal(content, scan.SkipSpace(content, i), "*")
+		if !ok {
+			continue
+		}
+		name, j := scan.Identifier(content, scan.SkipSpace(content, j))
+		if name == "" {
+			continue
+		}
+		// A declaration ends in "=" (initialized) or ";" (not). Anything else
+		// is a parameter, an array, a pointer-to-pointer or a cast, none of
+		// which is a variable this can pass to mcp_harness_update().
+		j = scan.SkipSpace(content, j)
+		if j >= len(content) || (content[j] != '=' && content[j] != ';') {
+			continue
+		}
+		return name, true
 	}
-	return m[1], true
 }
 
 // teardownC is a full no-op - CMakeLists.txt untouched, no files stripped
@@ -497,18 +1000,22 @@ func cHasUnmarkedHarnessReference(sourceDir string) (bool, error) {
 	found := false
 	err := walkCSources(sourceDir, func(p string, b []byte) (bool, error) {
 		withoutMarkers, _ := stripMarkerBlocks(string(b), cMarkerBegin, cMarkerEnd)
-		if strings.Contains(withoutMarkers, `#include "mcp_harness.h"`) ||
-			strings.Contains(withoutMarkers, "mcp_harness_init(") ||
-			strings.Contains(withoutMarkers, "mcp_harness_update(") ||
+		// Code only. A comment mentioning the harness is not wiring this tool
+		// has to preserve, and reading one as hand-wiring made teardown a
+		// silent no-op on a project it could have cleaned up completely.
+		code := scan.CCode(withoutMarkers)
+		if code.Contains(withoutMarkers, `#include "mcp_harness.h"`) ||
+			code.Contains(withoutMarkers, "mcp_harness_init(") ||
+			code.Contains(withoutMarkers, "mcp_harness_update(") ||
 			// patchInputCalls' replacements are never marker-wrapped (same
 			// reasoning as CMakeLists.txt: inline, no clean way to mark a
 			// mid-expression substitution) and never reversed - their
 			// presence means mcp_harness.c/.h are still needed regardless
 			// of whether setup or a human put them there.
-			strings.Contains(withoutMarkers, "mcp_get_button_state(") ||
-			strings.Contains(withoutMarkers, "mcp_get_crank_angle(") ||
-			strings.Contains(withoutMarkers, "mcp_get_crank_change(") ||
-			strings.Contains(withoutMarkers, "mcp_get_crank_docked(") {
+			code.Contains(withoutMarkers, "mcp_get_button_state(") ||
+			code.Contains(withoutMarkers, "mcp_get_crank_angle(") ||
+			code.Contains(withoutMarkers, "mcp_get_crank_change(") ||
+			code.Contains(withoutMarkers, "mcp_get_crank_docked(") {
 			found = true
 			return true, nil
 		}
@@ -517,7 +1024,18 @@ func cHasUnmarkedHarnessReference(sourceDir string) (bool, error) {
 	return found, err
 }
 
-var mcpHarnessCRefRe = regexp.MustCompile(`[ \t\n]*src/mcp_harness\.c`)
+// namesHarnessSource reports whether a CMake argument names the harness source
+// file, with or without a directory prefix. Quotes are already off by the time
+// scan.FilterCMakeArgs calls this.
+//
+// Teardown removes the whole argument, prefix included: the harness files are
+// about to be deleted, so an argument still naming one is a broken build either
+// way, and taking out only the part that reads "src/mcp_harness.c" leaves a
+// dangling prefix that CMake refuses outright.
+func namesHarnessSource(arg string) bool {
+	const name = "mcp_harness.c"
+	return arg == name || strings.HasSuffix(arg, "/"+name)
+}
 
 func teardownCMakeLists(path string) (bool, error) {
 	b, err := os.ReadFile(path)
@@ -530,9 +1048,11 @@ func teardownCMakeLists(path string) (bool, error) {
 	content := string(b)
 	changed := false
 
-	if strings.Contains(content, "src/mcp_harness.c") {
-		content = mcpHarnessCRefRe.ReplaceAllString(content, "")
-		changed = true
+	if strings.Contains(content, "mcp_harness.c") {
+		if newContent, removed := scan.FilterCMakeArgs(content, namesHarnessSource); removed {
+			content = newContent
+			changed = true
+		}
 	}
 
 	// The include_directories(src) block (see patchCMakeIncludeDirectories)
