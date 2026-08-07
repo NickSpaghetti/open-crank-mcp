@@ -563,6 +563,12 @@ Two asymmetries worth knowing, both covered in detail in
 
 **Native mode only**
 
+- Running headless needs `SDL_AUDIODRIVER=dummy`. The Simulator treats SDL
+  initialisation as fatal and will not start without a working audio driver, so
+  on a machine with no audio device - a CI runner, a server over SSH - it exits
+  before doing anything, reporting `dsp: No such audio device`. Nothing about
+  that message suggests audio is optional, which it is. A desktop with real audio
+  needs none of this, and the container image already sets it.
 - Building the same game in both modes will hit a stale `CMakeCache.txt`, because
   cmake records absolute paths and the container sees your game at `/workspace`
   while a native run sees its real path. `build_game` detects that specific

@@ -99,8 +99,19 @@ jobs:
       # helper), so wrapping them would nest a second server and could collide
       # on a display number. The xvfb *package* is still required above, because
       # that is where the binary they launch comes from.
+      #
+      # SDL_AUDIODRIVER=dummy for the same reason Dockerfile sets it on the
+      # headless image: the Simulator treats SDL initialisation as fatal, and a
+      # runner has no audio device at all. Without this, SDL works down its
+      # driver list to OSS and dies with "dsp: No such audio device", which reads
+      # like an SDK or display problem and is neither. A developer's desktop has
+      # a real device and needs none of this; anything headless does.
       - run: make smoke-check-native
+        env:
+          SDL_AUDIODRIVER: dummy
       - run: make sdk-contract-check-native
+        env:
+          SDL_AUDIODRIVER: dummy
 
   # macOS, advisory. The platform with the real native user story, and the one
   # nobody here can debug locally, so it reports without blocking.

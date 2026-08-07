@@ -582,10 +582,26 @@ PulseAudio socket that the container has to bring up itself. Natively nothing se
 that variable, SDL picks its platform default, and this failure mode does not
 arise.
 
-Read it anyway. The mitigation it describes - `launch_simulator` checking the
-process is still alive shortly after starting it, and handing back what it
-captured - is general, and it is what makes any startup failure legible instead of
-looking like a game that launched and vanished.
+Read it anyway, for two reasons.
+
+The mitigation it describes - `launch_simulator` checking the process is still
+alive shortly after starting it, and handing back what it captured - is general,
+and it is what makes any startup failure legible instead of looking like a game
+that launched and vanished.
+
+And the underlying trap is not container-specific at all: **the Simulator treats
+SDL initialisation as fatal, so it needs *some* working audio driver wherever it
+runs.** The container hits that as a missing PulseAudio socket. A headless native
+run hits it as no audio device whatsoever - the native CI job failed exactly this
+way on its first run, with `SDL2 could not be initalized (-1 - dsp: No such audio
+device)`, SDL having worked down its driver list to OSS and found nothing. The
+answer is the same either way and is what `Dockerfile` already does for the
+headless image: `SDL_AUDIODRIVER=dummy`. A developer's desktop has a real device
+and needs none of it; anything headless, container or not, does.
+
+Worth noticing what that failure looked like before reading the message: an SDK
+that resolved correctly, `pdc` reporting its version, and then the Simulator
+exiting 255. Nothing in that sequence points at audio.
 
 `SDL_AUDIODRIVER=pulseaudio` is set for the VNC and shared profiles so a game's
 audio reaches the stream. The consequence is easy to miss: the Simulator treats

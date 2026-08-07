@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mutation-test test hooks sdk-path smoke-check-native sdk-contract-check-native
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mutation-test mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -167,6 +167,29 @@ GREMLINS_VERSION ?= v0.6.0
 
 mutation-test:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash
+
+# Mutation testing restricted to what changed against a ref, for the pre-commit
+# hook. Around 1-5s instead of 33s, because it only mutates the lines in the
+# diff.
+#
+# Not a replacement for `mutation-test`: a change can weaken a test for code it
+# does not touch, and only the full run sees that. This is the fast local check;
+# CI still runs the whole thing.
+#
+# The exit-code handling is the awkward part. gremlins reports "no mutants at
+# all" as 0.00% efficacy and fails the threshold, so a commit that touches no Go
+# code - or only comments - would fail for having nothing to test. Treat an
+# all-skipped run as the pass it is.
+MUTATION_DIFF_REF ?= HEAD
+
+mutation-test-diff:
+	@out=$$(go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) \
+		unleash --diff $(MUTATION_DIFF_REF) 2>&1); rc=$$?; \
+	echo "$$out" | tail -4; \
+	if echo "$$out" | grep -q "Killed: 0, Lived: 0, Not covered: 0"; then \
+		echo "  no mutable changes in the diff, nothing to test"; exit 0; \
+	fi; \
+	exit $$rc
 
 # Points git at the tracked hooks in .githooks. Not a copy into .git/hooks: a
 # copy goes stale the moment the tracked hook changes, and nothing tells you.
