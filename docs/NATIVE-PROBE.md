@@ -2,9 +2,13 @@
 
 ## Run this, and nothing else
 
-**macOS is done except for one row.** Parts 1 and 3 between them confirmed every
-path value, and `internal/sdk` has been corrected to match. The raw output is kept
-below as the evidence.
+**Two things outstanding, both macOS.** Every *path value* is confirmed and
+`internal/sdk` matches; parts 1 and 3 are the evidence and need no re-running.
+
+[Part 4](#macos-part-4-does-a-game-actually-run-or-only-load) is the one worth
+doing, and the only thing blocking the macOS CI leg: does the Simulator actually
+run a game, or only load it? Two minutes on a desktop Mac, where CI costs a push
+per guess.
 
 The exception is whether Lua `print()` reaches real stdout. That was recorded as
 answered and is not: the probe cannot tell a withheld console apart from a
@@ -468,6 +472,63 @@ The `game_logs.json` line is the answer. The harness writes it inside whatever
 directory the Simulator sandboxes for that game, so wherever it turns up is the
 real data directory, and its parent is what `OPEN_CRANK_DATA_ROOT` would be set
 to.
+
+## macOS, part 4: does a game actually run, or only load?
+
+Outstanding. This is the one question blocking the macOS CI leg, and a desktop
+Mac answers it in two minutes where CI takes a push per guess.
+
+The leg gets a long way: it installs the SDK from the `.pkg`, resolves the `.app`
+bundle, launches the Simulator, and the Simulator prints `Loading: <game>.pdx/`.
+Then both harnesses stall, in two different ways that one cause would explain:
+
+- The **C** harness creates its `mcp/` directory but never writes a response.
+  `mcp_harness_init` runs at `kEventInit`, which happens while the binary loads;
+  `mcp_harness_update` runs per frame, which needs the game to be *running*.
+- The **Lua** harness never creates its directory at all. `main.lua` only executes
+  when the game runs, so nothing imports the harness and its
+  `playdate.file.mkdir("mcp")` never happens.
+
+So the hypothesis is that a headless runner loads games without ticking them. If
+that is right, macOS CI can verify everything up to and including launching, and
+nothing that needs a frame to pass - which is a fine outcome, but only worth
+writing down once it is established rather than assumed.
+
+Run from the repo root on a Mac with a normal desktop session:
+
+```bash
+bash <<'PROBE'
+SDK=$(awk '$1=="SDKRoot"{print $2; exit}' "$HOME/.Playdate/config" 2>/dev/null)
+[ -z "$SDK" ] && SDK="$HOME/Developer/PlaydateSDK"
+SIM="$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator"
+
+rm -rf /tmp/tickprobe && mkdir -p /tmp/tickprobe
+cp -R lua/test-fixture/Source /tmp/tickprobe/
+cp lua/mcp_harness.lua /tmp/tickprobe/Source/
+"$SDK/bin/pdc" -sdkpath "$SDK" /tmp/tickprobe/Source /tmp/tickprobe/probe.pdx || echo "pdc failed"
+
+BUNDLE=$(awk -F= '$1=="bundleID"{print $2}' /tmp/tickprobe/probe.pdx/pdxinfo)
+DATA="$SDK/Disk/Data/$BUNDLE"
+rm -rf "$DATA"
+echo "watching: $DATA"
+
+"$SIM" /tmp/tickprobe/probe.pdx > /tmp/tickprobe/sim.log 2>&1 &
+SIMPID=$!
+sleep 10
+kill -9 "$SIMPID" 2>/dev/null
+
+echo "=== did the harness create its directory? (Lua runs this at import) ==="
+[ -d "$DATA/mcp" ] && echo "YES - the game executed" || echo "NO - the game loaded but never ran"
+echo "=== what is in there ==="
+find "$DATA" 2>/dev/null || echo "  no data directory at all"
+echo "=== simulator output ==="
+cat /tmp/tickprobe/sim.log
+PROBE
+```
+
+`YES` means games do run on a desktop Mac and the problem is specific to a
+headless runner. `NO` means something more fundamental is wrong with the macOS
+path and the CI environment is not the variable.
 
 ## Windows, optional
 

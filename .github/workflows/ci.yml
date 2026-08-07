@@ -128,7 +128,10 @@ jobs:
       # Whichever it is, the tree below distinguishes them in one run instead of
       # a push per guess.
       - name: what did the harness actually write
-        if: failure() && steps.contract.outcome == 'failure'
+        # always(), not failure(): this job is continue-on-error, so the job
+        # status never becomes failed and failure() never fires. That is why
+        # this step silently did not run the first time it was added.
+        if: always()
         run: |
           echo "--- resolved SDK ---"
           make sdk-path || true
