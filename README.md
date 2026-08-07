@@ -537,13 +537,20 @@ Two asymmetries worth knowing, both covered in detail in
   from either instance. Worth clearing before you trust what you are seeing:
 
   ```
-  pkill -9 -f bin/PlaydateSimulator                                   # native
-  docker compose exec simulator-shared pkill -9 -f bin/PlaydateSimulator   # container
+  pkill -9 -f 'bin/PlaydateSimulato[r]'                                   # native
+  docker compose exec simulator-shared pkill -9 -f 'bin/PlaydateSimulato[r]'   # container
   ```
 
   `-9` is required. The Simulator ignores `SIGTERM`, which is why the server's own
   `stop_simulator` uses `SIGKILL` too. Natively, note this also kills a Simulator
   you started by hand.
+
+  The bracket around the last letter is not a typo. `pkill -f` matches against
+  every process's whole command line, including the shell running the `pkill`
+  itself, so the unbracketed form kills your own shell before it reaches the
+  Simulator - and it does it silently, leaving you to conclude the Simulator was
+  never running. `[r]` matches the same processes without the pattern literally
+  appearing in the command line that is scanning for it.
 - A button cannot be held open-endedly. `press_button` is a tap: omit
   `duration_ms` and it holds for a default that is long enough for the game to
   see a real press, then releases. Ask for a long one and it still releases when
@@ -764,7 +771,7 @@ already runs both.
 |---|---|---|
 | `make go-build` / `go-test` | Go | The server, tools and harness IPC. `go-build` also emits `./open-crank-mcp`, which is what a native client runs. |
 | `make go-build-cross` | Go | Builds and vets for linux, darwin and windows, so a platform-specific construct outside a build-tag file fails here rather than on someone else's machine. |
-| `make no-regex` | git, grep | Fails if any Go file imports `regexp`. There is no allowlist. Patterns are replaced by `internal/scan`, which reads source a byte at a time and knows a comment from code; see the note above the target for why. Grep on the command line is fine. |
+Dgit | `make no-regex` | git, grep | Fails if any Go file imports `regexp`. There is no allowlist. Patterns are replaced by `internal/scan`, which reads source a byte at a time and knows a comment from code; see the note above the target for why. Grep on the command line is fine. |
 | `make test-shared-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. No container. |
 | `make mutation-test` | Go | Mutates the code and checks the tests notice, so a line that runs without being asserted on doesn't pass for covered. Thresholds in `.gremlins.yaml`. About 15s. |
 | `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |

@@ -258,7 +258,14 @@ func CMakeArgTokens(args string) []string {
 			i += end + 2
 			continue
 		}
+		// The byte at i is known to start a token: space, "(", ")" and quote are
+		// all handled above. Consuming it before the loop rather than leaving the
+		// loop to discover it makes forward progress structural, so this cannot
+		// append a zero-length token and spin - which is not a theoretical
+		// concern, it is what took a CI runner down by growing this slice until
+		// the machine ran out of memory.
 		start := i
+		i++
 		for i < len(args) && !IsSpace(args[i]) && args[i] != '(' && args[i] != ')' && args[i] != '"' {
 			i++
 		}
@@ -340,6 +347,9 @@ func FilterCMakeArgs(content string, drop func(arg string) bool) (string, bool) 
 		case content[i] == '(' || content[i] == ')':
 			i++
 		default:
+			// Same as CMakeArgTokens: the byte at i is known to start a token, so
+			// consume it up front and the loop can only move forward.
+			i++
 			for i < len(content) && !IsSpace(content[i]) && !strings.ContainsRune(`"()`, rune(content[i])) {
 				i++
 			}
