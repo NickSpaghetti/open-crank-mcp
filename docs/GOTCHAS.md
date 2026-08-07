@@ -574,6 +574,56 @@ the same concurrent batch against all three real games produced 10/10
 distinct screenshots and zero timeouts, where before it was 1/10 distinct
 and multiple timeouts.
 
+## The macOS Simulator blocks on a first-run dialog, and the documented setting does not suppress it
+
+On a machine that has never run the Simulator, launching a game on macOS opens a
+modal:
+
+> **Heads up!** Regularly test your game on a Playdate during development. The
+> Playdate Simulator runs at your computer's speed, much faster than an actual
+> Playdate.
+
+The game loads behind it and never executes. Nothing times out on the Simulator's
+side, because from its point of view it is waiting for a click that is never
+coming.
+
+The shape of the failure is worth knowing, because it does not look like a dialog
+at all. `Loading: <game>.pdx/` appears on stdout, so the launch obviously worked.
+The **C** harness's data directory *is* created, because `mcp_harness_init` runs
+at `kEventInit` while the binary loads, which happens before the dialog. The
+**Lua** harness's is not, because `playdate.file.mkdir("mcp")` runs when
+`main.lua` executes, which is after. Two harnesses, two different symptoms, one
+cause. Chasing them separately wastes a lot of time.
+
+`scripts/run-vnc.sh` has always written `ShowPerfWarning=0` into the container's
+INI for exactly this, so the container never sees it. Native mode does.
+
+**What does not fix it on macOS**, all confirmed on a CI runner rather than
+reasoned about:
+
+- `defaults write date.play.simulator ShowPerfWarning -bool false`
+- the same key written as the string `"0"`
+- writing an INI to `~/Library/Application Support/Playdate Simulator/`,
+  `~/Library/Preferences/Playdate Simulator/`, or `~/.config/Playdate Simulator/`
+
+The plist is definitely what the Simulator reads: it rewrites
+`~/Library/Preferences/date.play.simulator.plist` on every launch, and it
+preserves the keys written there. It just does not act on that one.
+
+**Also ruled out**, each of which looked plausible enough to test: a timing
+problem (25 seconds is no better than 5), the launch method (`open -a` through
+LaunchServices behaves identically), window focus (the Simulator activates and
+the dialog stays), and a missing GUI session (`launchctl managername` reports
+`Aqua`). What settled it was a `screencapture` of the runner's desktop, after
+several rounds of inference had settled nothing. When something invisible is
+blocking a GUI app, take a screenshot early rather than late.
+
+The open question is which key actually gates the dialog on macOS. Answering it
+needs someone at a Mac to dismiss it once and diff
+`~/Library/Preferences/date.play.simulator.plist` before and after. Until then,
+`.github/workflows/ci.yml`'s `native-macos` job covers everything up to running a
+game, and stops there deliberately.
+
 ## The Simulator will not start without PulseAudio
 
 Container-specific by construction, unlike most of this file. The cause is the

@@ -110,29 +110,65 @@ jobs:
         env:
           SDL_AUDIODRIVER: dummy
       - run: make sdk-contract-check-native
+        id: contract
         env:
           SDL_AUDIODRIVER: dummy
 
-  # macOS, advisory. The platform with the real native user story, and the one
-  # nobody here can debug locally, so it reports without blocking.
+      # Runs only when the contract tests failed, and only to say *how*. The two
+      # failure shapes seen so far need different answers and the test output
+      # cannot tell them apart:
+      #
+      #   - a data directory that exists and holds mcp/ means the harness ran and
+      #     the location is right, so the round trip is what is broken - most
+      #     likely the per-frame update never ticking, which on this platform
+      #     would mean the Simulator is loading games without running them.
+      #   - no data directory at all means the harness never got that far, or it
+      #     is writing somewhere this does not look.
+      #
+      # Whichever it is, the tree below distinguishes them in one run instead of
+      # a push per guess.
+  # macOS, natively. Everything here passes; what is deliberately absent is
+  # explained below, because the absence is the interesting part.
   #
-  # No SDK, and therefore no Simulator: the macOS SDK ships as an installer
-  # rather than the archive the Linux job untars, so a runner cannot provision
-  # one non-interactively. What is left still covers the things only a Mac can
-  # cover, and they are not small:
+  # What this proves, none of which any other job can:
   #
-  #   - internal/harness runs against kqueue instead of inotify. fsnotify
-  #     abstracts them, but the semantics differ, and every timing assumption in
-  #     that package was formed on Linux.
-  #   - internal/simulator's proc_unix.go runs on Darwin's process handling.
-  #   - the darwin path layout compiles and is exercised natively rather than
-  #     cross-compiled.
+  #   - the SDK provisions non-interactively from Panic's .zip, via the .pkg it
+  #     contains. The earlier claim that a macOS runner could not do this was
+  #     simply wrong.
+  #   - detection finds it the way a person's machine would, through the SDKRoot
+  #     key in ~/.Playdate/config that the installer writes - not through an
+  #     environment variable a CI file set for itself.
+  #   - the .app bundle path resolves to the inner Mach-O, which is the value in
+  #     internal/sdk that could not be verified by running until now.
+  #   - internal/harness runs against kqueue rather than inotify, and
+  #     internal/simulator's proc_unix.go against Darwin process handling. Every
+  #     timing assumption in that code was formed on Linux.
+  #   - smoke-check-native passes: the libraries resolve, pdc runs, and the
+  #     Simulator starts and stays up.
   #
-  # If Panic ever publishes a macOS archive, the SDK and Simulator steps from
-  # the native job above drop straight in and this can be promoted.
+  # What is missing, and why: sdk-contract-check-native. Those tests need a game
+  # to actually execute, and on a fresh macOS install the Simulator opens a
+  # first-run modal - "Heads up! Regularly test your game on a Playdate during
+  # development" - and waits on it forever. A screenshot from CI confirms it
+  # directly. The game loads behind the dialog and never ticks, which is why the
+  # C harness gets its directory created at kEventInit while the Lua harness,
+  # which needs main.lua to run, gets nothing.
+  #
+  # Ruled out along the way, so nobody repeats it: it is not timing (25s is no
+  # better than 5s), not the launch method (`open -a` behaves identically), not
+  # focus (the Simulator activates and the dialog stays), and not a missing GUI
+  # session (`launchctl managername` reports Aqua). Writing ShowPerfWarning into
+  # ~/Library/Preferences/date.play.simulator.plist does not suppress it either,
+  # as a boolean or as the string "0", even though that plist is demonstrably
+  # what the Simulator reads and rewrites. The Linux INI equivalent in
+  # run-vnc.sh does work, so either the key differs on macOS or the dialog is
+  # gated on something else entirely.
+  #
+  # Finding the real key needs someone at a Mac who can dismiss the dialog once
+  # and diff the plist. Until then this job covers everything up to running a
+  # game, which is most of what it was added for. See docs/GOTCHAS.md.
   native-macos:
     runs-on: macos-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -140,17 +176,40 @@ jobs:
           go-version-file: go.mod
       - run: make go-build
       - run: make go-test
-      # Expected to fail on a machine with no SDK, and that is the assertion:
-      # detection has to report the failure rather than crash or hang, and has
-      # to name the paths it checked.
-      - name: sdk-path reports a missing SDK cleanly
+
+      # Pinned rather than PlaydateSDK-latest.zip, so this job fails when the
+      # SDK changes under it instead of drifting silently.
+      - name: install the Playdate SDK
         run: |
-          if make sdk-path; then
-            echo "sdk-path found an SDK on a runner that has none"; exit 1
-          fi
-          make sdk-path 2>&1 | grep -q "PlaydateSDK" || {
-            echo "the failure message does not name the paths it checked"; exit 1
-          }
+          curl -fsSL "https://download.panic.com/playdate_sdk/PlaydateSDK-${PLAYDATE_SDK_VERSION}.zip" \
+            -o /tmp/sdk.zip
+          unzip -q /tmp/sdk.zip -d /tmp/sdk
+          sudo installer -pkg /tmp/sdk/PlaydateSDK.pkg -target /
+        env:
+          PLAYDATE_SDK_VERSION: '3.1.1'
+
+      # Fails loudly if detection found nothing, and prints which of the three
+      # sources won. A detection regression is the failure this job most needs
+      # to catch, and it is invisible everywhere else.
+      - run: make sdk-path
+
+      # SDL_AUDIODRIVER=dummy for the same reason the Linux native job sets it:
+      # the Simulator treats SDL initialisation as fatal and a runner has no
+      # audio device.
+      - run: make smoke-check-native
+        env:
+          SDL_AUDIODRIVER: dummy
+
+
+  # What only this job can cover, whether or not the SDK steps work:
+  #
+  #   - internal/harness runs against kqueue instead of inotify. fsnotify
+  #     abstracts them, but the semantics differ, and every timing assumption in
+  #     that package was formed on Linux. The backstop re-check in awaitPath
+  #     exists for a kqueue behaviour that could not be tested from Linux.
+  #   - internal/simulator's proc_unix.go runs on Darwin's process handling.
+  #   - the darwin path layout is exercised natively rather than cross-compiled,
+  #     against a real install rather than an fstest.MapFS.
 
   test-c-harness:
     runs-on: ubuntu-latest

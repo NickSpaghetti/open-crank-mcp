@@ -55,9 +55,10 @@ and how, and what is left.
   because that job would fail otherwise. On Arch that is one package,
   `webkit2gtk-4.1` from `extra`.
 
-Windows-native is not supported. WSL2 covers Windows through container mode, and
-the Windows SDK ships as an interactive installer rather than an archive, so CI
-could never provision a runner to verify a native path there.
+Windows-native is not supported: WSL2 covers Windows through container mode, and
+nobody here can run or debug a native Windows path. Its layout values in
+`internal/sdk` are correct and covered by tests, so the code compiles and the
+logic is exercised on every platform - it simply is not verified by running.
 
 ## Building
 

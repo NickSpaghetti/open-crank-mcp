@@ -887,12 +887,22 @@ asking "yet?" instead of being told.
   covered by the `fstest` suite, but the runtime is unsupported and says so:
   WSL2 already serves those users through the existing profile.
 
-  That started as a scoping choice and has since become a structural one. The
-  Windows SDK ships as an interactive installer `.exe`, with no archive
-  equivalent to the Linux `.tar.gz` that CI fetches and extracts. So a Windows
-  runner cannot provision itself, and Windows-native could never have the
-  per-PR verification the other two platforms get. "Unsupported for now" is
-  therefore "unsupported", not a queue position. Its layout values are still
+  That is a scoping choice, and the reasoning behind it needs a correction.
+
+  It was written up here as structural: the Windows SDK ships as an interactive
+  installer `.exe` with no archive equivalent, so a runner could not provision
+  itself, so Windows-native could never have per-PR verification. The same
+  argument was made about macOS and turned out to be a category error. The macOS
+  download is a `.zip` containing a `.pkg`, and a `.pkg` installs without
+  interaction via `installer -pkg` - "installer, not archive" simply does not
+  imply "cannot be automated". Windows installers routinely take a silent flag
+  too, and nobody has checked whether this one does.
+
+  So the honest position is narrower than what was here. Windows-native is
+  unsupported because nobody here can run or debug it and WSL2 already serves
+  those users through container mode - a scoping decision, and a revisitable one.
+  It is not unsupported because provisioning is impossible; that was asserted
+  without being tested. Its layout values are still
   correct (see `docs/NATIVE-PROBE.md`) because keeping them right costs nothing
   and makes promoting Windows additive if that ever changes.
 
@@ -995,13 +1005,24 @@ asking "yet?" instead of being told.
   purpose is catching the case where a stale glob matches nothing and the job goes
   green having tested nothing.
 
-  Two things this checkpoint cannot close by itself, both stated rather than
-  quietly dropped. The advisory `native-macos` leg has never run - nothing here is
-  a Mac - so it is written from what a macOS runner provides and will be judged on
-  its first real run; that is exactly why it is `continue-on-error`. And adding
-  `native` to `main`'s required checks is a branch-protection setting, not a code
-  change, so it waits for a push and a green run. The tick here means the repo
-  work is done and verified, not that GitHub has agreed yet.
+  The `native-macos` leg has since run, repeatedly, and is no longer advisory.
+  What it established, none of which was verifiable from here: the macOS SDK
+  provisions non-interactively after all (the `.zip` holds a `.pkg`, and
+  `installer -pkg` handles it - the earlier "cannot provision" claim was a
+  category error), detection finds the SDK through the `SDKRoot` key the
+  installer writes rather than through an environment variable CI set for itself,
+  the `.app` bundle path in `internal/sdk` is correct, and `smoke-check-native`
+  passes.
+
+  It stops short of `sdk-contract-check-native`, deliberately and with the reason
+  recorded in `docs/GOTCHAS.md`: a fresh macOS install shows a first-run modal
+  that blocks game execution, and the setting that suppresses it in the container
+  does not work on macOS. Eight runs went into establishing that, most of them
+  wasted on hypotheses that a screenshot disproved in one - which is its own
+  lesson about diagnosing GUI applications remotely.
+
+  Adding `native` to `main`'s required checks is still a branch-protection
+  setting, not a code change, so it waits for a push and a green run.
 - [x] **Checkpoint 10**: Documentation for two modes. The README currently
   interleaves *how the SDK runs* with *which client you configure*, which is why
   the connecting section repeats near-identical blocks. Separating those axes

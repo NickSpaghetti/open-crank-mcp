@@ -20,6 +20,7 @@ import (
 	"github.com/NickSpaghetti/open-crank-mcp/internal/build"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/screenshot"
+	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/setup"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/tools"
@@ -38,7 +39,6 @@ func TestSDKContract(t *testing.T) {
 		t.Skip("OPEN_CRANK_SDK_CONTRACT not set - run `make sdk-contract-check` (container) or `make sdk-contract-check-native` (host SDK)")
 	}
 	paths := contractSDK(t)
-	sdkPath := paths.Root
 
 	repoRoot := findRepoRoot(t)
 
@@ -54,22 +54,30 @@ func TestSDKContract(t *testing.T) {
 		// collidable one should show up here, and entities_complete must
 		// be false - proving the approximation's documented limitation is
 		// real, not just a design note.
-		runContractCheck(t, sdkPath, cPdx, "dev.open-crank-mcp.contractcheck", 1, false, false)
+		runContractCheck(t, paths, cPdx, "dev.open-crank-mcp.contractcheck", 1, false, false)
 	})
 	t.Run("Lua harness", func(t *testing.T) {
 		// getAllSprites() is a true, complete enumeration - both the
 		// fixture's sprites should show up regardless of collide rects.
-		runContractCheck(t, sdkPath, luaPdx, "dev.open-crank-mcp.contractchecklua", 2, true, true)
+		runContractCheck(t, paths, luaPdx, "dev.open-crank-mcp.contractchecklua", 2, true, true)
 	})
 }
 
-func runContractCheck(t *testing.T, sdkPath, pdxPath, bundleID string, wantEntityCount int, wantEntitiesComplete, checkGameLogs bool) {
+// paths rather than a bare SDK directory, because both values this needs are
+// per-platform and only internal/sdk knows them. Building them here as
+// <sdk>/bin/PlaydateSimulator was correct on Linux and silently wrong on macOS,
+// where the executable lives inside a .app bundle - the macOS CI leg failed on
+// exactly that, with `stdbuf: .../bin/PlaydateSimulator: No such file or
+// directory`, on its first ever run.
+func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, wantEntityCount int, wantEntitiesComplete, checkGameLogs bool) {
 	t.Helper()
-	dataDir := filepath.Join(sdkPath, "Disk", "Data", bundleID)
+	// The first candidate is where the Simulator will put it, on every platform
+	// this supports. Predicted rather than probed because this waits for the
+	// directory to appear, so it cannot look for one that already exists.
+	dataDir := paths.DataDirCandidates(sdk.OSEnv(), bundleID)[0]
 	defer os.RemoveAll(dataDir)
 
-	simBin := filepath.Join(sdkPath, "bin", "PlaydateSimulator")
-	sim, err := simulator.Launch(simBin, pdxPath, dataDir)
+	sim, err := simulator.Launch(paths.SimulatorBin, pdxPath, dataDir)
 	if err != nil {
 		t.Fatalf("launching simulator: %v", err)
 	}

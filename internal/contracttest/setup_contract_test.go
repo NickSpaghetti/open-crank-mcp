@@ -8,6 +8,7 @@ import (
 	opencrank "github.com/NickSpaghetti/open-crank-mcp"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/build"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
+	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/setup"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
 )
@@ -25,7 +26,6 @@ func TestSetupContract(t *testing.T) {
 		t.Skip("OPEN_CRANK_SDK_CONTRACT not set - run `make sdk-contract-check` (container) or `make sdk-contract-check-native` (host SDK)")
 	}
 	paths := contractSDK(t)
-	sdkPath := paths.Root
 
 	// A separate display from TestSDKContract's :99 - these are
 	// independent test functions, each self-contained, not relying on
@@ -46,7 +46,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("build.Build after setup: %v\n%s", err, buildResult.Output)
 		}
 
-		runAndConfirmHarnessReachable(t, sdkPath, buildResult.PdxPath, "dev.setupcontract.lua")
+		runAndConfirmHarnessReachable(t, paths, buildResult.PdxPath, "dev.setupcontract.lua")
 
 		if _, err := setup.Teardown(dir, setup.Lua); err != nil {
 			t.Fatalf("setup.Teardown: %v", err)
@@ -81,7 +81,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("build.Build after setup: %v\n%s", err, buildResult.Output)
 		}
 
-		runAndConfirmHarnessReachable(t, sdkPath, buildResult.PdxPath, "dev.setupcontract.c")
+		runAndConfirmHarnessReachable(t, paths, buildResult.PdxPath, "dev.setupcontract.c")
 
 		if _, err := setup.Teardown(dir, setup.C); err != nil {
 			t.Fatalf("setup.Teardown: %v", err)
@@ -125,7 +125,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("build.Build after setup: %v\n%s", err, buildResult.Output)
 		}
 
-		runAndConfirmHarnessReachable(t, sdkPath, buildResult.PdxPath, "dev.setupcontract.c.flat")
+		runAndConfirmHarnessReachable(t, paths, buildResult.PdxPath, "dev.setupcontract.c.flat")
 
 		if _, err := setup.Teardown(dir, setup.C); err != nil {
 			t.Fatalf("setup.Teardown: %v", err)
@@ -160,13 +160,18 @@ func writeFile(t *testing.T, path, content string) {
 // through the real file-based protocol, proving setup's patched output
 // isn't just syntactically valid but actually responds as a working
 // harness would.
-func runAndConfirmHarnessReachable(t *testing.T, sdkPath, pdxPath, bundleID string) {
+// paths rather than a bare SDK directory, because both values this needs are
+// per-platform and only internal/sdk knows them. Building them here as
+// <sdk>/bin/PlaydateSimulator was correct on Linux and silently wrong on macOS,
+// where the executable lives inside a .app bundle - the macOS CI leg failed on
+// exactly that, with `stdbuf: .../bin/PlaydateSimulator: No such file or
+// directory`, on its first ever run.
+func runAndConfirmHarnessReachable(t *testing.T, paths sdk.Paths, pdxPath, bundleID string) {
 	t.Helper()
-	dataDir := filepath.Join(sdkPath, "Disk", "Data", bundleID)
+	dataDir := paths.DataDirCandidates(sdk.OSEnv(), bundleID)[0]
 	defer os.RemoveAll(dataDir)
 
-	simBin := filepath.Join(sdkPath, "bin", "PlaydateSimulator")
-	sim, err := simulator.Launch(simBin, pdxPath, dataDir)
+	sim, err := simulator.Launch(paths.SimulatorBin, pdxPath, dataDir)
 	if err != nil {
 		t.Fatalf("launching simulator: %v", err)
 	}
