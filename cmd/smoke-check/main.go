@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"regexp"
+	"strings"
 	"time"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
@@ -84,14 +84,22 @@ func run() error {
 	return nil
 }
 
-// Matches both the correctly-spelled and the typo'd form SDL2 itself uses
-// ("could not be initalized") - seen directly in this project's own SDL2
-// audio-driver debugging, not a hypothetical.
-var errorPattern = regexp.MustCompile(`(?i)could not be initi?alized|error|not found`)
+// Both the correctly-spelled and the typo'd form SDL2 itself uses ("could not
+// be initalized") are listed - the typo was seen directly in this project's own
+// SDL2 audio-driver debugging, not a hypothetical.
+var errorMarkers = []string{
+	"could not be initalized",
+	"could not be initialized",
+	"error",
+	"not found",
+}
 
 func checkForErrors(output string) error {
-	if errorPattern.MatchString(output) {
-		return fmt.Errorf("simulator reported an error:\n%s", output)
+	lower := strings.ToLower(output)
+	for _, marker := range errorMarkers {
+		if strings.Contains(lower, marker) {
+			return fmt.Errorf("simulator reported an error:\n%s", output)
+		}
 	}
 	return nil
 }

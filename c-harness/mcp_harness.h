@@ -69,6 +69,10 @@ typedef struct {
     int entities_complete;
 } McpResponse;
 
+/* Sentinel expiry meaning "never". Negative so it can never collide with a real
+   deadline, which is always now_ms + a duration and therefore non-negative. */
+#define MCP_NO_EXPIRY (-1L)
+
 typedef struct {
     int button_override_active[6];
     int button_override_value[6];
@@ -83,6 +87,8 @@ typedef struct {
        game never asked for, and "docked" is the crank's resting state on real
        hardware, so that is not a harmless default to pick. */
     int crank_override_docked_active;
+    /* MCP_NO_EXPIRY means the crank override is held until something replaces
+       it, rather than until a deadline. See mcp_override_apply_crank. */
     long crank_override_expires_at_ms;
     /* Edge tracking for mcp_override_update_edges - see its definition. */
     int last_effective_pressed[6];

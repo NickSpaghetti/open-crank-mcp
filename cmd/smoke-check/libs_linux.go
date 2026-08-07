@@ -3,12 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os/exec"
-	"regexp"
 )
-
-var notFoundPattern = regexp.MustCompile(`not found`)
 
 // checkSharedLibraries runs ldd and fails if anything is unresolved.
 //
@@ -21,7 +19,7 @@ func checkSharedLibraries(binPath string) error {
 	if err != nil {
 		return fmt.Errorf("ldd %s: %w\n%s", binPath, err, out)
 	}
-	if notFoundPattern.Match(out) {
+	if bytes.Contains(out, []byte("not found")) {
 		return fmt.Errorf("missing shared libraries:\n%s", out)
 	}
 	return nil

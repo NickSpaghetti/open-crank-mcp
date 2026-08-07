@@ -177,6 +177,33 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6e", Type: harness.CmdState}))
 	assertStateField(t, resp, "crank_docked", false)
 
+	// A crank with no duration holds. This is the case an agent produces by
+	// omitting duration_ms, and it used to be the one that silently did nothing:
+	// both harnesses expire overrides at the top of every frame, and a deadline of
+	// now+0 is already past by the time any frame reads it, so set_crank reported
+	// success and the game never saw the angle. Run against a real Simulator
+	// because it is a frame-timing bug, and the unit tests drive the clock by hand.
+	//
+	// The sleep is what gives this teeth. Without it the query could land on the
+	// same frame as the command and pass even under the old behavior.
+	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
+		ID: "6f", Type: harness.CmdCrank, CrankAngle: 42.0, CrankDock: harness.DockUnchanged}))
+	time.Sleep(300 * time.Millisecond)
+	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6g", Type: harness.CmdState}))
+	assertStateField(t, resp, "crank_angle", 42.0)
+
+	// Held is not stuck: a later crank replaces it, and that one expires normally.
+	// Also puts the crank back to passthrough for everything below.
+	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
+		ID: "6h", Type: harness.CmdCrank,
+		CrankAngle: 300.0, CrankDock: harness.DockUnchanged, DurationMs: 200}))
+	time.Sleep(600 * time.Millisecond)
+	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6i", Type: harness.CmdState}))
+	if got := stateMap(t, resp)["crank_angle"]; got == 300.0 || got == 42.0 {
+		t.Errorf("crank_angle=%v after the replacing override should have expired; "+
+			"a duration-less crank is meant to be replaceable, not permanent", got)
+	}
+
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "7", Type: harness.CmdScreenshot}))
 	if resp.Width != screenshot.Width || resp.Height != screenshot.Height {
 		t.Errorf("screenshot reported %dx%d, want %dx%d",

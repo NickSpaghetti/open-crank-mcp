@@ -81,7 +81,9 @@ run() {
 }
 
 # Cheapest first, so an obvious break fails in seconds rather than after a
-# container boot.
+# container boot. no-regex leads: it is a git ls-files and a grep, and a rule
+# with no allowlist is worth enforcing before the commit rather than after.
+$want_go     && run no-regex
 $want_go     && run go-test
 $want_shared && run test-shared-unit
 # Diff-scoped: seconds instead of 33, and the full run happens in CI anyway.

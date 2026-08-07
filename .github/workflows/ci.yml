@@ -302,6 +302,19 @@ jobs:
       - if: steps.filter.outputs.shared == 'true'
         run: make test-shared-browser
 
+  # Mutation testing runs as two jobs on two runners, because one runner has not
+  # survived mutating the whole module since internal/scan landed - see the note
+  # above mutation-test-rest in the Makefile for what was measured and ruled out.
+  #
+  # Deliberately two named jobs rather than one matrixed job. A matrix would
+  # rename the checks to "mutation-test (rest)" and "mutation-test (scan)", and
+  # "mutation-test" is a required status check on main - it would never report
+  # again and every PR would block on it forever. This keeps that name attached
+  # to the larger half and adds the new one alongside, so branch protection
+  # keeps working untouched and mutation-test-scan can be made required later.
+  #
+  # Both run the make targets rather than gremlins-action, so CI and a local run
+  # read the same .gremlins.yaml.
   mutation-test:
     runs-on: ubuntu-latest
     steps:
@@ -309,6 +322,13 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: go-gremlins/gremlins-action@v1
+      - run: make mutation-test-rest
+
+  mutation-test-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          version: v0.6.0
+          go-version-file: go.mod
+      - run: make mutation-test-scan

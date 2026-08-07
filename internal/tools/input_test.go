@@ -32,6 +32,77 @@ func TestPressButtonWhenRunning(t *testing.T) {
 	}
 }
 
+// The duration press_button sends when the caller omitted one, asserted on the
+// wire rather than on the constant, because the whole failure this prevents is a
+// zero reaching a harness. Both harnesses expire overrides at the top of every
+// frame and defer a fresh command's edge to the next one, so an override with a
+// zero-length duration is gone before any frame can turn it into a press: the
+// tool reports success and the game sees nothing.
+//
+// Deliberately not asserting the exact value. 100ms is a judgement about frame
+// timing, not a contract, and a test pinning it would just have to be edited
+// alongside it. What matters is that it is long enough to outlive a frame.
+func TestPressButtonSuppliesADefaultDuration(t *testing.T) {
+	s := newTestServer(t)
+	got := startCapturingFakeHarness(t, s.dataDir, map[string]any{"status": "ok"})
+
+	if _, _, err := s.pressButton(context.Background(), nil, PressButtonInput{Button: "a"}); err != nil {
+		t.Fatalf("pressButton: %v", err)
+	}
+
+	cmd, ok := <-got
+	if !ok {
+		t.Fatal("the fake harness never saw a command")
+	}
+	if d, _ := cmd["duration_ms"].(float64); d < 34 {
+		t.Errorf("press with no duration sent duration_ms=%v, want at least one frame's "+
+			"worth (~33ms); anything shorter expires before the harness can synthesize the press", cmd["duration_ms"])
+	}
+}
+
+// An explicit duration is passed through untouched. Without this, a default
+// applied unconditionally would look identical to one applied only when asked.
+func TestPressButtonKeepsAnExplicitDuration(t *testing.T) {
+	s := newTestServer(t)
+	got := startCapturingFakeHarness(t, s.dataDir, map[string]any{"status": "ok"})
+
+	if _, _, err := s.pressButton(context.Background(), nil,
+		PressButtonInput{Button: "a", DurationMs: 5000}); err != nil {
+		t.Fatalf("pressButton: %v", err)
+	}
+
+	cmd, ok := <-got
+	if !ok {
+		t.Fatal("the fake harness never saw a command")
+	}
+	if d, _ := cmd["duration_ms"].(float64); d != 5000 {
+		t.Errorf("duration_ms = %v, want the 5000 that was asked for", cmd["duration_ms"])
+	}
+}
+
+// set_crank must NOT get press_button's treatment. A crank is a position, and
+// the harnesses read a non-positive duration as "hold it there", so substituting
+// a default here would put the crank back on a timer and reintroduce the bug in
+// a slower form: the angle would take, then silently revert a moment later.
+func TestSetCrankSendsNoDurationWhenNoneGiven(t *testing.T) {
+	s := newTestServer(t)
+	got := startCapturingFakeHarness(t, s.dataDir, map[string]any{"status": "ok"})
+
+	if _, _, err := s.setCrank(context.Background(), nil, SetCrankInput{CrankAngle: 90}); err != nil {
+		t.Fatalf("setCrank: %v", err)
+	}
+
+	cmd, ok := <-got
+	if !ok {
+		t.Fatal("the fake harness never saw a command")
+	}
+	if d, present := cmd["duration_ms"]; present {
+		if f, _ := d.(float64); f > 0 {
+			t.Errorf("duration_ms = %v, want absent or non-positive so the harnesses hold the crank", d)
+		}
+	}
+}
+
 func TestSetCrankWhenNotRunning(t *testing.T) {
 	s := &Server{}
 	result, _, err := s.setCrank(context.Background(), nil, SetCrankInput{CrankAngle: 90})

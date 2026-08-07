@@ -10,9 +10,24 @@ import (
 )
 
 type PressButtonInput struct {
-	Button     string `json:"button" jsonschema:"one of a, b, up, down, left, right"`
-	DurationMs int    `json:"duration_ms"`
+	Button string `json:"button" jsonschema:"one of a, b, up, down, left, right"`
+	// DurationMs is how long to hold the button. Omit it for a tap; see
+	// defaultPressMs.
+	DurationMs int `json:"duration_ms,omitempty" jsonschema:"how long to hold the button, in ms. Omit for a short tap."`
 }
+
+// defaultPressMs is how long an omitted duration holds a button for.
+//
+// It cannot be zero. The harness computes edges once per frame and deliberately
+// defers a fresh command's edge to the *next* frame, so an override that expires
+// before that frame arrives produces no press at all - press_button would report
+// success and the game would never see it. Games run at around 30fps, so a frame
+// is about 33ms; 100ms is three of them, enough that jitter in the round trip
+// cannot swallow the press.
+//
+// Buttons get a default rather than the crank's hold-forever treatment because
+// nothing exposes a release: a button held indefinitely could never be let go.
+const defaultPressMs = 100
 
 type PressButtonOutput struct{}
 
@@ -28,10 +43,15 @@ func (s *Server) pressButton(_ context.Context, _ *mcp.CallToolRequest, in Press
 			in.Button, strings.Join(harness.ButtonNames, ", "))), PressButtonOutput{}, nil
 	}
 
+	duration := in.DurationMs
+	if duration <= 0 {
+		duration = defaultPressMs
+	}
+
 	_, err := s.roundTrip(harness.Command{
 		Type:       harness.CmdPress,
 		Button:     in.Button,
-		DurationMs: in.DurationMs,
+		DurationMs: duration,
 	})
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
@@ -60,7 +80,12 @@ type SetCrankInput struct {
 	CrankAngle float64 `json:"crank_angle,omitempty"`
 	CrankDelta float64 `json:"crank_delta,omitempty"`
 	CrankDock  string  `json:"crank_dock,omitempty" jsonschema:"one of unchanged, docked, undocked; omit to leave the dock state as the game sees it"`
-	DurationMs int     `json:"duration_ms,omitempty"`
+	// DurationMs is how long to hold the crank there. Omit it to leave the crank
+	// where it is put, which is what a real crank does; see
+	// mcp_override_apply_crank. Not defaulted here, unlike press_button's: the
+	// harnesses read a non-positive duration as "no expiry", so the sentinel has
+	// to reach them intact.
+	DurationMs int `json:"duration_ms,omitempty" jsonschema:"how long to hold the crank, in ms. Omit to leave it there."`
 }
 
 type SetCrankOutput struct{}

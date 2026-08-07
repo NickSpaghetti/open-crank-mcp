@@ -9,12 +9,32 @@ mutants:
   arithmetic-base: false
 
 unleash:
-  # The test suite has real sleep/poll-based tests (harness IPC, simulator
-  # process lifecycle); high worker parallelism makes their wall-clock time
-  # under gremlins' own load unpredictable enough to spuriously time out
-  # against the default coefficient.
-  workers: 4
-  timeout-coefficient: 10
+  # Both numbers here exist to bound one failure: a mutant that does not fail
+  # but spins.
+  #
+  # internal/scan is byte-loop code, and a byte loop cannot be made
+  # mutation-proof - flip a comparison and the loop stops advancing, and any
+  # progress guard written to stop that is itself just another line to mutate.
+  # So some mutants will always hang, and the timeout is the only thing that
+  # ends them.
+  #
+  # It has to fire before the CI runner gives up. Three runs died with "the
+  # runner has received a shutdown signal", each at a different mutant, each
+  # after ~97 seconds of silence - while the coefficient was 10, which against a
+  # ~13s baseline meant the timeout would not have fired until 132s. Gremlins
+  # never got to kill the hung mutant because the runner went first, so fixing
+  # the individual loops just moved the failure to the next one.
+  #
+  # 5 is ~66s in CI, comfortably inside that. 3 was tried and is too tight: it
+  # times out 109 mutants instead of 38, and a timed-out mutant is one nothing
+  # was learned from. Raising this above about 7 puts the runner back at risk.
+  #
+  # workers is 2 rather than the earlier 4 for the same reason: fewer cores tied
+  # up by a hang, on a runner that only has four. It also keeps the sleep/poll
+  # tests (harness IPC, simulator process lifecycle) predictable enough not to
+  # time out spuriously, which is what the original comment here was about.
+  workers: 2
+  timeout-coefficient: 5
   # gremlins v0.6.0 compares value <= threshold, so 100 can never pass even
   # at a perfect score (confirmed in its source). 90 leaves real headroom.
   threshold:
