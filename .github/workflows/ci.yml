@@ -127,6 +127,57 @@ jobs:
       #
       # Whichever it is, the tree below distinguishes them in one run instead of
       # a push per guess.
+      # A dedicated experiment, not a test. The contract suite can only say "no
+      # response in 5s", which does not distinguish a game that never ran from
+      # one that ran slowly or wrote somewhere else. This asks the question
+      # directly, three ways, so one run settles it.
+      #
+      # The signal is the Lua harness's mcp/ directory. Lua creates it at import,
+      # which happens when main.lua *executes*. The C harness creates its own at
+      # kEventInit, which happens while the binary *loads* - and C's already
+      # appears, which is what suggests loading works and running does not.
+      #
+      # Never fails the job: it exists to produce evidence, and a red step here
+      # would just hide the evidence behind a red X.
+      - name: does a game execute, or only load
+        if: always()
+        continue-on-error: true
+        run: |
+          set +e
+          SDK="$HOME/Developer/PlaydateSDK"
+          SIM="$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator"
+
+          rm -rf /tmp/tick && mkdir -p /tmp/tick
+          cp -R lua/test-fixture/Source /tmp/tick/
+          cp lua/mcp_harness.lua /tmp/tick/Source/
+          "$SDK/bin/pdc" -sdkpath "$SDK" /tmp/tick/Source /tmp/tick/probe.pdx
+          BUNDLE=$(awk -F= '$1=="bundleID"{print $2}' /tmp/tick/probe.pdx/pdxinfo)
+          DATA="$SDK/Disk/Data/$BUNDLE"
+          echo "bundle=$BUNDLE"
+
+          # 1. Exactly what the server does, with a generous wait. Rules out
+          #    "the game ticks, just slower than the 5s the tests allow".
+          rm -rf "$DATA"; echo "=== direct exec, 25s ==="
+          "$SIM" /tmp/tick/probe.pdx > /tmp/tick/sim1.log 2>&1 & p1=$!
+          sleep 25; kill -9 $p1 2>/dev/null
+          [ -d "$DATA/mcp" ] && echo "  RAN" || echo "  DID NOT RUN"
+          sed 's/^/    /' /tmp/tick/sim1.log
+
+          # 2. Through LaunchServices. This is the one thing the server
+          #    deliberately does not do, because `open` detaches and get_logs
+          #    goes permanently empty. But if a game ticks this way and not the
+          #    other, the cause is the GUI session rather than anything in this
+          #    project, and that is worth knowing even though it is not a fix.
+          rm -rf "$DATA"; echo "=== via open -a, 25s ==="
+          open -a "$SDK/bin/Playdate Simulator.app" --args /tmp/tick/probe.pdx
+          sleep 25; pkill -9 -f "Playdate Simulator" 2>/dev/null
+          [ -d "$DATA/mcp" ] && echo "  RAN" || echo "  DID NOT RUN"
+
+          # 3. Is there a window server session at all for this user?
+          echo "=== session context ==="
+          launchctl managername 2>/dev/null || echo "  launchctl managername unavailable"
+          echo "  SSH_CONNECTION=${SSH_CONNECTION:-unset}  TERM_SESSION_ID=${TERM_SESSION_ID:-unset}"
+
       - name: what did the harness actually write
         # always(), not failure(): this job is continue-on-error, so the job
         # status never becomes failed and failure() never fires. That is why
