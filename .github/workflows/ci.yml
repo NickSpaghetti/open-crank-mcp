@@ -182,9 +182,19 @@ jobs:
           BID=$(defaults read "$APP/Contents/Info" CFBundleIdentifier)
           echo "bundle identifier: $BID"
 
-          # The plist route, kept because it is cheap and may cover other keys.
-          defaults write "$BID" ShowPerfWarning -bool false
-          defaults write "$BID" ShowElist -bool false
+          # The plist is confirmed to be what the Simulator reads: it rewrites
+          # this exact file on every run. What is unconfirmed is the value type.
+          # `-bool false` was tried alone and the dialog still appeared, so try
+          # the other two representations a config layer might expect. Only one
+          # can win, and a plist key the app ignores is inert.
+          # Written as strings, not booleans. `-bool false` was tried and the
+          # dialog still appeared; the Linux side of this is a plain INI where
+          # every value is text, so a config layer storing "0" rather than
+          # <false/> is the likelier shape. If this is still wrong, the plist
+          # dump in the next step shows the Simulator's own keys and types and
+          # settles it without another guess.
+          defaults write "$BID" ShowPerfWarning -string "0"
+          defaults write "$BID" ShowElist -string "0"
 
           # The INI route, mirroring scripts/run-vnc.sh. Written to every
           # plausible macOS location for a wxWidgets-style config, because the
@@ -213,9 +223,19 @@ jobs:
           echo "--- files the Simulator created or rewrote ---"
           find "$HOME/Library" "$HOME/.config" -newer /tmp/marker \
             \( -iname "*laydate*" -o -iname "*simulator*" \) 2>/dev/null | head -20
-          echo "--- contents of anything INI-shaped ---"
-          find "$HOME/Library" "$HOME/.config" -iname "Playdate Simulator.ini" 2>/dev/null | while read -r f; do
-            echo "== $f"; cat "$f"; done
+          # The plist is what it rewrote, so the plist is what it reads. Dumping
+          # it after a run shows the Simulator's own key names and value types,
+          # which is the thing still unknown: `defaults write ShowPerfWarning
+          # -bool false` targeted the right file and the dialog appeared anyway,
+          # so either the key differs on this platform or it wants a string or
+          # integer rather than a boolean.
+          echo "--- the plist the Simulator itself wrote ---"
+          plutil -p "$HOME/Library/Preferences/date.play.simulator.plist" 2>/dev/null \
+            || defaults read date.play.simulator 2>/dev/null \
+            || echo "  could not read it"
+
+          echo "--- every key it knows about, with types ---"
+          plutil -convert xml1 -o - "$HOME/Library/Preferences/date.play.simulator.plist" 2>/dev/null | head -40
 
       - name: close the installer's Finder window
         continue-on-error: true
