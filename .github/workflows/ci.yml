@@ -162,39 +162,61 @@ jobs:
       # the Simulator treats SDL initialisation as fatal and a runner has no
       # audio device. Whether a macOS runner can open a window at all is the
       # other open question, and the one most likely to make this leg red.
-      # Suppress the Simulator's first-run modals before anything launches a
-      # game.
+      # Suppress the Simulator's first-run dialog.
       #
-      # This is what run-vnc.sh already does for the container, via an INI:
-      # ShowPerfWarning is the "test on real hardware" dialog and ShowElist is
-      # the mailing-list one, and a fresh install shows both. A runner is always
-      # a fresh install. The evidence that this is what has been happening: a
-      # game loads (`Loading: <game>.pdx/` appears) and then never executes, 25
-      # seconds is no better than 5, `open -a` behaves identically, and the C
-      # harness gets its directory created while Lua does not - because C's runs
-      # at kEventInit during load, and Lua's runs when main.lua executes, which
-      # is after the point a modal would block.
+      # Confirmed necessary by a screenshot: the Simulator sits on a "Heads up!
+      # Regularly test your game on a Playdate during development" modal, which
+      # is the ShowPerfWarning dialog run-vnc.sh already suppresses for the
+      # container via an INI. A game loads behind it and never executes, which is
+      # every symptom this job has had.
       #
-      # macOS keeps these in a plist rather than an INI, so `defaults` is the
-      # equivalent. The bundle identifier is read from the app rather than
-      # guessed, and echoed, because if the key names differ on this platform
-      # that is the next thing to look at.
+      # `defaults write` was the first attempt and does nothing: the settings
+      # land in the plist (verified by reading them back) and the Simulator shows
+      # the dialog anyway, so it reads a config file rather than NSUserDefaults -
+      # consistent with Linux, where it is a plain INI. Both are written here,
+      # since writing a file the Simulator ignores costs nothing and being wrong
+      # again costs a whole run.
       - name: suppress the Simulator's first-run dialogs
         run: |
           APP="$HOME/Developer/PlaydateSDK/bin/Playdate Simulator.app"
           BID=$(defaults read "$APP/Contents/Info" CFBundleIdentifier)
           echo "bundle identifier: $BID"
+
+          # The plist route, kept because it is cheap and may cover other keys.
           defaults write "$BID" ShowPerfWarning -bool false
           defaults write "$BID" ShowElist -bool false
-          defaults write "$BID" ShowDeviceControls -bool true
-          echo "--- what the Simulator will read ---"
-          defaults read "$BID" || echo "  (nothing written)"
 
-      # The SDK installer opens a Finder window on the install directory when it
-      # finishes, and it keeps the front. Closing it is not cosmetic: the
-      # previous run's screenshot showed the Simulator running behind it with a
-      # blank Playdate screen, and a simulator that pauses while backgrounded
-      # would produce exactly the symptoms this job has been showing.
+          # The INI route, mirroring scripts/run-vnc.sh. Written to every
+          # plausible macOS location for a wxWidgets-style config, because the
+          # exact one is unknown and a stray file is harmless.
+          for d in "$HOME/Library/Application Support/Playdate Simulator" \
+                   "$HOME/Library/Preferences/Playdate Simulator" \
+                   "$HOME/.config/Playdate Simulator"; do
+            mkdir -p "$d"
+            printf 'Zoom=1\nShowDeviceControls=1\nShowPerfWarning=0\nShowElist=0\n' \
+              > "$d/Playdate Simulator.ini"
+            echo "wrote $d/Playdate Simulator.ini"
+          done
+
+      # Which of those the Simulator actually reads, established rather than
+      # guessed: run it once, then look at what it touched. Whatever it rewrites
+      # is its real config, and that is the only one worth keeping.
+      - name: find the Simulator's real config location
+        continue-on-error: true
+        run: |
+          SDK="$HOME/Developer/PlaydateSDK"
+          touch /tmp/marker
+          sleep 1
+          "$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator" > /dev/null 2>&1 &
+          sleep 8
+          pkill -9 -f "Playdate Simulator" 2>/dev/null || true
+          echo "--- files the Simulator created or rewrote ---"
+          find "$HOME/Library" "$HOME/.config" -newer /tmp/marker \
+            \( -iname "*laydate*" -o -iname "*simulator*" \) 2>/dev/null | head -20
+          echo "--- contents of anything INI-shaped ---"
+          find "$HOME/Library" "$HOME/.config" -iname "Playdate Simulator.ini" 2>/dev/null | while read -r f; do
+            echo "== $f"; cat "$f"; done
+
       - name: close the installer's Finder window
         continue-on-error: true
         run: osascript -e 'tell application "Finder" to close every window'
