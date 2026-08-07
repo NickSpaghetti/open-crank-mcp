@@ -110,8 +110,35 @@ jobs:
         env:
           SDL_AUDIODRIVER: dummy
       - run: make sdk-contract-check-native
+        id: contract
         env:
           SDL_AUDIODRIVER: dummy
+
+      # Runs only when the contract tests failed, and only to say *how*. The two
+      # failure shapes seen so far need different answers and the test output
+      # cannot tell them apart:
+      #
+      #   - a data directory that exists and holds mcp/ means the harness ran and
+      #     the location is right, so the round trip is what is broken - most
+      #     likely the per-frame update never ticking, which on this platform
+      #     would mean the Simulator is loading games without running them.
+      #   - no data directory at all means the harness never got that far, or it
+      #     is writing somewhere this does not look.
+      #
+      # Whichever it is, the tree below distinguishes them in one run instead of
+      # a push per guess.
+      - name: what did the harness actually write
+        if: failure() && steps.contract.outcome == 'failure'
+        run: |
+          echo "--- resolved SDK ---"
+          make sdk-path || true
+          echo "--- anything under the SDK's Disk/Data ---"
+          find "$HOME/Developer/PlaydateSDK/Disk" -maxdepth 4 2>/dev/null || echo "no Disk directory"
+          echo "--- anywhere else a sandbox might have gone ---"
+          find "$HOME/Library/Application Support" -maxdepth 4 -iname "*laydate*" 2>/dev/null || true
+          find "$HOME/Library/Containers" -maxdepth 3 -iname "*laydate*" 2>/dev/null || true
+          echo "--- any mcp/ directory at all under HOME ---"
+          find "$HOME" -maxdepth 8 -type d -name mcp 2>/dev/null | head -20 || true
 
   # macOS, advisory. The platform with the real native user story, and the one
   # nobody here can debug locally, so it reports without blocking.
