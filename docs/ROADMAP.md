@@ -13,9 +13,17 @@ reading and writing source code blind.
 Cross-platform reach (Windows 11, macOS, Linux) through `GOOS`/`GOARCH`
 cross-compilation to small, dependency-free static binaries. No runtime to
 install on the end user's machine. The actual workload (subprocess
-management, ~10ms file polling, JSON/PNG shuttling) is I/O-bound. Not chosen
+management, file-notification waits, JSON/PNG shuttling) is I/O-bound. Not chosen
 for raw throughput over C#/.NET. Chosen for the simpler distribution story
 across three OSes.
+
+Native mode is what makes this argument pay. Until it existed the cross-compilation
+and "no runtime to install" reasoning applied to a binary that ran inside a Linux
+container regardless of the host OS, which is a distribution story the container was
+already telling on its own - `GOOS`/`GOARCH` reach bought nothing. A host binary on
+Linux and macOS is the thing this language choice was made for. The workload description above has been corrected in place: the IPC wait blocks
+on a filesystem notification, and polls only as a bounded backstop. See
+`docs/GOTCHAS.md`.
 
 **Input and screenshots go through a Lua harness, not OS-level automation.**
 No documented Playdate API injects button or crank input from outside the
@@ -244,7 +252,10 @@ generate a mock from. Instead:
   later.
 - Runtime/behavioral, both languages, needs the real Simulator
   (`internal/contracttest`, a `go test` skipped unless `PLAYDATE_SDK_PATH`
-  is set, i.e. run inside the full simulator image, not on a plain
+  is set. The full simulator image is one way to satisfy that; a host SDK is
+  another, which is what makes `make sdk-contract-check-native` possible on a
+  developer's machine with no Docker at all. Not, as this used to say, only
+  inside the image and never on a plain
   runner): a constant matching doesn't mean
   `file->stat` still behaves the same, or that `simulator.writeToFile`
   still produces a valid PNG. Builds two minimal fixture games (one C, one
@@ -330,9 +341,23 @@ launch argument is free, not new plumbing.
 
 **Everything builds and runs inside Docker, not on the bare host.** This
 solves a real blocker: `PlaydateSimulator` needs
-`libwebkit2gtk-4.1`/`libjavascriptcoregtk-4.1`, which aren't packaged on
-Arch outside the AUR. The Debian/Ubuntu-based container sidesteps that
-entirely. Xvfb makes the Simulator run fully headless by default.
+`libwebkit2gtk-4.1`/`libjavascriptcoregtk-4.1`, and the Debian/Ubuntu-based
+container has them.
+
+Superseded in part, and worth correcting rather than leaving to mislead. This
+originally said those libraries "aren't packaged on Arch outside the AUR". They
+are: `webkit2gtk-4.1` is in Arch's `extra`, and it provides both sonames. With it
+installed, every native target passes on the Arch machine this was written on -
+see Checkpoint 8. The dependency itself is real and unavoidable, since both
+libraries are in the binary's `DT_NEEDED` and the loader refuses to start the
+process without them (exit 127, before any of Panic's code runs), but the
+packaging obstacle was overstated.
+
+Docker still stays the default, on the reasons that actually hold: it is the only
+path where the SDK version is pinned and reproducible (`PLAYDATE_SDK_VERSION` is a
+build arg, whereas a native install is whatever the developer installed), it is
+the only path CI exercises end to end on every PR, and it needs nothing installed
+on the host at all. Xvfb makes the Simulator run fully headless by default.
 Screenshots come from each harness's own SDK-provided capture (PNG for
 Lua, raw framebuffer for C), not a window capture, so headless mode is
 always enough. Audio uses SDL2's `dummy` driver, since nothing consumes
@@ -372,6 +397,14 @@ That is a Docker artifact, not a feature. A native host mode gets the same
 property for free: one host, one display, one process, nothing to attach to. The
 profile exists to give container users what native users would have by default.
 
+The same goes for the whole per-platform spot-check apparatus above. Native mode
+dissolves that problem class rather than solving it: the Simulator is an ordinary
+application on your desktop, with your window manager and your audio device.
+Nothing is bind-mounted, bridged or re-streamed, and the openbox configuration,
+the VNC workspace geometry and the framebuffer slider scan are all container
+concerns that simply do not exist there. That includes the thing the macOS bullet
+says is missing - no XQuartz, no PulseAudio-over-TCP, no browser tab.
+
 It was called `byos`, for "bring your own simulator", through Checkpoint 4. That
 name described something it never did, since it runs its own Simulator, and it
 misled its own author while reviewing this document. Renamed at Checkpoint 6.
@@ -386,7 +419,15 @@ survives as prose, where it is finally accurate.
 bundled in this repo.** The Playdate SDK License bans redistributing the
 SDK. The Dockerfile here is just source that `curl`s `download.panic.com`
 during each user's own local `docker build`. That user downloads and
-accepts Panic's license, not this project. Holds only as long as a built
+accepts Panic's license, not this project.
+
+In native mode the question is structurally absent rather than mitigated: this
+repo never fetches, extracts or ships the SDK at all. The developer installed it
+themselves under their own acceptance of Panic's licence, and the server only
+reads a path. That makes native the licence-cleanest of the two paths, though it
+changes nothing about the container path below.
+
+Holds only as long as a built
 image is never published to any registry. That would flip it into
 redistribution. See `README.md`.
 
@@ -640,8 +681,10 @@ asking "yet?" instead of being told.
   existing smoke-check/contracttest callers (they always stop the process
   first) but not for `get_logs` reading a still-running simulator. It's
   now backed by a mutex-guarded buffer instead, proven race-free under
-  `go test -race`. `internal/harness`'s poll interval was 100ms; tightened to
-  10ms, matching what `docs/ROADMAP.md` always said the design should be.
+  `go test -race`. `internal/harness`'s poll interval was 100ms, tightened to
+  10ms here. It went to 1ms afterwards and was then replaced outright by a
+  filesystem notification, so the number in this entry is history rather than
+  current behaviour - see `docs/GOTCHAS.md` for the sequence.
 - [x] **Shared session**: One persistent container an agent and a human both
   drive. Every profile above gives you one or the other, because an MCP client
   runs `docker compose run`, which creates a new container per connection: a
@@ -690,11 +733,34 @@ asking "yet?" instead of being told.
   anything, and `launch_simulator` checks the process is still alive shortly
   after starting it and returns the captured output if it isn't. Written up in
   `docs/GOTCHAS.md`.
-- [ ] **Checkpoint 5**: End-to-end verification, container. Build one of the
+- [x] **Checkpoint 5**: End-to-end verification, container. Build one of the
   SDK's Lua `Examples/` and one of its C `Examples/` (both with the matching
   harness wired in), run each through the containerized stack, confirm every
   tool against real gameplay for both. Independent of Checkpoints 6-11: those
   are the native-mode track and neither blocks this.
+
+  Done with `Asheteroids` (Lua) and `Sprite Game` (C), the same two as Checkpoint
+  11, so the two modes are compared on identical inputs rather than on whatever
+  each happened to reach for. Every tool passed on both, with
+  `harness_reachable: true` and `data_dir_source: observed`.
+
+  No bind mount and no `GAME_DIR`. The image already carries the SDK, so it
+  already carries its `Examples/`, and the container copies one into `/tmp` and
+  works on that. That is a better test than mounting a game from the host as well
+  as a simpler one: nothing on the host is touched, and the copy is discarded with
+  the container.
+
+  The two modes agreed on everything that matters and differed only where they
+  should. `data_dir` resolved to `/opt/playdate-sdk/Disk/Data/<bundle>` here
+  against `~/PlaydateSDK/Disk/Data/<bundle>` natively, which is the per-machine
+  resolution working rather than a hardcoded path. The C example built under GCC
+  13.3.0 in the container and 16.1.1 natively, so `setup`'s patches to Panic's own
+  code compile across two compiler generations. Same bundle IDs, same tool
+  results, same observed data directories.
+
+  Worth recording that the missing-`bundleID` problem from Checkpoint 11 is not
+  mode-specific: `Asheteroids` needs the same one-line `pdxinfo` addition here.
+  That confirms it is a property of the SDK's example, not of either stack.
 - [x] **Checkpoint 6**: Renamed the `byos` profile to `shared`. No behaviour
   change, and the point of doing it alone was that `grep -rni byos` is the whole
   review. `byos` stood for "bring your own simulator", which is not what that
@@ -784,7 +850,7 @@ asking "yet?" instead of being told.
   for. Every exclusion is now a full path with its own justification, which puts
   coverage back at 95.8% honestly. Splitting `cmd/smoke-check` also moved code
   out from under an existing exclusion, and those files are listed too.
-- [ ] **Checkpoint 8**: Native mode. The same binary running against a Playdate
+- [x] **Checkpoint 8**: Native mode. The same binary running against a Playdate
   SDK the developer installed themselves, no Docker. This is the mode "bring your own
   simulator" always described, though the phrase stays prose only: every
   identifier says `native`, so the retired name stays retired.
@@ -819,9 +885,16 @@ asking "yet?" instead of being told.
 
   Platform scope is linux and darwin. Windows compiles and its path logic is
   covered by the `fstest` suite, but the runtime is unsupported and says so:
-  WSL2 already serves those users through the existing profile, and claiming
-  Windows would roughly double the untested surface for a platform nobody here
-  can drive to green.
+  WSL2 already serves those users through the existing profile.
+
+  That started as a scoping choice and has since become a structural one. The
+  Windows SDK ships as an interactive installer `.exe`, with no archive
+  equivalent to the Linux `.tar.gz` that CI fetches and extracts. So a Windows
+  runner cannot provision itself, and Windows-native could never have the
+  per-PR verification the other two platforms get. "Unsupported for now" is
+  therefore "unsupported", not a queue position. Its layout values are still
+  correct (see `docs/NATIVE-PROBE.md`) because keeping them right costs nothing
+  and makes promoting Windows additive if that ever changes.
 
   Done when the `fstest` suite passes under `go-build-cross`, `make sdk-path`
   names both the resolved SDK and which source found it, `make
@@ -830,7 +903,53 @@ asking "yet?" instead of being told.
   through `get_screenshot` and `press_button` to `setup`. Run `setup` from a cwd
   outside this repo and again from inside an unrelated Go module - that second
   one is the case Checkpoint 7 fixed.
-- [ ] **Checkpoint 9**: CI for native mode. One `native` job installing the
+
+  The layouts are named `linux_layout.go`/`macos_layout.go`/`windows_layout.go`
+  rather than with GOOS suffixes, and that naming is load-bearing rather than a
+  style choice. Go applies an implicit build constraint to any file whose name
+  ends in `_linux.go`, `_darwin.go` or `_windows.go`, with or without a
+  `//go:build` line, so the first attempt at this compiled on no platform at all
+  and the whole argument for testing the macOS layout from Linux was void.
+  Renaming them back would silently stop the cross-platform tests compiling the
+  code they claim to test.
+
+  Verified against a real SDK on Linux, which is what this box could not do until
+  `webkit2gtk-4.1` went in. Every step below ran with no container anywhere:
+
+  - `make sdk-path` resolved `~/PlaydateSDK` via *default install location*, with
+    no `PLAYDATE_SDK_PATH` set. That exercises the fallback chain rather than the
+    env var the container already proves.
+  - `make smoke-check-native` passed: libraries resolve, `pdc` reports 3.1.1, and
+    the Simulator launched under Xvfb and stayed up without logging an error.
+  - `make sdk-contract-check-native` passed `TestSDKContract` and
+    `TestSetupContract`, C and Lua both, driving real games through a real
+    Simulator.
+  - A real MCP client over stdio ran `setup`, `build_game`, `launch_simulator`,
+    `get_status`, `get_screenshot`, `press_button`, `set_crank`, `get_game_state`,
+    `get_game_logs` and `stop_simulator` against a real game.
+
+  Three things only a real SDK could establish. `launch_simulator` reported
+  `data_dir_source: observed`, so the post-launch probe found the sandboxed
+  directory rather than falling back to the assumption - the mechanism that
+  replaced the hardcoded guess works against a real install. `setup` run with cwd
+  `/tmp`, outside any Go module, wrote the harness correctly, which is the
+  Checkpoint 7 `go:embed` fix confirmed where it used to fail. And the input
+  overrides genuinely reach the game rather than merely returning success:
+  `a_down_count` went to 1 after `press_button`, and `crank_angle` read back 123
+  with `crank_docked` false after `set_crank`.
+
+  One usability edge found by getting it wrong. `set_crank` with no `duration_ms`
+  returns success and has no observable effect: the override expires before the
+  next frame, so a following `get_game_state` still reads the real crank. Fine for
+  `press_button`, which reads as a tap, but surprising for the crank, which reads
+  as a position. Worth either a default or a word in the tool description.
+
+  Still unverified, and deliberately: no macOS or Windows *run*. Every path value
+  for those platforms comes from a probe on a real install
+  (`docs/NATIVE-PROBE.md`) plus `fstest` coverage of the logic, not from this
+  project executing there. Checkpoint 11 is where that changes for macOS. Windows
+  never will - see the note under this checkpoint's platform scope.
+- [x] **Checkpoint 9**: CI for native mode. One `native` job installing the
   Simulator's shared libraries and the SDK directly on the runner, then building
   and running the native targets. CI already fetches the SDK from Panic for
   `docker-build`, so this is not a new licence posture. The job doubles as the
@@ -854,7 +973,36 @@ asking "yet?" instead of being told.
   Add `native` to `main`'s required checks once the ubuntu leg is green. Anything
   promoted later has to keep the always-run-the-job, conditionally-run-the-step
   shape, for the reason recorded under **Scripts rewrite** above.
-- [ ] **Checkpoint 10**: Documentation for two modes. The README currently
+
+  The ubuntu `native` job was validated by running its steps by hand on this
+  machine rather than by pushing and watching. Every library in its apt line
+  resolves for the real Simulator binary (`ldd` clean, 21 of 21), the SDK fetch
+  and extract to `~/PlaydateSDK` is byte-for-byte what the job does, and
+  `make sdk-path`, `make go-build`, `make smoke-check-native` and
+  `make sdk-contract-check-native` all pass in that state. See Checkpoint 8.
+
+  Doing it that way caught two bugs that would otherwise have shipped as red
+  builds. `cmd/smoke-check` still read `PLAYDATE_SDK_PATH` from the environment
+  and built its paths by string concatenation - converted everywhere else and
+  missed here - so `make smoke-check-native` could not work at all, which is the
+  one thing it exists for. And the job originally wrapped both native targets in
+  `xvfb-run`, but each already starts its own Xvfb, so that would have nested a
+  second server and could have collided on a display number. Neither was findable
+  by reading.
+
+  The path-existence guard was checked both ways: it passes against the real tree
+  and fails against a deliberately bogus path. Worth doing, because its whole
+  purpose is catching the case where a stale glob matches nothing and the job goes
+  green having tested nothing.
+
+  Two things this checkpoint cannot close by itself, both stated rather than
+  quietly dropped. The advisory `native-macos` leg has never run - nothing here is
+  a Mac - so it is written from what a macOS runner provides and will be judged on
+  its first real run; that is exactly why it is `continue-on-error`. And adding
+  `native` to `main`'s required checks is a branch-protection setting, not a code
+  change, so it waits for a push and a green run. The tick here means the repo
+  work is done and verified, not that GitHub has agreed yet.
+- [x] **Checkpoint 10**: Documentation for two modes. The README currently
   interleaves *how the SDK runs* with *which client you configure*, which is why
   the connecting section repeats near-identical blocks. Separating those axes
   means adding a third mode reduces the block count rather than growing it.
@@ -878,22 +1026,86 @@ asking "yet?" instead of being told.
 
   `docs/GOTCHAS.md` needs a file-level note that everything in it was found on
   containerized Linux and is nonetheless SDK behaviour that applies natively,
-  plus five inline exceptions where the platform genuinely matters. The
-  PulseAudio entry is the interesting one: it is container-specific by
-  construction, since it follows from the profiles forcing
-  `SDL_AUDIODRIVER=pulseaudio`, but the mitigation it describes is general and
-  right to keep.
-- [ ] **Checkpoint 11**: End-to-end verification, native. The same two example
+  plus inline exceptions where the platform genuinely matters. The PulseAudio
+  entry is the interesting one: it is container-specific by construction, since
+  it follows from the profiles forcing `SDL_AUDIODRIVER=pulseaudio`, but the
+  mitigation it describes is general and right to keep.
+
+  Done. The README now splits by mode wherever a claim differs and leaves it
+  alone wherever it does not, which mattered more than the restructure: several
+  statements had become wrong rather than merely incomplete. Docker was listed as
+  the only requirement. `### Linux (native X11/XWayland)` titled a section about a
+  container reaching a host X11 socket, which is the one heading a native user
+  would go to first. One paragraph argued against a native path on macOS on
+  grounds that only apply to reaching into a container. `## Local development`
+  claimed the only host requirements were Docker and Go.
+
+  The connecting section was the structural fix. It had a config block per client
+  with the container command inlined into each, so adding a mode would have meant
+  a block per mode per client. Splitting it into "the command" (three, by mode)
+  and "the config shape" (three, by client, with placeholders) means the third
+  mode *reduced* the block count.
+
+  One correction found while re-scoping `docs/GOTCHAS.md`, and it was mine.
+  A "Confirmed on macOS too" section asserted the Simulator withholds Lua console
+  output from stdout on macOS as well - directly contradicting the same file's
+  later, better measurement that `print()` does reach stdout and is merely
+  block-buffered. The macOS probe returned a completely empty capture, missing even
+  the Simulator's own native startup lines, which is a stdout that was never
+  flushed rather than evidence about one channel on it. Rewritten to say what the
+  measurement supports: consistent with buffering, no independent evidence either
+  way, and the practical conclusion unchanged. Two documents agreeing on a wrong
+  reading is worse than one being silent, so it is worth stating that the file now
+  contradicted itself for several days.
+- [x] **Checkpoint 11**: End-to-end verification, native. The same two example
   games as Checkpoint 5, every tool confirmed against real gameplay, with no
   Docker in the loop. This is the checkpoint that turns assumptions into either
   confirmations or bugs, so it is where the unverified macOS paths get found.
   Linux first, since it is the only platform anything here has been verified on.
-  Note that on Arch this needs the AUR WebKit packages, which is the same
-  blocker that made Docker the default in the first place. Delete Checkpoint 6's
-  tombstone targets here.
-- [ ] **Docs drift pass**: Unrelated to the above and safe to do at any time.
-  The IPC poll interval is recorded as three different numbers in three files:
-  this document says 10ms, `docs/GOTCHAS.md` records 10ms then 1ms then the
-  fsnotify wait that replaced polling, and `.gremlins.yaml` still says 100ms.
-  `.gremlins.yaml` also justifies two exclusions by "the full simulator Docker
-  environment", which becomes "a real SDK install, container or native".
+  Note that on Arch this needs `webkit2gtk-4.1` from `extra` - one pacman
+  install, not the AUR, contrary to what the Docker decision above used to say.
+  Delete Checkpoint 6's tombstone targets here.
+
+  Done on Linux, against two of the SDK's own examples rather than this repo's
+  fixtures. That distinction was the point: the fixtures were written for the
+  harness, and these were not. `Asheteroids` is a five-file Lua game;
+  `Sprite Game` is C that reads input in code Panic wrote years before this
+  project existed.
+
+  Both went through every tool - `setup`, `build_game`, `launch_simulator`,
+  `get_status`, `get_screenshot`, `press_button`, `set_crank`, `get_game_state`,
+  `get_game_logs`, `stop_simulator` - with `harness_reachable: true` and
+  `data_dir_source: observed` on each.
+
+  The C result is the one worth reading, because `setup` had to edit a stranger's
+  code and got it right in a way that is easy to get wrong. It rewrote both
+  `pd->system->getButtonState` calls in `game.c` to `mcp_get_button_state`, added
+  the include and `mcp_harness_init` to `main.c`, added `src/mcp_harness.c` to
+  *both* the `add_executable` and `add_library` target lists in `CMakeLists.txt`,
+  and added `include_directories(src)` because this project keeps its sources at
+  the root rather than under `src/`. Then the part that could most plausibly have
+  failed: `setUpdateCallback(update, NULL)` is in `main.c` while `update()` itself
+  is defined in `game.c`, and the per-frame `mcp_harness_update` call landed
+  correctly as that function's first statement, in the other file.
+
+  One real bug found, which is what this checkpoint is for. `Asheteroids` ships
+  with **no `pdxinfo` at all**, and `pdc` builds it anyway, synthesising one that
+  carries `pdxversion` and `buildtime` and no `bundleID`. So `setup` and
+  `build_game` both succeeded and `launch_simulator` then failed two calls later
+  with `no bundleID found in .../pdxinfo` - accurate, and useless. Everything the
+  harness does is keyed on the bundle ID, so there is no proceeding without one;
+  the error now says that, says `pdc` does not require one which is why it
+  surfaces so late, and gives the line to add. Covered by a test built from
+  exactly what `pdc` emits. Worth knowing that the SDK's own examples are not all
+  launchable as shipped.
+- [x] **Docs drift pass**: The IPC poll interval was recorded as three different
+  numbers in three files: this document said 10ms in two places, `.gremlins.yaml`
+  said 100ms, and `docs/GOTCHAS.md` traced 10ms then 1ms then the fsnotify wait
+  that replaced polling. None of them described the code, which has two constants
+  and no polling loop: a 1ms bootstrap used once per launch while the data
+  directory does not exist yet, and a 10ms backstop re-check running alongside the
+  notification.
+
+  Fixed by saying that in each place rather than by picking one number. The
+  Checkpoint 4 entry keeps its 100ms-to-10ms history, since that is what happened,
+  but now says so instead of reading as current behaviour.

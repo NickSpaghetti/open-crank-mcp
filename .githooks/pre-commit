@@ -1,42 +1,94 @@
 #!/usr/bin/env bash
-# Runs the test suite before a commit is created.
+# Runs the parts of the test suite that the staged changes could plausibly break.
 #
-# Enable with `make hooks`. This lives in the repo rather than in .git/hooks so
-# it is reviewable and shared: an untracked hook is per-clone and invisible to
-# everyone else. `make hooks` points core.hooksPath here rather than copying,
-# so there is never a stale copy to notice.
+# Enable with `make hooks`. This lives in the repo rather than in .git/hooks so it
+# is reviewable and shared; `make hooks` points core.hooksPath here rather than
+# copying, so there is never a stale copy.
 #
 # Bypass once with `git commit --no-verify`.
 #
-# Known limitation, stated rather than worked around: this tests the WORKING
-# TREE, not the staged snapshot. Stage some changes and leave others unstaged
-# and what runs here is not exactly what you are committing. The usual fix is
-# `git stash --keep-index`, which is not worth it here - the suite bind-mounts
-# this directory into containers for around two minutes, and a failure partway
-# through would leave you with an unexpected stash to reconcile on top of a
-# failed commit.
+# Why it is scoped rather than just running `make test`. Measured, warm caches:
+#
+#   test-shared-browser  75s   \ 80% of the runtime, and neither can be affected
+#   mutation-test        33s   / by a change that does not touch their inputs
+#   sdk-contract-check   14s
+#   smoke-check          10s
+#   test-c-harness        3s
+#   go-test, shared-unit ~0s
+#
+# Running all of it on a Go-only commit spends 75 seconds proving that a browser
+# test which reads no Go is still fine. The filters below mirror the paths-filter
+# blocks in .github/workflows/ci.yml, for the same reasons and with the same
+# groupings; keep them in step.
+#
+# The tradeoff, stated plainly: scoping means a commit can pass here and fail CI,
+# because CI always runs everything. That is the correct division. This is a fast
+# local check on the way past, not the gate. Run `make test` when you want the
+# gate, and CI runs it regardless.
+#
+# Known limitation, unchanged: this tests the WORKING TREE, not the staged
+# snapshot. Stage some changes and leave others unstaged and what runs is not
+# exactly what you are committing. `git stash --keep-index` is the usual fix and
+# is not worth it here, since the suite bind-mounts this directory into
+# containers and a failure partway through would leave a stash to reconcile on
+# top of a failed commit.
 set -uo pipefail
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 
-# Markdown-only commits skip the suite. It boots several containers and takes
-# about two minutes, and no Markdown change can affect any of it. Without this
-# the hook is annoying enough on a typo fix to get bypassed out of habit, and a
-# hook that is always bypassed is worse than no hook.
-if [ -n "$staged" ] && ! printf '%s\n' "$staged" | grep -qv '\.md$'; then
-  echo "pre-commit: only Markdown staged, skipping make test"
+if [ -z "$staged" ]; then
+  echo "pre-commit: nothing staged"
   exit 0
 fi
 
-# Checked up front because five of the seven suites need Docker. Without this
-# the first container-dependent stage fails several seconds in with whatever
-# error the daemon socket happens to produce, which reads like a broken test
-# rather than a daemon that is not running.
-if ! docker info >/dev/null 2>&1; then
-  echo "pre-commit: Docker is not running, and most of the suite needs it." >&2
-  echo "  Start Docker and retry, or use --no-verify if you have already run make test." >&2
-  exit 1
+# Markdown-only commits run nothing. No suite here reads a .md file, and without
+# this the hook is annoying enough on a typo fix to get bypassed out of habit - a
+# hook that is always bypassed being worse than no hook.
+if ! printf '%s\n' "$staged" | grep -qv '\.md$'; then
+  echo "pre-commit: only Markdown staged, nothing to run"
+  exit 0
 fi
 
-echo "pre-commit: running make test (about two minutes, --no-verify to skip)"
-exec make test
+matches() { printf '%s\n' "$staged" | grep -qE "$1"; }
+
+want_go=false        # Go sources: the server itself
+want_c=false         # the C harness and its own test suite
+want_sim=false       # anything that changes what a real Simulator does
+want_shared=false    # the shared/VNC profile and its browser tests
+
+matches '\.go$|^go\.(mod|sum)$'                              && want_go=true
+matches '^c-harness/'                                        && want_c=true
+matches '\.go$|^lua/|^c-harness/|^internal/(harness|simulator|build|screenshot|contracttest)/' && want_sim=true
+matches '^scripts/|^tests/browser/|^docker-compose\.yml$|^Dockerfile$' && want_shared=true
+
+# Docker is needed by everything except the two host-only suites, so check for it
+# once, up front, rather than letting the first container-dependent stage fail
+# several seconds in with whatever the daemon socket produces.
+if $want_c || $want_sim || $want_shared; then
+  if ! docker info >/dev/null 2>&1; then
+    echo "pre-commit: Docker is not running, and the staged changes need it." >&2
+    echo "  Start Docker and retry, or --no-verify if you have already run make test." >&2
+    exit 1
+  fi
+fi
+
+run() {
+  echo "pre-commit: $*"
+  if ! make "$@"; then
+    echo "pre-commit: $* failed" >&2
+    exit 1
+  fi
+}
+
+# Cheapest first, so an obvious break fails in seconds rather than after a
+# container boot.
+$want_go     && run go-test
+$want_shared && run test-shared-unit
+# Diff-scoped: seconds instead of 33, and the full run happens in CI anyway.
+$want_go     && run mutation-test-diff
+$want_c      && run test-c-harness
+$want_sim    && run smoke-check
+$want_sim    && run sdk-contract-check
+$want_shared && run test-shared-browser
+
+echo "pre-commit: ok"

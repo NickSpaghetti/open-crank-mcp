@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
 )
 
@@ -27,12 +28,18 @@ func main() {
 }
 
 func run() error {
-	sdkPath := os.Getenv("PLAYDATE_SDK_PATH")
-	if sdkPath == "" {
-		return fmt.Errorf("PLAYDATE_SDK_PATH is not set")
+	// Resolved rather than read from the environment. This used to require
+	// PLAYDATE_SDK_PATH and build its paths by string concatenation, which was
+	// invisible while the only caller was the container that always sets it - and
+	// which made `make smoke-check-native` impossible to use for the exact thing
+	// it exists to check.
+	paths, err := sdk.Resolve(sdk.OSEnv())
+	if err != nil {
+		return err
 	}
-	simBin := sdkPath + "/bin/PlaydateSimulator"
-	pdcBin := sdkPath + "/bin/pdc"
+	fmt.Printf("SDK: %s (via %s)\n", paths.Root, paths.RootSource)
+	simBin := paths.SimulatorBin
+	pdcBin := paths.PDC
 
 	if err := checkSharedLibraries(simBin); err != nil {
 		return err

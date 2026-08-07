@@ -7,6 +7,19 @@ on:
     - cron: '0 2 * * 1'
   workflow_dispatch: {}
 
+# Container-only, on purpose rather than by omission.
+#
+# The knob this sweep turns is PLAYDATE_SDK_VERSION, which is a Docker build
+# arg: the point is catching upstream SDK drift by building against a pinned
+# version and against Panic's `latest` alias. A native install is whatever
+# version the developer happened to install, so there is no equivalent knob to
+# turn, and pinning one on a runner would just re-implement the container's own
+# fetch outside the container for the same signal.
+#
+# A macOS leg would add real signal, since it would be the only place the
+# Simulator runs on Darwin. It is blocked on the same thing the macOS CI leg is:
+# the macOS SDK ships as an installer rather than an archive, so a runner cannot
+# provision one non-interactively. Revisit if that changes.
 jobs:
   sdk-contract-check:
     runs-on: ubuntu-latest

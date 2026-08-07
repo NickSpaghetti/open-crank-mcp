@@ -21,6 +21,11 @@ import (
 // never falls back to this.
 const bootstrapPollInterval = 1 * time.Millisecond
 
+// backstopInterval is how often awaitPath re-checks regardless of whether a
+// filesystem notification arrived. See its use for why a notification-driven
+// wait still needs one.
+const backstopInterval = 10 * time.Millisecond
+
 // awaitPath blocks until check() returns true, waking up only when path's
 // directory actually changes (via inotify, through fsnotify) rather than
 // waking up on a timer to ask "yet?" every interval. Real stress testing
@@ -36,11 +41,16 @@ func awaitPath(path string, timeout time.Duration, check func() bool) error {
 		return nil
 	}
 
+	cleanPath := filepath.Clean(path)
+
 	watcher, err := newWatcherForExistingDir(filepath.Dir(path), deadline)
 	if err != nil {
 		return err
 	}
 	defer watcher.Close()
+
+	ticker := time.NewTicker(backstopInterval)
+	defer ticker.Stop()
 
 	// Closes the race between the first check and the watch being armed.
 	if check() {
@@ -57,7 +67,25 @@ func awaitPath(path string, timeout time.Duration, check func() bool) error {
 			if !ok {
 				return fmt.Errorf("watcher closed while waiting for %s", path)
 			}
-			if event.Name == path && check() {
+			// Clean both sides before comparing. This is string equality between a
+			// path fsnotify constructed and one a caller built, and the two only
+			// agree by convention.
+			if filepath.Clean(event.Name) == cleanPath && check() {
+				return nil
+			}
+		case <-ticker.C:
+			// A backstop, not the mechanism. fsnotify is still what makes this
+			// prompt; this only bounds how long a missed notification can cost.
+			//
+			// It exists because the notification is not guaranteed to arrive for
+			// every case that matters. On macOS the kqueue backend only sees writes
+			// to a file after it registers a per-file watch, which it does right
+			// after emitting Create - and WaitForResponse requires the file to be
+			// non-empty, so a harness that creates and fills a response inside that
+			// window produces no further event and the wait runs to its full
+			// timeout with no error to explain it. Cheap insurance against a class
+			// of platform-specific behaviour that cannot be tested from here.
+			if check() {
 				return nil
 			}
 		case werr, ok := <-watcher.Errors:

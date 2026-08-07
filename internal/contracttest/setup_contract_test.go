@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	opencrank "github.com/NickSpaghetti/open-crank-mcp"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/build"
@@ -22,26 +21,16 @@ import (
 // still builds clean afterward. Skipped under the same condition as
 // TestSDKContract - needs the full simulator Docker image.
 func TestSetupContract(t *testing.T) {
-	sdkPath := os.Getenv("PLAYDATE_SDK_PATH")
-	if sdkPath == "" {
-		t.Skip("PLAYDATE_SDK_PATH not set - run inside the simulator image (make sdk-contract-check)")
+	if os.Getenv("OPEN_CRANK_SDK_CONTRACT") == "" {
+		t.Skip("OPEN_CRANK_SDK_CONTRACT not set - run `make sdk-contract-check` (container) or `make sdk-contract-check-native` (host SDK)")
 	}
+	paths := contractSDK(t)
+	sdkPath := paths.Root
 
 	// A separate display from TestSDKContract's :99 - these are
 	// independent test functions, each self-contained, not relying on
 	// execution order for shared setup.
-	xvfb, err := simulator.Launch("Xvfb", ":98", "-screen", "0", "1280x800x24")
-	if err != nil {
-		t.Fatalf("launching Xvfb: %v", err)
-	}
-	defer func() {
-		_ = xvfb.Stop()
-		_ = xvfb.Wait()
-	}()
-	time.Sleep(1 * time.Second)
-	if err := os.Setenv("DISPLAY", ":98"); err != nil {
-		t.Fatalf("setting DISPLAY: %v", err)
-	}
+	startDisplay(t, ":98")
 
 	t.Run("Lua", func(t *testing.T) {
 		dir := t.TempDir()
@@ -52,7 +41,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("setup.Setup: %v", err)
 		}
 
-		buildResult, err := build.Build(dir)
+		buildResult, err := build.Build(dir, contractSDK(t))
 		if err != nil {
 			t.Fatalf("build.Build after setup: %v\n%s", err, buildResult.Output)
 		}
@@ -67,7 +56,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("mcp_harness.lua still exists after teardown (stat err = %v)", err)
 		}
 
-		buildResult, err = build.Build(dir)
+		buildResult, err = build.Build(dir, contractSDK(t))
 		if err != nil {
 			t.Fatalf("build.Build after teardown: %v\n%s", err, buildResult.Output)
 		}
@@ -87,7 +76,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("setup.Setup().ManualSteps = %v, want empty for this fixture", result.ManualSteps)
 		}
 
-		buildResult, err := build.Build(dir)
+		buildResult, err := build.Build(dir, contractSDK(t))
 		if err != nil {
 			t.Fatalf("build.Build after setup: %v\n%s", err, buildResult.Output)
 		}
@@ -102,7 +91,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("mcp_harness.c still exists after teardown (stat err = %v)", err)
 		}
 
-		buildResult, err = build.Build(dir)
+		buildResult, err = build.Build(dir, contractSDK(t))
 		if err != nil {
 			t.Fatalf("build.Build after teardown: %v\n%s", err, buildResult.Output)
 		}
@@ -131,7 +120,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("setup.Setup().ManualSteps = %v, want empty for this fixture", result.ManualSteps)
 		}
 
-		buildResult, err := build.Build(dir)
+		buildResult, err := build.Build(dir, contractSDK(t))
 		if err != nil {
 			t.Fatalf("build.Build after setup: %v\n%s", err, buildResult.Output)
 		}
@@ -150,7 +139,7 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("mcp_harness.c was removed even though game.c's rewritten call still needs it: %v", err)
 		}
 
-		buildResult, err = build.Build(dir)
+		buildResult, err = build.Build(dir, contractSDK(t))
 		if err != nil {
 			t.Fatalf("build.Build after teardown: %v\n%s", err, buildResult.Output)
 		}

@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
+	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 )
 
 func TestHandleRoundTripErrNotRunning(t *testing.T) {
@@ -126,5 +128,49 @@ func TestRoundTripIgnoresStaleResponseAlreadyOnDisk(t *testing.T) {
 	}
 	if resp.ID != "1" {
 		t.Fatalf("roundTrip returned response id %q, want %q", resp.ID, "1")
+	}
+}
+
+// requireSDK's error path is the reason it exists: without an SDK the server
+// still has to complete the MCP handshake and then explain itself through a tool
+// result, rather than exiting before a client can read anything.
+func TestRequireSDKReportsResolutionFailure(t *testing.T) {
+	resolveErr := errors.New("could not find a Playdate SDK. Looked at:\n  /home/u/PlaydateSDK")
+	s := NewServer(sdk.Paths{}, resolveErr, fstest.MapFS{})
+
+	paths, result := s.requireSDK()
+	if result == nil {
+		t.Fatal("requireSDK returned no error result despite resolution having failed")
+	}
+	if !result.IsError {
+		t.Error("the result is not marked IsError, so a client may treat it as success")
+	}
+	if paths.Root != "" {
+		t.Errorf("requireSDK handed back a usable SDK (%q) after failing", paths.Root)
+	}
+
+	text := renderContent(t, result)
+	// The resolution error carries every path that was tried; dropping it here
+	// would throw away the only actionable part.
+	if !strings.Contains(text, "/home/u/PlaydateSDK") {
+		t.Errorf("the message loses what resolution had already worked out:\n%s", text)
+	}
+	if !strings.Contains(text, sdk.EnvVarSDKPath) {
+		t.Errorf("the message does not name %s, so it says what is wrong but not what to do:\n%s",
+			sdk.EnvVarSDKPath, text)
+	}
+}
+
+// The success path must hand back the SDK and nothing else.
+func TestRequireSDKPassesThroughWhenResolved(t *testing.T) {
+	want := sdk.Paths{Root: "/opt/sdk", SimulatorBin: "/opt/sdk/bin/PlaydateSimulator"}
+	s := NewServer(want, nil, fstest.MapFS{})
+
+	got, result := s.requireSDK()
+	if result != nil {
+		t.Fatalf("requireSDK returned an error result for a resolved SDK: %v", result)
+	}
+	if got.Root != want.Root || got.SimulatorBin != want.SimulatorBin {
+		t.Errorf("requireSDK returned %+v, want %+v", got, want)
 	}
 }

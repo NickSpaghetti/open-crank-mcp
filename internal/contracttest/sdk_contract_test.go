@@ -34,25 +34,15 @@ const (
 var pngMagic = []byte{0x89, 0x50, 0x4E, 0x47}
 
 func TestSDKContract(t *testing.T) {
-	sdkPath := os.Getenv("PLAYDATE_SDK_PATH")
-	if sdkPath == "" {
-		t.Skip("PLAYDATE_SDK_PATH not set - run inside the simulator image (make sdk-contract-check)")
+	if os.Getenv("OPEN_CRANK_SDK_CONTRACT") == "" {
+		t.Skip("OPEN_CRANK_SDK_CONTRACT not set - run `make sdk-contract-check` (container) or `make sdk-contract-check-native` (host SDK)")
 	}
+	paths := contractSDK(t)
+	sdkPath := paths.Root
 
 	repoRoot := findRepoRoot(t)
 
-	xvfb, err := simulator.Launch("Xvfb", ":99", "-screen", "0", "1280x800x24")
-	if err != nil {
-		t.Fatalf("launching Xvfb: %v", err)
-	}
-	defer func() {
-		_ = xvfb.Stop()
-		_ = xvfb.Wait()
-	}()
-	time.Sleep(1 * time.Second)
-	if err := os.Setenv("DISPLAY", ":99"); err != nil {
-		t.Fatalf("setting DISPLAY: %v", err)
-	}
+	startDisplay(t, ":99")
 
 	cPdx := buildCFixture(t, repoRoot)
 	luaPdx := buildLuaFixture(t, repoRoot)
@@ -415,7 +405,7 @@ func buildCFixture(t *testing.T, repoRoot string) string {
 	installHarness(t, harness.CHeaderPath, filepath.Join(srcDir, "mcp_harness.h"))
 	installHarness(t, harness.CSourcePath, filepath.Join(srcDir, "mcp_harness.c"))
 
-	result, err := build.Build(fixtureDir)
+	result, err := build.Build(fixtureDir, contractSDK(t))
 	if err != nil {
 		t.Fatalf("build.Build: %v\n%s", err, result.Output)
 	}
@@ -429,7 +419,7 @@ func buildLuaFixture(t *testing.T, repoRoot string) string {
 
 	installHarness(t, harness.LuaSourcePath, filepath.Join(sourceDir, "mcp_harness.lua"))
 
-	result, err := build.Build(fixtureDir)
+	result, err := build.Build(fixtureDir, contractSDK(t))
 	if err != nil {
 		t.Fatalf("build.Build: %v\n%s", err, result.Output)
 	}

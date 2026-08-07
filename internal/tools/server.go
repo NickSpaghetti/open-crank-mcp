@@ -6,13 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path/filepath"
+	"os"
 	"reflect"
 	"strconv"
 	"sync"
 	"time"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
+	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -68,10 +69,16 @@ var errHarness = errors.New("harness reported an error")
 type Server struct {
 	// Set once by NewServer and never written again, so they are read without
 	// the lock. Grouped and said out loud because the opposite was happening:
-	// sdkPath was read under mu at two call sites, which reads as a claim that
-	// something mutates it.
-	sdkPath   string
+	// the SDK path was read under mu at two call sites, which reads as a claim
+	// that something mutates it.
+	sdk       sdk.Paths
 	harnessFS fs.FS
+
+	// sdkErr is why resolution failed, or nil. Held rather than fatal, so the
+	// server still completes the MCP handshake and can say what went wrong
+	// through a tool result. A process that exits before the handshake surfaces
+	// in a client as "server failed to start", which names nothing.
+	sdkErr error
 
 	mu        sync.Mutex
 	harnessMu sync.Mutex
@@ -82,6 +89,12 @@ type Server struct {
 	dataDir  string
 	bundleID string
 	nextID   int
+
+	// scratchDir is a directory this process owns, handed to the game as
+	// playdate.argv[2] for the Lua harness to write screenshots into. Separate
+	// from dataDir because it does not have to be the sandbox: writeToFile takes
+	// a host path. Removed when the Simulator stops.
+	scratchDir string
 
 	// harnessVersion is what the last successful round trip reported, and
 	// harnessVersionSeen is whether there has been one. Two fields rather than
@@ -96,17 +109,38 @@ type Server struct {
 // simulatorBin is the Simulator executable inside the resolved SDK. A method
 // rather than a field so the two call sites that used to build this path under
 // mu (launch and restart) have one place to get it from.
+//
+// It no longer builds the path: internal/sdk resolved it, which is what makes
+// the macOS .app bundle and the Windows .exe work without either call site
+// knowing they exist.
 func (s *Server) simulatorBin() string {
-	return filepath.Join(s.sdkPath, "bin", "PlaydateSimulator")
+	return s.sdk.SimulatorBin
 }
 
-// NewServer takes the SDK path already resolved by the caller, and the harness
-// sources the `setup` tool writes into a game (normally opencrank.HarnessFS).
+// NewServer takes an SDK already resolved by the caller, the reason resolution
+// failed if it did, and the harness sources the `setup` tool writes into a game
+// (normally opencrank.HarnessFS).
 //
-// Both are injected rather than read here, so a test can supply a fake SDK
-// layout and an fstest.MapFS without touching the environment or the filesystem.
-func NewServer(sdkPath string, harnessFS fs.FS) *Server {
-	return &Server{sdkPath: sdkPath, harnessFS: harnessFS}
+// All injected rather than read here, so a test can supply a fake SDK layout and
+// an fstest.MapFS without touching the environment or the filesystem.
+func NewServer(paths sdk.Paths, sdkErr error, harnessFS fs.FS) *Server {
+	return &Server{sdk: paths, sdkErr: sdkErr, harnessFS: harnessFS}
+}
+
+// requireSDK reports the SDK, or a model-visible result explaining why there
+// isn't one. Same shape as notRunningResult: a tool the agent can react to,
+// rather than an opaque protocol failure.
+//
+// Every path internal/sdk tried is included, because "it looked here and here"
+// is the only actionable thing to say when detection fails on a machine nobody
+// here can see.
+func (s *Server) requireSDK() (sdk.Paths, *mcp.CallToolResult) {
+	if s.sdkErr == nil {
+		return s.sdk, nil
+	}
+	return sdk.Paths{}, errorResult(fmt.Sprintf(
+		"no Playdate SDK available: %v\n\nSet %s to the SDK directory, then restart this server.",
+		s.sdkErr, sdk.EnvVarSDKPath))
 }
 
 // errorResult is a recoverable, model-visible error - the caller can see it and
@@ -131,6 +165,19 @@ func handleRoundTripErr(err error) (*mcp.CallToolResult, error) {
 		return errorResult(err.Error()), nil
 	}
 	return nil, err
+}
+
+// clearScratchLocked removes the screenshot scratch directory, if any. Caller
+// holds mu.
+//
+// Best-effort: a leftover directory under the OS temp dir is untidy, not broken,
+// and failing a stop_simulator call over it would be worse than the leak.
+func (s *Server) clearScratchLocked() {
+	if s.scratchDir == "" {
+		return
+	}
+	_ = os.RemoveAll(s.scratchDir)
+	s.scratchDir = ""
 }
 
 // requireDataDir returns the current data directory, or errNotRunning if

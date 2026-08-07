@@ -8,18 +8,60 @@ Works with Lua, C, or a mix of both.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for the full plan and checkpoints.
 
+## Two ways to run it
+
+The server does the same job either way. What differs is where the Simulator
+lives.
+
+**Container mode** builds an image that carries its own SDK and runs the
+Simulator headlessly inside it. Nothing is installed on your machine but Docker.
+This is the default, and the only mode CI exercises end to end on every change.
+
+**Native mode** runs the server directly against a Playdate SDK you installed
+yourself, with no container at all. The Simulator is an ordinary window on your
+desktop, with your audio, and no bind mounts or root-owned build output.
+
+Container mode if you want it reproducible or you are on a machine that cannot
+run the Simulator. Native mode if you already have the SDK and want to watch a
+game while an agent plays it. Both are supported; neither is a migration path to
+the other.
+
 ## Status
 
-Checkpoint 4 done: harnesses, Go server core, and MCP tool registrations
-all work. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for exactly what's
-built and what's left.
+Checkpoints 1-9 done. Both modes work: the harnesses, the Go server, all the MCP
+tools, the container profiles, and native SDK detection with per-OS paths. Native
+mode is verified on Linux. macOS path values come from a probe on a real install
+rather than from running there; Windows-native is not supported, see below. See
+[`docs/ROADMAP.md`](docs/ROADMAP.md) for exactly what is built, what is verified
+and how, and what is left.
 
 ## Requirements
+
+**Container mode**
 
 - Docker
 - A Playdate account, to accept the [Playdate SDK license](https://play.date/dev/sdk-license/). The image fetches the SDK itself, see below.
 
+**Native mode**
+
+- The Playdate SDK, installed by you. `~/.Playdate/config` or the default
+  install location is enough; no environment variable is required.
+- Go, to build the server binary.
+- `cmake` and a C compiler, but only for building C games. A Lua-only game needs
+  neither.
+- Whatever shared libraries the Simulator itself needs. The authoritative list is
+  the `apt` line in the `native` job of
+  [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which is kept correct
+  because that job would fail otherwise. On Arch that is one package,
+  `webkit2gtk-4.1` from `extra`.
+
+Windows-native is not supported. WSL2 covers Windows through container mode, and
+the Windows SDK ships as an interactive installer rather than an archive, so CI
+could never provision a runner to verify a native path there.
+
 ## Building
+
+**Container mode**
 
 ```
 make build
@@ -36,7 +78,28 @@ would redistribute Panic's SDK to everyone who pulls it, which the
 [Playdate SDK License](https://play.date/dev/sdk-license/) doesn't allow.
 Build locally. Don't push the image anywhere.
 
-## Running
+**Native mode**
+
+```
+make go-build
+```
+
+Produces `./open-crank-mcp`. This repo never touches the SDK in this mode: you
+installed it, under your own acceptance of Panic's licence, and the server only
+reads the path. The redistribution question is structurally absent rather than
+mitigated.
+
+Check what it found before wiring anything up:
+
+```
+make sdk-path
+```
+
+That prints the SDK, which of the three sources located it, and every candidate
+it considered. It is the first thing to reach for if detection picks the wrong
+SDK or none.
+
+## Running: container mode
 
 ```
 make up
@@ -53,7 +116,11 @@ Pick the one that matches how you run Docker. All three are optional.
 Nothing here is required for the MCP server's own tools, which only use the
 headless path above.
 
-### Linux (native X11/XWayland)
+None of this applies to native mode, where the Simulator is already a window on
+your desktop using your own audio. These profiles exist to get a picture and a
+sound *out of a container*, which is a problem native mode does not have.
+
+### Linux (X11 socket forwarding)
 
 ```
 make up-visual
@@ -61,6 +128,10 @@ make up-visual
 
 Forwards your host's X11 socket, so the Simulator window shows up, and
 routes audio to your host's PulseAudio/PipeWire server, so you can hear it.
+
+Despite the older name for this section, it is not native mode: the Simulator is
+still in the container, reaching out to your display. Native mode is
+[further down](#running-native-mode).
 Needs an X11 auth cookie for your display. `scripts/ensure-xauth.sh`
 generates one automatically the first time (creates or reuses
 `~/.Xauthority` via `xauth generate`). No manual `xhost` step.
@@ -177,16 +248,59 @@ unlocks the browser; the slider still decides.
 
 Fully self-contained. The container runs its own PulseAudio daemon with a
 null sink, `x11vnc` bridges the Xvfb display, `ffmpeg` re-streams the null
-sink's monitor as MP3. Use this on macOS. The native alternative, XQuartz
-plus a PulseAudio-over-TCP bridge, is real ongoing complexity and slow.
+sink's monitor as MP3.
+
+Use this on macOS *if you are running the containerized Simulator*. Getting a
+picture and sound out of a Linux VM on macOS otherwise means XQuartz plus a
+PulseAudio-over-TCP bridge, which is real ongoing complexity and slow. That
+comparison is only about reaching into a container, and is not an argument
+against native mode: there, the Simulator is a macOS application with a window
+and CoreAudio, and none of this apparatus exists.
+
+## Running: native mode
+
+No `make up`. There is no container to start: an MCP client launches the server
+binary directly, and the server launches the Simulator.
+
+```
+make go-build     # produces ./open-crank-mcp
+make sdk-path     # confirm it finds your SDK
+```
+
+Then point a client at the binary, as below. The Simulator appears as an ordinary
+window when a game launches, using your display and your audio, so none of the
+container display profiles above apply.
+
+Two checks worth running once, if you want to know the environment is sound
+before involving an agent:
+
+```
+make smoke-check-native        # libraries resolve, pdc runs, the Simulator starts
+make sdk-contract-check-native # the MCP tools driving a real Simulator
+```
 
 ## Connecting from Claude Code, OpenCode, and Cursor
 
-All three speak the same underlying MCP transport, so the command is
-identical everywhere - only the config file's shape differs. This starts
-Xvfb, then runs the server itself over stdio inside the container built
-above, with your game's directory bind-mounted so `build_game`/
-`launch_simulator` can see it:
+All three speak the same MCP transport over stdio. What differs between them is
+the config file's shape; what differs between modes is the command. Those are two
+separate axes, so they are listed separately rather than as one block per
+combination.
+
+### The command
+
+**Native.** Nothing but the binary.
+
+```
+/absolute/path/to/open-crank-mcp/open-crank-mcp
+```
+
+No arguments. Your game's path is passed to the tools at call time rather than
+mounted, so there is nothing per-project to configure. If your SDK is somewhere
+`make sdk-path` does not find, add `PLAYDATE_SDK_PATH` to the client's `env`.
+
+**Container, one per connection.** Starts Xvfb, runs the server over stdio inside
+the image, with your game bind-mounted so `build_game` and `launch_simulator` can
+see it.
 
 ```
 docker compose -f /absolute/path/to/open-crank-mcp/docker-compose.yml \
@@ -196,39 +310,47 @@ docker compose -f /absolute/path/to/open-crank-mcp/docker-compose.yml \
   "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
 ```
 
-`-T` disables pseudo-TTY allocation - required for stdio JSON-RPC, a real
-TTY corrupts the framing. `PLAYDATE_SDK_VERSION` in the image, and both
-absolute paths, are the only things you need to adjust per-machine.
+`-T` disables pseudo-TTY allocation, which stdio JSON-RPC requires: a real TTY
+corrupts the framing. The two absolute paths are the only per-machine parts.
 
-**Claude Code**: a `.mcp.json` at your game project's root:
+**Container, shared with a human.** Attaches to the long-lived container from
+[Shared, watchable session](#shared-watchable-session) instead of creating one.
+
+```
+docker compose -f /absolute/path/to/open-crank-mcp/docker-compose.yml \
+  exec -T simulator-shared open-crank-mcp
+```
+
+### The config shape
+
+Take the command from above and drop it in. `<COMMAND>` is the executable,
+`<ARGS>` the rest as separate strings. Native mode has no `<ARGS>` at all.
+
+**Claude Code**: a `.mcp.json` at your game project's root.
 
 ```json
 {
   "mcpServers": {
     "open-crank-mcp": {
-      "command": "docker",
-      "args": [
-        "compose", "-f", "/absolute/path/to/open-crank-mcp/docker-compose.yml",
-        "run", "--rm", "-T",
-        "-v", "/absolute/path/to/your-game:/your-game",
-        "simulator", "bash", "-c",
-        "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
-      ]
+      "command": "<COMMAND>",
+      "args": [<ARGS>]
     }
   }
 }
 ```
 
-Or register it without a file, via `claude mcp add`:
+Or without a file:
 
 ```
-claude mcp add open-crank-mcp -- docker compose -f /absolute/path/to/open-crank-mcp/docker-compose.yml run --rm -T -v /absolute/path/to/your-game:/your-game simulator bash -c "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
+claude mcp add open-crank-mcp -- <COMMAND> <ARGS>
 ```
 
-**OpenCode**: the `mcp` key in `opencode.jsonc`/`opencode.json` (project
-config, or `~/.config/opencode/opencode.jsonc` for global), matching
-`McpLocalConfig`'s shape (`type`/`command`/`environment`) from
-`@opencode-ai/sdk`:
+**Cursor**: `.cursor/mcp.json` in your game project, or `~/.cursor/mcp.json`
+globally. Identical to Claude Code's shape.
+
+**OpenCode**: the `mcp` key in `opencode.jsonc`/`opencode.json`, or
+`~/.config/opencode/opencode.jsonc` globally. Matches `McpLocalConfig` from
+`@opencode-ai/sdk`, where `command` is one list rather than a command plus args:
 
 ```jsonc
 {
@@ -236,13 +358,7 @@ config, or `~/.config/opencode/opencode.jsonc` for global), matching
   "mcp": {
     "open-crank-mcp": {
       "type": "local",
-      "command": [
-        "docker", "compose", "-f", "/absolute/path/to/open-crank-mcp/docker-compose.yml",
-        "run", "--rm", "-T",
-        "-v", "/absolute/path/to/your-game:/your-game",
-        "simulator", "bash", "-c",
-        "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
-      ]
+      "command": ["<COMMAND>", <ARGS>]
     }
   }
 }
@@ -250,25 +366,11 @@ config, or `~/.config/opencode/opencode.jsonc` for global), matching
 
 Or `opencode mcp add open-crank-mcp` interactively.
 
-**Cursor**: `.cursor/mcp.json` in your game project (or `~/.cursor/mcp.json`
-globally) - the same `mcpServers`/`command`/`args` shape as Claude Code:
+Worth knowing for native mode specifically: a client launches its server with a
+minimal `PATH` and an arbitrary working directory. That is why `build_game`
+preflights `cmake` rather than assuming it, and why the harness sources are
+embedded in the binary rather than read from this repo.
 
-```json
-{
-  "mcpServers": {
-    "open-crank-mcp": {
-      "command": "docker",
-      "args": [
-        "compose", "-f", "/absolute/path/to/open-crank-mcp/docker-compose.yml",
-        "run", "--rm", "-T",
-        "-v", "/absolute/path/to/your-game:/your-game",
-        "simulator", "bash", "-c",
-        "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && DISPLAY=:99 PLAYDATE_SDK_PATH=/opt/playdate-sdk open-crank-mcp"
-      ]
-    }
-  }
-}
-```
 
 ## Shared, watchable session
 
@@ -362,7 +464,10 @@ reads a file in the data directory and a previous run's response may still be
 sitting there, so it isn't a reliable readiness signal on its own. `shared-load`
 holds on for five seconds for exactly this reason.
 
-### Seeing the logs
+## Reading the logs
+
+Applies to both modes: these are SDK and harness behaviours, not container ones.
+Where the file lives differs, and that is called out below.
 
 Three separate channels carry different output. They are not
 interchangeable, and only two of them are readable by a human.
@@ -371,11 +476,16 @@ interchangeable, and only two of them are readable by a human.
 |---|---|---|
 | `get_logs` | The Simulator process's real stdout/stderr. GTK warnings, native startup diagnostics, and a C game's `printf` output. | The agent only. Buffered in memory by the server, never written to disk. |
 | `get_game_logs` | Lua `print()` calls and uncaught-error tracebacks. | The agent, and you (see below). |
-| The VNC view | The Simulator GUI itself. Per `docs/GOTCHAS.md` this is the only place the SDK renders Lua console output, though no console pane is open by default. | You only. |
+| The Simulator's own console | The Simulator GUI itself. Per `docs/GOTCHAS.md` this is the only place the SDK renders Lua console output, though no console pane is open by default. In container mode you reach it through the VNC view; natively it is just the window. | You only. |
 
-The `shared` profile bind-mounts the Simulator's sandboxed Data directory to
-`.shared-data/` in this repo, so the file behind `get_game_logs` is readable
-from the host while the game runs:
+**Native mode**: the file is already on your machine, at
+`$PLAYDATE_SDK_PATH/Disk/Data/<bundle-id>/mcp/game_logs.jsonl`. Nothing is
+mounted and nothing is root-owned. `launch_simulator` reports the exact directory
+it resolved as `data_dir`, so you never have to guess.
+
+**Container mode**: the `shared` profile bind-mounts the Simulator's sandboxed
+Data directory to `.shared-data/` in this repo, so the same file is readable from
+the host while the game runs:
 
 ```
 tail -f .shared-data/<bundle-id>/mcp/game_logs.jsonl
@@ -413,35 +523,59 @@ Two asymmetries worth knowing, both covered in detail in
   it. The C harness doesn't write `game_logs.jsonl` at all, and doesn't
   need to.
 
-### Rough edges
+## Rough edges
 
-- The game directory is fixed when the container starts. Switching games
-  means `make down` and starting over with a new `GAME_DIR`.
-- The container runs as root, so `build_game` leaves root-owned `build/`
-  and `.pdx` output inside your game directory, and `.shared-data/` is
-  root-owned too. Both are readable without `sudo`. Deleting them needs
-  `sudo`, or a `docker compose run --rm` doing the `rm` from inside a
-  container.
-- Audio starts when you click the Playdate's volume slider, because nothing
-  in the SDK can set that slider and nothing can read it. See "Volume" above.
-  It's the first thing to suspect if a future SDK version rearranges the
-  device frame.
-- The persistent container and your VNC view survive an MCP client
-  disconnecting, but nothing supervises the Simulator an agent launched.
-  If the connection drops without `stop_simulator` first, the Simulator is
-  reparented to the container's init and keeps running. The next
-  connection's `launch_simulator` then starts a second one alongside it.
-  Both run the same `.pdx`, so both resolve to the same bundle ID and the
-  same Data directory, and both harnesses poll the same
-  `mcp/command.json`. A tool response can come back from either instance.
-  Worth clearing before you trust what you're seeing:
+**Both modes**
+
+- Nothing supervises the Simulator an agent launched. If a client disconnects
+  without calling `stop_simulator`, the Simulator keeps running: reparented to
+  the container's init, or orphaned on your desktop. The next connection's
+  `launch_simulator` then starts a second one alongside it. Both run the same
+  `.pdx`, so both resolve to the same bundle ID and the same Data directory, and
+  both harnesses poll the same `mcp/command.json` - a tool response can come back
+  from either instance. Worth clearing before you trust what you are seeing:
 
   ```
-  docker compose exec simulator-shared pkill -9 -f bin/PlaydateSimulator
+  pkill -9 -f bin/PlaydateSimulator                                   # native
+  docker compose exec simulator-shared pkill -9 -f bin/PlaydateSimulator   # container
   ```
 
-  `-9` is required. The Simulator ignores `SIGTERM`, which is why the
-  server's own `stop_simulator` uses `SIGKILL` too.
+  `-9` is required. The Simulator ignores `SIGTERM`, which is why the server's own
+  `stop_simulator` uses `SIGKILL` too. Natively, note this also kills a Simulator
+  you started by hand.
+- `set_crank` with no `duration_ms` returns success and has no visible effect: the
+  override expires before the next frame, so a following `get_game_state` reads
+  the real crank. Pass a duration you actually want it held for.
+
+**Container mode only**
+
+- The game directory is fixed when the container starts. Switching games means
+  `make down` and starting over with a new `GAME_DIR`.
+- The container runs as root, so `build_game` leaves root-owned `build/` and
+  `.pdx` output inside your game directory, and `.shared-data/` is root-owned
+  too. Both are readable without `sudo`. Deleting them needs `sudo`, or a
+  `docker compose run --rm` doing the `rm` from inside a container. Native mode
+  has neither problem: everything is written as you.
+- Audio starts when you click the Playdate's volume slider, because nothing in
+  the SDK can set that slider and nothing can read it. See "Volume" above. It is
+  the first thing to suspect if a future SDK version rearranges the device frame.
+  Native mode has real audio and needs none of this.
+
+**Native mode only**
+
+- Running headless needs `SDL_AUDIODRIVER=dummy`. The Simulator treats SDL
+  initialisation as fatal and will not start without a working audio driver, so
+  on a machine with no audio device - a CI runner, a server over SSH - it exits
+  before doing anything, reporting `dsp: No such audio device`. Nothing about
+  that message suggests audio is optional, which it is. A desktop with real audio
+  needs none of this, and the container image already sets it.
+- Building the same game in both modes will hit a stale `CMakeCache.txt`, because
+  cmake records absolute paths and the container sees your game at `/workspace`
+  while a native run sees its real path. `build_game` detects that specific
+  failure, clears the cache, says so in its output, and reconfigures. Worth
+  knowing so the message is not alarming.
+- Detection is silent when it succeeds. If a tool reports no SDK, or the wrong
+  one, `make sdk-path` prints what was found and every candidate considered.
 
 ## Setting up a game
 
@@ -563,9 +697,11 @@ just a call:
 
 Either way, the game builds through the SDK's own CMake support
 (`cmake -S . -B build && cmake --build build`, which invokes `pdc` itself
-as a post-build step) or plain `pdc` for Lua-only projects. The image
-already has `cmake` and `build-essential`. No ARM toolchain needed, since
-this project only targets the Simulator, never real hardware.
+as a post-build step) or plain `pdc` for Lua-only projects. The container image
+already has `cmake` and `build-essential`; natively they are yours to install,
+and only a C game needs them. Either way, no ARM toolchain: this project only
+targets the Simulator, never real hardware, so a C game builds as a shared
+library with the host compiler.
 
 **Hybrid C+Lua games** (C for hot loops, Lua for UI, an officially
 supported pattern) can use the Lua harness alone, since a real Lua VM is
@@ -573,8 +709,9 @@ still running.
 
 ## Local development
 
-Every command is a make target, and everything runs in the container, so the
-only host requirements are Docker and Go.
+Every command is a make target. Most run in the container, so Docker and Go cover
+almost everything. The `-native` targets and `sdk-path` are the exceptions: they
+run against an SDK on this machine and need one installed.
 
 ### Containers
 
@@ -615,7 +752,8 @@ already runs both.
 
 | Command | Needs | Covers |
 |---|---|---|
-| `make go-build` / `go-test` | Go | The server, tools and harness IPC. |
+| `make go-build` / `go-test` | Go | The server, tools and harness IPC. `go-build` also emits `./open-crank-mcp`, which is what a native client runs. |
+| `make go-build-cross` | Go | Builds and vets for linux, darwin and windows, so a platform-specific construct outside a build-tag file fails here rather than on someone else's machine. |
 | `make test-shared-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. No container. |
 | `make mutation-test` | Go | Mutates the code and checks the tests notice, so a line that runs without being asserted on doesn't pass for covered. Thresholds in `.gremlins.yaml`. About 15s. |
 | `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |
@@ -624,8 +762,22 @@ already runs both.
 | `make shared-check` | Docker | The VNC workspace: pages served, window manager config, where the slider was found, and that clicking it works. |
 | `make test-shared-types` | Docker | Typechecks the browser tests with `tsgo`, the Go port of `tsc`. |
 | `make test-shared-browser` | Docker | Browser behaviour of the VNC pages, via Playwright in its own container. Runs the typecheck and `shared-check` first. |
+| `make sdk-path` | A host SDK | Prints the resolved SDK, which source found it, and every candidate considered. The first thing to run when detection surprises you. |
+| `make smoke-check-native` | A host SDK | Same subject as `smoke-check`, no container: libraries resolve, `pdc` runs, the Simulator starts. |
+| `make sdk-contract-check-native` | A host SDK | Same subject as `sdk-contract-check`, no container. Sets `OPEN_CRANK_SDK_CONTRACT`, which is what those tests skip without. |
 
 ### Environment variables
+
+Native mode first, since none of it is required and that is easy to miss:
+
+| Variable | Default | Applies to |
+|---|---|---|
+| `PLAYDATE_SDK_PATH` | detected | Both modes. The container sets it; natively it is optional, since detection also reads `SDKRoot` from `~/.Playdate/config` and then the default install location. Set it for an SDK somewhere unusual. |
+| `OPEN_CRANK_SIMULATOR_BIN` | detected | Native. Overrides the Simulator executable outright. The escape hatch if the macOS `.app` name is ever wrong. |
+| `OPEN_CRANK_DATA_ROOT` | detected | Native. Overrides the *parent* of the per-game data directory, for a Simulator that sandboxes somewhere none of the candidates name. |
+| `OPEN_CRANK_SDK_CONTRACT` | unset | Opts the contract tests in. They skip without it, which is what keeps them from failing on a host that has an SDK but no display. |
+
+Container mode:
 
 | Variable | Default | Applies to |
 |---|---|---|
@@ -689,13 +841,13 @@ not bringing your own anything, so the name described something it never did.
 `byos` is now retired entirely rather than reused, so there is no version of
 this repo where the word means two things.
 
-Nothing carries over automatically. The old `make` targets print a pointer to
-this section and fail, but an MCP client config is just a file on your disk, so
-that one you have to edit.
+Nothing carries over automatically, and nothing warns you either: the old `make`
+targets briefly existed as tombstones pointing at this section, and were removed
+at Checkpoint 11 as planned, so they now fail the way any unknown target does.
 
 | Old | New | What you see if you don't change it |
 |---|---|---|
-| `make up-byos` | `make up-shared` | The tombstone target, pointing here |
+| `make up-byos` | `make up-shared` | `No rule to make target 'up-byos'` |
 | `make byos-load` / `byos-watch` | `make shared-load` / `shared-watch` | Same |
 | `make byos-check` | `make shared-check` | Same |
 | `make test-byos-unit` / `-types` / `-browser` | `make test-shared-*` | Same |

@@ -19,7 +19,12 @@ type BuildGameOutput struct {
 }
 
 func (s *Server) buildGame(_ context.Context, _ *mcp.CallToolRequest, in BuildGameInput) (*mcp.CallToolResult, BuildGameOutput, error) {
-	result, err := build.Build(in.SourceDir)
+	paths, errResult := s.requireSDK()
+	if errResult != nil {
+		return errResult, BuildGameOutput{}, nil
+	}
+
+	result, err := build.Build(in.SourceDir, paths)
 	out := BuildGameOutput{
 		ProjectType: result.ProjectType.String(),
 		PdxPath:     result.PdxPath,

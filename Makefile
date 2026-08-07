@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mutation-test test hooks
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mutation-test mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -58,7 +58,7 @@ smoke-check: build
 	docker compose run --rm simulator go run ./cmd/smoke-check
 
 sdk-contract-check: build
-	docker compose run --rm simulator go test ./internal/contracttest/... -v
+	docker compose run --rm simulator env OPEN_CRANK_SDK_CONTRACT=1 go test ./internal/contracttest/... -v
 
 # Recreates the container against the current GAME_DIR, then builds and launches
 # the game by driving the MCP server exactly as a client would. This is the one
@@ -168,6 +168,29 @@ GREMLINS_VERSION ?= v0.6.0
 mutation-test:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash
 
+# Mutation testing restricted to what changed against a ref, for the pre-commit
+# hook. Around 1-5s instead of 33s, because it only mutates the lines in the
+# diff.
+#
+# Not a replacement for `mutation-test`: a change can weaken a test for code it
+# does not touch, and only the full run sees that. This is the fast local check;
+# CI still runs the whole thing.
+#
+# The exit-code handling is the awkward part. gremlins reports "no mutants at
+# all" as 0.00% efficacy and fails the threshold, so a commit that touches no Go
+# code - or only comments - would fail for having nothing to test. Treat an
+# all-skipped run as the pass it is.
+MUTATION_DIFF_REF ?= HEAD
+
+mutation-test-diff:
+	@out=$$(go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) \
+		unleash --diff $(MUTATION_DIFF_REF) 2>&1); rc=$$?; \
+	echo "$$out" | tail -4; \
+	if echo "$$out" | grep -q "Killed: 0, Lived: 0, Not covered: 0"; then \
+		echo "  no mutable changes in the diff, nothing to test"; exit 0; \
+	fi; \
+	exit $$rc
+
 # Points git at the tracked hooks in .githooks. Not a copy into .git/hooks: a
 # copy goes stale the moment the tracked hook changes, and nothing tells you.
 # core.hooksPath always runs what is in the repo.
@@ -179,6 +202,26 @@ hooks:
 	git config core.hooksPath .githooks
 	@echo "pre-commit hook enabled. Bypass a single commit with --no-verify."
 	@echo "disable with: git config --unset core.hooksPath"
+
+# Prints the SDK internal/sdk would resolve, and which of the three sources
+# found it. The first thing to reach for when detection picks the wrong SDK, or
+# picks none: it turns an invisible decision into one line.
+sdk-path:
+	@go run ./cmd/sdk-path
+
+# The native counterparts of smoke-check and sdk-contract-check: same subject,
+# no container. `-native` is a suffix rather than a prefix so `make smoke-check`
+# keeps meaning what it always did, and so tab completion groups by subject.
+#
+# Both need an SDK on this machine. OPEN_CRANK_SDK_CONTRACT is what tells the
+# contract tests they are wanted; without it they skip, which is what keeps them
+# from failing on a host that happens to have PLAYDATE_SDK_PATH set but no
+# display.
+smoke-check-native:
+	go run ./cmd/smoke-check
+
+sdk-contract-check-native:
+	OPEN_CRANK_SDK_CONTRACT=1 go test ./internal/contracttest/... -v
 
 # Everything, ordered so it fails as fast as it can. The three host-only suites
 # run first: a broken parser or a Go typo then fails in seconds instead of
@@ -203,25 +246,3 @@ test:
 	$(MAKE) smoke-check
 	$(MAKE) sdk-contract-check
 	$(MAKE) test-shared-browser
-
-# Tombstones for the pre-rename target names. The profile was called `byos`,
-# for "bring your own simulator", through Checkpoint 4. It runs its own
-# Simulator and shares it, which is not that, so it is `shared` now.
-#
-# These exist because a doc only helps someone who reads it. Muscle memory and
-# any wrapper script of your own get a pointer here instead of make's own "No
-# rule to make target", which says nothing about where the target went. One
-# rule covers all seven: every old name maps to its new one by substitution.
-#
-# Delete these at Checkpoint 11, per docs/ROADMAP.md. They are a migration aid,
-# not a permanent fixture.
-RENAMED_TARGETS = up-byos byos-load byos-watch byos-check test-byos-unit test-byos-types test-byos-browser
-# Declared here rather than in the .PHONY at the top of this file: make expands
-# a rule's prerequisites as it reads them, so a variable defined further down
-# would expand to nothing there.
-.PHONY: $(RENAMED_TARGETS)
-
-$(RENAMED_TARGETS):
-	@echo "make $@ is now make $(subst byos,shared,$@)."
-	@echo "The byos profile was renamed to shared. See \"If you used the byos profile\" in README.md."
-	@exit 1

@@ -1,6 +1,11 @@
 mutants:
-  # Only ever mutates the 100ms poll interval in internal/harness; any
-  # positive duration works identically, so there's nothing worth asserting.
+  # Only ever mutates the two timing constants in internal/harness, and any
+  # positive duration works identically for both, so there is nothing worth
+  # asserting. They are the 1ms bootstrap poll (used once per launch, only while
+  # the data directory does not exist yet) and the 10ms backstop re-check that
+  # runs alongside the filesystem notification. Neither is a polling loop: the
+  # wait blocks on a real notification. This comment used to say "the 100ms poll
+  # interval", which stopped being true three changes ago.
   arithmetic-base: false
 
 unleash:
@@ -15,6 +20,10 @@ unleash:
   threshold:
     efficacy: 90
     mutant-coverage: 90
+  # exclude-files entries are REGEXPS, and unanchored ones at that, matched
+  # against each file's path relative to the run directory. Not globs. A "**" in
+  # here is a parse error, and a bare "main.go" silently matches every main.go in
+  # the tree. Anchor with ^ unless a substring match is what you want.
   exclude-files:
     # OS-level process orchestration (Xvfb, ldd, the real PlaydateSimulator
     # binary). Not meaningfully unit-testable without the full simulator
@@ -38,11 +47,16 @@ unleash:
     # confirming every tool's schema is valid.
     #
     # Every main.go below is listed by full path on purpose. This entry used to
-    # read just "main.go", which gremlins matches by basename, so it was also
-    # silently excluding cmd/shared-load/main.go and cmd/smoke-check/main.go.
+    # read just "main.go", and because these patterns are unanchored regexps that
+    # matched every main.go in the tree, silently excluding
+    # cmd/shared-load/main.go and cmd/smoke-check/main.go as well.
     # The score it produced was therefore better than the config actually asked
     # for. Full paths mean each exclusion has to be argued for on its own.
     - "cmd/open-crank-mcp/main.go"
+    # Prints sdk.Paths.Describe and exits. The rendering it used to hold inline
+    # was moved into internal/sdk precisely so it could be mutation-tested; what
+    # is left is the shell around it, same as the other commands here.
+    - "cmd/sdk-path/main.go"
     # Docker orchestration: recreates the compose service, waits for PulseAudio,
     # then drives the MCP server over stdio. Nothing here is reachable without a
     # real daemon, and every branch is about a container's state rather than

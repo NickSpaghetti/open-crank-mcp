@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -50,8 +51,15 @@ func newTestServer(t *testing.T) *Server {
 	}
 
 	return &Server{
-		sdkPath: sdkPath,
-		sim:     sim,
+		// The symlinked stand-in is named directly rather than derived from a
+		// layout: this fixture is about the Server's lifecycle handling, not about
+		// where a real SDK keeps its Simulator.
+		sdk: sdk.Paths{
+			Root:         sdkPath,
+			SimulatorBin: filepath.Join(sdkPath, "bin", "PlaydateSimulator"),
+			PDC:          filepath.Join(sdkPath, "bin", "pdc"),
+		},
+		sim: sim,
 		// Empty pdxPath means "launch with no game" (a supported mode -
 		// see internal/simulator.Launch) - sh then just gets dataDir as
 		// its lone arg, which it errors on internally trying to read as a

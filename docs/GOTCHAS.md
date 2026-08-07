@@ -4,6 +4,12 @@ Real, load-bearing behavior that isn't obvious from the tool descriptions
 or the SDK docs, found by actually using this project to build a game
 (missile-command), not by reading source ahead of time.
 
+Almost all of it was found on containerized Linux, and almost all of it is SDK,
+harness or protocol behaviour, so it holds just the same when the server runs
+natively against a host SDK. **Nothing here is container-specific merely because
+it was found in a container.** The handful of places where the platform or the
+mode genuinely matters say so inline; assume everything else applies to both.
+
 ## `press_button` only faked "currently held" state - fixed, real edges now synthesized
 
 `buttonJustPressed`/`buttonJustReleased` (Lua) and the `pushed`/`released`
@@ -287,6 +293,35 @@ simply nothing arriving on that pipe to capture, for Lua console content,
 ever - a real, permanent platform limitation to route around, not a
 transient bug to wait out.
 
+### macOS: measured, but it does not say what it was first read as saying
+
+Checked on a real macOS install (SDK 3.1.1, not a container): a game whose Lua
+called `print()` was launched straight from a shell with stdout redirected to a
+file, and the file was **empty**. Zero occurrences. Raw output in
+`docs/NATIVE-PROBE.md`.
+
+That was originally written up here as confirming the withheld-console theory on
+macOS as well. It does not, and the section above is why. An empty file is not
+evidence about one channel on stdout, because *nothing at all* came back - not
+even the Simulator's own `Loading:`, `SDK:`, `Release:` and `CMD:` startup lines,
+which are native output and have nothing to do with the Lua console. A stdout
+carrying none of its own diagnostics is a stdout that was never flushed, which is
+exactly the block-buffering established above, on a game printing one line and
+then being killed.
+
+So the honest reading: the macOS measurement is *consistent* with the buffering
+explanation and adds no independent evidence either way about withholding. What it
+does establish is the practical conclusion, which is the same on both platforms
+and is all any caller needs: **do not rely on `get_logs` for a Lua game's own
+output.** `get_game_logs` stays, on macOS for the same reason as on Linux.
+
+Re-measuring this properly on macOS would need the high-volume variant - print
+once per frame for several seconds, then let the Simulator exit rather than
+killing it. Nothing depends on the answer, which is why it has not been chased.
+
+Windows is unchecked and will stay that way. Windows-native is unsupported, see
+`docs/ROADMAP.md`.
+
 ### The fix: `get_game_logs` + `mcp.run()`
 
 Routes around the console entirely using the same kind of file-based
@@ -368,6 +403,14 @@ out. A silent, build-clean runtime break, only visible by actually
 launching the build and making a real MCP tool call against it, not by
 checking `build_game`'s exit code.
 
+That permissiveness is GNU `ld`'s default on Linux, not a universal one. Apple's
+`ld64` under clang errors on undefined symbols in a shared library unless told
+otherwise, so the same broken teardown would have failed at link time on macOS
+rather than silently at `harness_reachable: false`. The fix in
+`internal/setup/c.go` does not depend on which way a linker goes. Only the reason
+the bug was *invisible* does, which is worth knowing before assuming a clean build
+on one platform means the same thing on another.
+
 **Fixed**: `teardownC` now does a read-only scan first
 (`cHasUnmarkedHarnessReference` in `internal/setup/c.go`) across every
 `.c` file for any harness reference - `#include`, `mcp_harness_init(`,
@@ -444,7 +487,7 @@ waking up on a timer and calling `stat()` to ask "yet?" regardless of
 whether anything had actually changed - correct, but wasteful compared to
 just being woken up by the kernel the instant the file actually appears.
 `internal/harness/ipc.go`'s `WaitForFile`/`WaitForDir`/`WaitForResponse`
-now share one `awaitPath` helper built on inotify (via the
+now share one `awaitPath` helper built on a real filesystem notification (via the
 `github.com/fsnotify/fsnotify` dependency) instead of a poll loop: arm a
 watch on the target's parent directory, re-check once to close the
 watch-arming race, then block on `watcher.Events` until a matching event
@@ -462,7 +505,18 @@ inotify-based wait (600 round trips per game, per approach).
 
 One real behavior change worth noting: `WaitForDir`/`WaitForFile` now
 require their target's parent directory to already exist to arm a watch on
-it (inotify watches a directory, not a not-yet-existing path). The one
+it (inotify watches a directory, not a not-yet-existing path).
+
+Worth naming the platform assumption in that sentence, since native mode moved this
+code onto other backends: `fsnotify` is inotify only on Linux. It is kqueue on
+macOS and the BSDs, and `ReadDirectoryChangesW` on Windows. The
+parent-must-exist-to-arm-a-watch constraint is inotify semantics; the other two
+have the same practical shape, but that is reasoning rather than measurement -
+verified on Linux only. `awaitPath` also carries a bounded backstop re-check
+alongside the notification, specifically because kqueue registers a per-file watch
+only after emitting Create, and a response written inside that window would
+otherwise produce no further event and run the wait to its full timeout with no
+error. The one
 caller that could hit this before the parent exists - waiting for the
 Simulator's data directory to first create `mcp/` - falls back to a short
 bootstrap poll (`newWatcherForExistingDir`) purely for that one-time race;
@@ -521,6 +575,33 @@ distinct screenshots and zero timeouts, where before it was 1/10 distinct
 and multiple timeouts.
 
 ## The Simulator will not start without PulseAudio
+
+Container-specific by construction, unlike most of this file. The cause is the
+profiles setting `SDL_AUDIODRIVER=pulseaudio`, so the Simulator demands a
+PulseAudio socket that the container has to bring up itself. Natively nothing sets
+that variable, SDL picks its platform default, and this failure mode does not
+arise.
+
+Read it anyway, for two reasons.
+
+The mitigation it describes - `launch_simulator` checking the process is still
+alive shortly after starting it, and handing back what it captured - is general,
+and it is what makes any startup failure legible instead of looking like a game
+that launched and vanished.
+
+And the underlying trap is not container-specific at all: **the Simulator treats
+SDL initialisation as fatal, so it needs *some* working audio driver wherever it
+runs.** The container hits that as a missing PulseAudio socket. A headless native
+run hits it as no audio device whatsoever - the native CI job failed exactly this
+way on its first run, with `SDL2 could not be initalized (-1 - dsp: No such audio
+device)`, SDL having worked down its driver list to OSS and found nothing. The
+answer is the same either way and is what `Dockerfile` already does for the
+headless image: `SDL_AUDIODRIVER=dummy`. A developer's desktop has a real device
+and needs none of it; anything headless, container or not, does.
+
+Worth noticing what that failure looked like before reading the message: an SDK
+that resolved correctly, `pdc` reporting its version, and then the Simulator
+exiting 255. Nothing in that sequence points at audio.
 
 `SDL_AUDIODRIVER=pulseaudio` is set for the VNC and shared profiles so a game's
 audio reaches the stream. The consequence is easy to miss: the Simulator treats
