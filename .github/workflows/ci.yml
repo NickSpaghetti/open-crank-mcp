@@ -116,20 +116,26 @@ jobs:
   # macOS, advisory. The platform with the real native user story, and the one
   # nobody here can debug locally, so it reports without blocking.
   #
-  # No SDK, and therefore no Simulator: the macOS SDK ships as an installer
-  # rather than the archive the Linux job untars, so a runner cannot provision
-  # one non-interactively. What is left still covers the things only a Mac can
-  # cover, and they are not small:
+  # This job used to say a macOS runner could not provision an SDK, because the
+  # macOS download is an installer rather than the tarball the Linux job untars.
+  # That was a category error: the download is a .zip containing a .pkg, and a
+  # .pkg installs non-interactively with `installer -pkg`. So it can, and does,
+  # below.
+  #
+  # Still advisory. Nobody here has a Mac, so everything past `go test` is
+  # written from what a macOS runner is documented to provide and is judged on
+  # its first real run. Being non-blocking is what makes that acceptable rather
+  # than reckless.
+  #
+  # What only this job can cover, whether or not the SDK steps work:
   #
   #   - internal/harness runs against kqueue instead of inotify. fsnotify
   #     abstracts them, but the semantics differ, and every timing assumption in
-  #     that package was formed on Linux.
+  #     that package was formed on Linux. The backstop re-check in awaitPath
+  #     exists for a kqueue behaviour that could not be tested from Linux.
   #   - internal/simulator's proc_unix.go runs on Darwin's process handling.
-  #   - the darwin path layout compiles and is exercised natively rather than
-  #     cross-compiled.
-  #
-  # If Panic ever publishes a macOS archive, the SDK and Simulator steps from
-  # the native job above drop straight in and this can be promoted.
+  #   - the darwin path layout is exercised natively rather than cross-compiled,
+  #     against a real install rather than an fstest.MapFS.
   native-macos:
     runs-on: macos-latest
     continue-on-error: true
@@ -140,17 +146,37 @@ jobs:
           go-version-file: go.mod
       - run: make go-build
       - run: make go-test
-      # Expected to fail on a machine with no SDK, and that is the assertion:
-      # detection has to report the failure rather than crash or hang, and has
-      # to name the paths it checked.
-      - name: sdk-path reports a missing SDK cleanly
+
+      # Pinned rather than PlaydateSDK-latest.zip, so this job fails when the
+      # SDK changes under it instead of drifting silently. weekly.yml is where
+      # `latest` belongs.
+      - name: install the Playdate SDK
         run: |
-          if make sdk-path; then
-            echo "sdk-path found an SDK on a runner that has none"; exit 1
-          fi
-          make sdk-path 2>&1 | grep -q "PlaydateSDK" || {
-            echo "the failure message does not name the paths it checked"; exit 1
-          }
+          curl -fsSL "https://download.panic.com/playdate_sdk/PlaydateSDK-${PLAYDATE_SDK_VERSION}.zip" \
+            -o /tmp/sdk.zip
+          unzip -q /tmp/sdk.zip -d /tmp/sdk
+          sudo installer -pkg /tmp/sdk/PlaydateSDK.pkg -target /
+        env:
+          PLAYDATE_SDK_VERSION: '3.1.1'
+
+      # Printed before anything depends on it. If the .pkg puts the SDK
+      # somewhere other than ~/Developer/PlaydateSDK, this is where that shows
+      # up, and the candidate list says exactly where detection looked.
+      - name: where did it land
+        run: |
+          ls -la "$HOME/Developer" 2>/dev/null || echo "no ~/Developer"
+          make sdk-path
+
+      # SDL_AUDIODRIVER=dummy for the same reason the Linux native job sets it:
+      # the Simulator treats SDL initialisation as fatal and a runner has no
+      # audio device. Whether a macOS runner can open a window at all is the
+      # other open question, and the one most likely to make this leg red.
+      - run: make smoke-check-native
+        env:
+          SDL_AUDIODRIVER: dummy
+      - run: make sdk-contract-check-native
+        env:
+          SDL_AUDIODRIVER: dummy
 
   test-c-harness:
     runs-on: ubuntu-latest

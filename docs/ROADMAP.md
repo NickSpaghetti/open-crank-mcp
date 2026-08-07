@@ -887,12 +887,22 @@ asking "yet?" instead of being told.
   covered by the `fstest` suite, but the runtime is unsupported and says so:
   WSL2 already serves those users through the existing profile.
 
-  That started as a scoping choice and has since become a structural one. The
-  Windows SDK ships as an interactive installer `.exe`, with no archive
-  equivalent to the Linux `.tar.gz` that CI fetches and extracts. So a Windows
-  runner cannot provision itself, and Windows-native could never have the
-  per-PR verification the other two platforms get. "Unsupported for now" is
-  therefore "unsupported", not a queue position. Its layout values are still
+  That is a scoping choice, and the reasoning behind it needs a correction.
+
+  It was written up here as structural: the Windows SDK ships as an interactive
+  installer `.exe` with no archive equivalent, so a runner could not provision
+  itself, so Windows-native could never have per-PR verification. The same
+  argument was made about macOS and turned out to be a category error. The macOS
+  download is a `.zip` containing a `.pkg`, and a `.pkg` installs without
+  interaction via `installer -pkg` - "installer, not archive" simply does not
+  imply "cannot be automated". Windows installers routinely take a silent flag
+  too, and nobody has checked whether this one does.
+
+  So the honest position is narrower than what was here. Windows-native is
+  unsupported because nobody here can run or debug it and WSL2 already serves
+  those users through container mode - a scoping decision, and a revisitable one.
+  It is not unsupported because provisioning is impossible; that was asserted
+  without being tested. Its layout values are still
   correct (see `docs/NATIVE-PROBE.md`) because keeping them right costs nothing
   and makes promoting Windows additive if that ever changes.
 

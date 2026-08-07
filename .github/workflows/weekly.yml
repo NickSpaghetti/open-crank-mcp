@@ -17,9 +17,12 @@ on:
 # fetch outside the container for the same signal.
 #
 # A macOS leg would add real signal, since it would be the only place the
-# Simulator runs on Darwin. It is blocked on the same thing the macOS CI leg is:
-# the macOS SDK ships as an installer rather than an archive, so a runner cannot
-# provision one non-interactively. Revisit if that changes.
+# Simulator runs on Darwin. It was previously described as blocked on
+# provisioning, which was wrong: the macOS download is a .zip containing a .pkg,
+# and `installer -pkg` handles that without interaction. ci.yml's native-macos
+# job now does exactly that. Adding a leg here is worth doing once that job has
+# actually gone green, so this sweep does not start reporting failures from an
+# unproven path.
 jobs:
   sdk-contract-check:
     runs-on: ubuntu-latest
