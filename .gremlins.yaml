@@ -13,7 +13,19 @@ unleash:
   # process lifecycle); high worker parallelism makes their wall-clock time
   # under gremlins' own load unpredictable enough to spuriously time out
   # against the default coefficient.
-  workers: 4
+  #
+  # workers was 4, and that took a GitHub runner down twice. internal/scan is
+  # byte-loop code, so some mutants of it do not fail - they spin. The timeout
+  # is what bounds a spin, and 10x a ~12s baseline is ~2 minutes of a pinned
+  # core; with 4 workers on a 4-vCPU runner that starved the runner agent
+  # itself, which GitHub reports as "the runner has received a shutdown
+  # signal" rather than as anything about the tests. Half the workers leaves
+  # cores free for the agent and for the other workers to drain.
+  #
+  # The loops that could spin have since been made to advance structurally
+  # (see CMakeArgTokens and cLineCommentEnd), so this is defence in depth for
+  # the next byte loop somebody writes, not the only thing holding it up.
+  workers: 2
   timeout-coefficient: 10
   # gremlins v0.6.0 compares value <= threshold, so 100 can never pass even
   # at a perfect score (confirmed in its source). 90 leaves real headroom.

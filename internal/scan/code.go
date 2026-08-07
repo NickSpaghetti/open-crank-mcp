@@ -133,7 +133,11 @@ func CCode(content string) Code {
 	for i := 0; i < len(content); {
 		switch {
 		case strings.HasPrefix(content[i:], "//"):
-			i = cLineCommentEnd(content, i)
+			// Past the "//" that was just matched, so this advances by at least
+			// two whatever the helper returns. CCode's loop has no other
+			// guarantee of progress, and a scan that stalls burns a core until
+			// something outside kills it.
+			i = cLineCommentEnd(content, i+2)
 		case strings.HasPrefix(content[i:], "/*"):
 			i = cBlockCommentEnd(content, i)
 		case content[i] == '"' || content[i] == '\'':
@@ -155,23 +159,25 @@ func CCode(content string) Code {
 // commented-out macro, and getting it wrong means treating the spliced line as
 // code.
 func cLineCommentEnd(content string, i int) int {
-	for i < len(content) {
-		if content[i] == '\\' {
+	// The loop header owns the advance, so every path through the body moves
+	// forward. Written this way rather than with a continue per case because the
+	// earlier shape could be made to step backwards and then forwards between
+	// two offsets forever, which is a spin no timeout catches cheaply.
+	for ; i < len(content); i++ {
+		switch content[i] {
+		case '\\':
 			j := i + 1
 			if j < len(content) && content[j] == '\r' {
 				j++
 			}
 			if j < len(content) && content[j] == '\n' {
-				i = j + 1
-				continue
+				// Land on the line break; the loop's own i++ steps past it, so
+				// the spliced line is part of this comment.
+				i = j
 			}
-			i++
-			continue
-		}
-		if content[i] == '\n' {
+		case '\n':
 			return i
 		}
-		i++
 	}
 	return i
 }
