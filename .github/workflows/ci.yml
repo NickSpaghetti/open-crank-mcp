@@ -162,6 +162,34 @@ jobs:
       # the Simulator treats SDL initialisation as fatal and a runner has no
       # audio device. Whether a macOS runner can open a window at all is the
       # other open question, and the one most likely to make this leg red.
+      # Suppress the Simulator's first-run modals before anything launches a
+      # game.
+      #
+      # This is what run-vnc.sh already does for the container, via an INI:
+      # ShowPerfWarning is the "test on real hardware" dialog and ShowElist is
+      # the mailing-list one, and a fresh install shows both. A runner is always
+      # a fresh install. The evidence that this is what has been happening: a
+      # game loads (`Loading: <game>.pdx/` appears) and then never executes, 25
+      # seconds is no better than 5, `open -a` behaves identically, and the C
+      # harness gets its directory created while Lua does not - because C's runs
+      # at kEventInit during load, and Lua's runs when main.lua executes, which
+      # is after the point a modal would block.
+      #
+      # macOS keeps these in a plist rather than an INI, so `defaults` is the
+      # equivalent. The bundle identifier is read from the app rather than
+      # guessed, and echoed, because if the key names differ on this platform
+      # that is the next thing to look at.
+      - name: suppress the Simulator's first-run dialogs
+        run: |
+          APP="$HOME/Developer/PlaydateSDK/bin/Playdate Simulator.app"
+          BID=$(defaults read "$APP/Contents/Info" CFBundleIdentifier)
+          echo "bundle identifier: $BID"
+          defaults write "$BID" ShowPerfWarning -bool false
+          defaults write "$BID" ShowElist -bool false
+          defaults write "$BID" ShowDeviceControls -bool true
+          echo "--- what the Simulator will read ---"
+          defaults read "$BID" || echo "  (nothing written)"
+
       - run: make smoke-check-native
         env:
           SDL_AUDIODRIVER: dummy
@@ -220,6 +248,28 @@ jobs:
           echo "=== session context ==="
           launchctl managername 2>/dev/null || echo "  launchctl managername unavailable"
           echo "  SSH_CONNECTION=${SSH_CONNECTION:-unset}  TERM_SESSION_ID=${TERM_SESSION_ID:-unset}"
+
+      # If a dialog is still blocking, it is on screen and this shows it. Cheaper
+      # than another round of inference, and the artifact survives the job.
+      - name: screenshot the desktop
+        if: always()
+        continue-on-error: true
+        run: |
+          SDK="$HOME/Developer/PlaydateSDK"
+          "$SDK/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator" \
+            /tmp/tick/probe.pdx > /dev/null 2>&1 &
+          sleep 12
+          screencapture -x /tmp/screen.png || echo "screencapture failed"
+          pkill -9 -f "Playdate Simulator" 2>/dev/null || true
+          ls -la /tmp/screen.png 2>/dev/null || echo "no screenshot produced"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        continue-on-error: true
+        with:
+          name: macos-desktop
+          path: /tmp/screen.png
+          if-no-files-found: ignore
 
       - name: what did the harness actually write
         # always(), not failure(): this job is continue-on-error, so the job
