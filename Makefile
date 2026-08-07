@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test no-regex mutation-test mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -198,6 +198,30 @@ GREMLINS_VERSION ?= v0.6.0
 
 mutation-test:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash
+
+# The same run, split in two, for CI.
+#
+# A hosted runner has not survived mutating the whole module since internal/scan
+# landed and took the mutant count from ~240 to ~560: the job dies partway with
+# "the runner has received a shutdown signal", at a different mutant each time.
+# Memory (3.6GB peak), CPU (completes pinned to four cores), disk (926MB of
+# build cache) and hung mutants (the timeout fires and the run continues) were
+# each measured and ruled out, so what is left is the length of the run itself.
+# Each half here is close to the size of the last run that did survive, and the
+# two run on separate runners at the same time.
+#
+# The second config is derived from .gremlins.yaml rather than copied, so the
+# exclude list and the thresholds cannot drift apart. Deriving it is worth the
+# sed: the excludes are load-bearing, and a stale copy of them shows up as a
+# coverage failure nobody can explain.
+mutation-test-scan:
+	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash ./internal/scan
+
+mutation-test-rest:
+	@tmp=$$(mktemp); \
+	sed 's|^  exclude-files:|  exclude-files:\n    - "^internal/scan/"|' .gremlins.yaml > $$tmp; \
+	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash . --config $$tmp; \
+	status=$$?; rm -f $$tmp; exit $$status
 
 # Mutation testing restricted to what changed against a ref, for the pre-commit
 # hook. Around 1-5s instead of 33s, because it only mutates the lines in the

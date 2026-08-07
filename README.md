@@ -773,7 +773,7 @@ already runs both.
 | `make go-build-cross` | Go | Builds and vets for linux, darwin and windows, so a platform-specific construct outside a build-tag file fails here rather than on someone else's machine. |
 Dgit | `make no-regex` | git, grep | Fails if any Go file imports `regexp`. There is no allowlist. Patterns are replaced by `internal/scan`, which reads source a byte at a time and knows a comment from code; see the note above the target for why. Grep on the command line is fine. |
 | `make test-shared-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. No container. |
-| `make mutation-test` | Go | Mutates the code and checks the tests notice, so a line that runs without being asserted on doesn't pass for covered. Thresholds in `.gremlins.yaml`. About 15s. |
+| `make mutation-test` | Go | Mutates the code and checks the tests notice, so a line that runs without being asserted on doesn't pass for covered. Thresholds in `.gremlins.yaml`. CI splits this into `mutation-test-scan` and `mutation-test-rest` across two runners; locally this target still does the whole module. |
 | `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |
 | `make smoke-check` | Docker | The SDK is where the image expects it and the Simulator starts. |
 | `make sdk-contract-check` | Docker | The MCP tools driving a real Simulator, so an SDK release that changes behaviour shows up here. |
