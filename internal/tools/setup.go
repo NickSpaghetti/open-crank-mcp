@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	crankSetup "github.com/NickSpaghetti/open-crank-mcp/internal/setup"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -22,12 +23,11 @@ type SetupOutput struct {
 
 func resolveLanguage(sourceDir, override string) (crankSetup.Language, error) {
 	if override != "" {
-		switch crankSetup.Language(override) {
-		case crankSetup.Lua, crankSetup.C, crankSetup.Hybrid:
-			return crankSetup.Language(override), nil
-		default:
-			return "", fmt.Errorf("unknown language %q, want one of lua, c, hybrid", override)
+		if !crankSetup.ValidLanguage(crankSetup.Language(override)) {
+			return "", fmt.Errorf("unknown language %q, want one of %s",
+				override, strings.Join(crankSetup.LanguageNames(), ", "))
 		}
+		return crankSetup.Language(override), nil
 	}
 	return crankSetup.DetectLanguage(sourceDir)
 }

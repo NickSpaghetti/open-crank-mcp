@@ -69,12 +69,17 @@ without `stop_simulator`, it keeps running, and the next `launch_simulator`
 starts a second one alongside it. Both poll the same command file.
 
 ```
-pkill -9 -f 'bin/PlaydateSimulato[r]'
+pkill -9 -f 'bin/PlaydateSimulato[r]'                                        # native
+docker compose exec simulator-shared pkill -9 -f 'bin/PlaydateSimulato[r]'   # container
 ```
 
 The bracket is not a typo. `pkill -f` matches every process's whole command
 line, including the shell running the `pkill`. Without it you kill your own
-shell instead, silently.
+shell instead, silently, and you conclude the Simulator was never running.
+
+`-9` is required. The Simulator ignores `SIGTERM`, which is why the server's own
+`stop_simulator` uses `SIGKILL` too. Natively, note this also kills a Simulator you
+started by hand.
 
 ## The Simulator exits immediately, headless
 

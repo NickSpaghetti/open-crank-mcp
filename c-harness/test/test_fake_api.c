@@ -245,6 +245,62 @@ static void test_crank_override_leaves_dock_alone(void)
     g_fake_crank_docked = 0;
 }
 
+/* hold_button's request, end to end through the harness: a press with no duration
+   field at all. mcp_harness_update runs mcp_override_expire at the top of every call,
+   so a zero deadline would be gone before any read - the same way it was for the crank
+   before the sentinel existed. Two further updates stand in for later frames. */
+static void test_press_with_no_duration_holds(void)
+{
+    g_fake_now_ms = 4000;
+    g_fake_real_current = 0;
+    write_file("mcp/command.json", "{\"id\":\"req3b\",\"type\":\"press\",\"button\":\"a\"}");
+    mcp_harness_update(&fake_pd);
+
+    PDButtons current = 0, pushed = 0, released = 0;
+    mcp_get_button_state(&fake_pd, &current, &pushed, &released);
+    assert((current & kButtonA) != 0);
+
+    g_fake_now_ms = 5000000;
+    mcp_harness_update(&fake_pd);
+    mcp_harness_update(&fake_pd);
+    mcp_get_button_state(&fake_pd, &current, &pushed, &released);
+    assert((current & kButtonA) != 0);
+}
+
+/* reset_input's request. Sets a held button and a held crank - neither of which can
+   expire - and requires one command to give both back. */
+static void test_reset_clears_every_override(void)
+{
+    g_fake_now_ms = 6000;
+    g_fake_real_current = 0;
+    g_fake_crank_docked = 1;
+    write_file("mcp/command.json", "{\"id\":\"req3c\",\"type\":\"press\",\"button\":\"a\"}");
+    mcp_harness_update(&fake_pd);
+    write_file("mcp/command.json", "{\"id\":\"req3d\",\"type\":\"crank\",\"crank_angle\":77.0,\"crank_delta\":3.0,\"crank_dock\":\"undocked\"}");
+    mcp_harness_update(&fake_pd);
+
+    PDButtons current = 0, pushed = 0, released = 0;
+    mcp_get_button_state(&fake_pd, &current, &pushed, &released);
+    assert((current & kButtonA) != 0);
+    assert(mcp_get_crank_angle(&fake_pd) == 77.0f);
+    assert(mcp_get_crank_docked(&fake_pd) == 0);
+
+    write_file("mcp/command.json", "{\"id\":\"req3e\",\"type\":\"reset\"}");
+    mcp_harness_update(&fake_pd);
+
+    char resp[1024];
+    assert(read_file("mcp/response.json", resp, sizeof(resp)) > 0);
+    assert(strstr(resp, "\"id\":\"req3e\"") != NULL);
+    assert(strstr(resp, "\"status\":\"ok\"") != NULL);
+
+    mcp_get_button_state(&fake_pd, &current, &pushed, &released);
+    assert((current & kButtonA) == 0);
+    assert(mcp_get_crank_angle(&fake_pd) == g_fake_crank_angle);
+    assert(mcp_get_crank_docked(&fake_pd) == 1);
+
+    g_fake_crank_docked = 0;
+}
+
 static void test_screenshot(void)
 {
     for (int i = 0; i < LCD_ROWS * LCD_ROWSIZE; i++) {
@@ -323,6 +379,8 @@ int main(void)
     test_release_forces_not_pressed();
     test_crank_override();
     test_crank_override_leaves_dock_alone();
+    test_press_with_no_duration_holds();
+    test_reset_clears_every_override();
     test_screenshot();
     test_state_callback();
     test_malformed_command_reports_error_and_cleans_up();

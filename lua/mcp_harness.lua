@@ -15,6 +15,11 @@ local override = {
 -- Sentinel expiry meaning "never". Negative so it cannot collide with a real
 -- deadline, which is always nowMs plus a duration. Matches MCP_NO_EXPIRY in
 -- c-harness/mcp_harness.h.
+--
+-- Applies to buttons and the crank alike: a non-positive duration on any override
+-- means "hold it until something replaces it". The two are not symmetric at the tool
+-- layer - press_button substitutes a real duration and hold_button does not - but
+-- that is policy and it lives in Go. This file implements one rule.
 local NO_EXPIRY = -1
 
 local stateFn = nil
@@ -434,15 +439,34 @@ playdateMeta.__newindex = function(t, k, v)
     end
 end
 
+-- durationMs <= 0 holds the button down until something replaces it, the same rule
+-- applyCrank uses. See NO_EXPIRY.
+--
+-- This used to be nowMs + durationMs unconditionally, and the asymmetry with the crank
+-- was deliberate and documented: nothing exposed a release, so a button held with no
+-- expiry could never be let go. The release_button and reset_input tools removed that
+-- constraint.
 local function applyPress(button, durationMs, nowMs)
-    override.button[button] = {active = true, value = true, expiresAt = nowMs + durationMs}
+    override.button[button] = {
+        active = true,
+        value = true,
+        expiresAt = durationMs > 0 and (nowMs + durationMs) or NO_EXPIRY,
+    }
 end
 
 local function applyRelease(button, durationMs, nowMs)
     -- Actively forces not-pressed for the duration, symmetric with press -
     -- see the C harness's mcp_override_apply_release for why this isn't
     -- just clearing the override.
-    override.button[button] = {active = true, value = false, expiresAt = nowMs + durationMs}
+    --
+    -- Same no-expiry rule as applyPress, and nothing in Go sends it: release_button
+    -- substitutes a real duration, because a button forced up forever would be deaf
+    -- to the player. applyReset is the call that means "hand everything back".
+    override.button[button] = {
+        active = true,
+        value = false,
+        expiresAt = durationMs > 0 and (nowMs + durationMs) or NO_EXPIRY,
+    }
 end
 
 -- dockedActive/docked come from the command's crank_dock mode, resolved by
@@ -460,8 +484,9 @@ end
 -- nothing, because expireOverrides runs at the top of every frame and
 -- nowMs >= nowMs + 0 is immediately true.
 --
--- Buttons keep expiring, deliberately: nothing exposes a release, so a button
--- held indefinitely could never be let go. Mirrors mcp_override_apply_crank.
+-- Buttons now take the same rule, and did not when this was written; see applyPress.
+-- What the crank still has no equivalent of is a release, so applyReset is the only
+-- way to give a held crank back to the game. Mirrors mcp_override_apply_crank.
 local function applyCrank(angle, delta, dockedActive, docked, durationMs, nowMs)
     override.crank.active = true
     override.crank.angle = angle
@@ -485,9 +510,25 @@ local function dockOverrideFromMode(mode)
     return false, false
 end
 
+-- Drops every override - all six buttons and the crank - so the game reads real input
+-- again. The only way back to passthrough for a crank held with no expiry.
+--
+-- overrideWasActiveLastFrame and lastEffectivePressed are deliberately left alone.
+-- They live outside this table, so the next updateButtonEdges still sees that a button
+-- was overridden last frame, compares the now-real reading against it, and synthesizes
+-- the released edge plus the game's own ButtonUp callback. A reset looks to a game
+-- exactly like letting go, rather than a held button vanishing with no edge. Mirrors
+-- mcp_override_reset in the C harness, which has to say this out loud because memset
+-- is right there.
+local function applyReset()
+    override.button = {}
+    override.crank.active = false
+    override.crank.dockedActive = false
+end
+
 local function expireOverrides(nowMs)
     for _, o in pairs(override.button) do
-        if o.active and nowMs >= o.expiresAt then
+        if o.active and o.expiresAt ~= NO_EXPIRY and nowMs >= o.expiresAt then
             o.active = false
         end
     end
@@ -574,6 +615,9 @@ function mcp.update()
         elseif t == "crank" then
             local dockedActive, docked = dockOverrideFromMode(cmd.crank_dock)
             applyCrank(cmd.crank_angle or 0, cmd.crank_delta or 0, dockedActive, docked, cmd.duration_ms or 0, nowMs)
+            resp.status = "ok"
+        elseif t == "reset" then
+            applyReset()
             resp.status = "ok"
         elseif t == "state" then
             if stateFn then

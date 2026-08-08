@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.1
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mcp-schema mcp-schema-check mcp-auto-test check-doc-links no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -133,6 +133,58 @@ go-build:
 
 go-test:
 	go test ./...
+
+# The tool surface every MCP client is served, as JSON.
+#
+# Regenerate after changing a tool's name, description or input/output types, and commit
+# the result: the diff in docs/mcp-schema.json is the point. A tool schema is the one
+# part of this server a client parses and validates before anything else, and when
+# read_save_data's changed shape underneath us (docs/GOTCHAS.md) it took out every tool
+# at once with nothing in the repo noticing.
+#
+# The generator is the test itself, run with -update. Deliberately not a separate
+# dumper command: two programs that both claim to produce this file can disagree, and
+# then the check passes while describing a surface nobody is served.
+mcp-schema:
+	go test ./internal/mcpcontract -update
+
+# Fails if docs/mcp-schema.json no longer matches what the server serves, and if any
+# schema is one a client would reject. Named for discoverability - `go test ./...`
+# already runs it, in CI and in .githooks/pre-commit, so drift cannot reach main
+# whether or not anyone remembers this target exists.
+#
+# CI verifies and never regenerates. A job that regenerated and committed this file
+# would remove the only thing it is for: a schema change appearing in a pull request
+# where a person sees it.
+mcp-schema-check:
+	go test ./internal/mcpcontract
+
+# Specmatic's MCP auto-test: generates inputs from each tool's own declared schema, calls
+# it, and checks the response against the declared output schema. No spec file - it reads
+# tools/list off the running server - so there is nothing here that can drift.
+#
+# Needs Docker and the -http flag; see scripts/mcp-auto-test.sh for what it covers and,
+# more importantly, what it cannot. It has already earned its place once: it called
+# teardown with language "MIRMU", which is what a schema saying `type: string` asks for,
+# and that is how the closed sets came to declare JSON Schema enums instead of naming
+# their values in prose.
+mcp-auto-test: go-build
+	bash scripts/mcp-auto-test.sh
+
+# Every relative Markdown link and heading anchor in the docs resolves.
+#
+# Added after the README was split into guides/: an extraction leaves phrases like "see
+# below" pointing at nothing, and a link whose target moved looks exactly like one whose
+# target did not. This cannot read prose, so it does not catch "see below" - what it
+# catches is the next step of the same mistake, a link written by hand with the wrong
+# path or a mis-slugged anchor. GitHub's anchor rules are not guessable
+# (`#any-os-universal-fallback-vnc--audio-stream` has a double hyphen where a `+`
+# vanished between two spaces), so nothing else here knows whether one is right.
+#
+# No network: external URLs are not fetched, so this passes on a plane and a dead
+# third-party link never blocks a commit.
+check-doc-links:
+	bash scripts/check-doc-links.sh
 
 # Guards the no-regex rule (https://regexlicensing.org/).
 #
@@ -313,6 +365,7 @@ sdk-contract-check-native:
 # fixed port and one compose project name.
 test:
 	$(MAKE) no-regex
+	$(MAKE) check-doc-links
 	$(MAKE) go-test
 	$(MAKE) test-shared-unit
 	$(MAKE) mutation-test

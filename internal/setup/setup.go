@@ -23,6 +23,34 @@ const (
 	Hybrid Language = "hybrid"
 )
 
+// Languages are the values a caller may name, in the order they are offered.
+//
+// One list rather than three. This was a switch in internal/tools.resolveLanguage, a
+// sentence in the error message next to it, and - once the tool schemas started
+// declaring their closed sets as JSON Schema enums - about to become a third copy. Same
+// shape as harness.ButtonNames and harness.DockModes, for the same reason.
+var Languages = []Language{Lua, C, Hybrid}
+
+// ValidLanguage reports whether l is one a caller may name. The empty string is not a
+// language: it is how a caller asks for auto-detection, which is a different question.
+func ValidLanguage(l Language) bool {
+	for _, known := range Languages {
+		if known == l {
+			return true
+		}
+	}
+	return false
+}
+
+// LanguageNames is Languages as plain strings, for error messages and schema enums.
+func LanguageNames() []string {
+	out := make([]string, len(Languages))
+	for i, l := range Languages {
+		out[i] = string(l)
+	}
+	return out
+}
+
 // FileChange describes one file setup or teardown touched.
 type FileChange struct {
 	Path    string `json:"path"`
@@ -158,6 +186,27 @@ func Setup(sourceDir string, language Language, harnessFS fs.FS) (SetupResult, e
 	if harnessFS == nil {
 		return SetupResult{}, fmt.Errorf("no harness sources available: server was built without them")
 	}
+
+	// The directory has to be a Playdate project before anything is written into it.
+	//
+	// Only the auto-detect path used to check, because that path calls DetectLanguage to
+	// answer a different question and got the check for free. With an explicit language,
+	// nothing looked: setupLua creates Source/ on its way to writing the harness, so
+	// `setup(source_dir: "QBSRK", language: "lua")` created QBSRK/Source/mcp_harness.lua
+	// in the working directory, failed afterwards on the main.lua it could not patch, and
+	// left the tree behind. Found by Specmatic's auto-test, which generates a random
+	// string for a path and produced four such directories in the repo root before
+	// anyone noticed.
+	//
+	// DetectLanguage rather than a bare os.Stat, so an unrelated directory is refused
+	// too, not just a nonexistent one. Its *answer* is deliberately discarded: an
+	// explicit language is allowed to disagree with detection - that is what it is for,
+	// e.g. treating a hybrid project as Lua-only. All this requires is that there is a
+	// project here at all.
+	if _, err := DetectLanguage(sourceDir); err != nil {
+		return SetupResult{}, err
+	}
+
 	switch language {
 	case Lua, Hybrid:
 		return setupLua(sourceDir, harnessFS, language)

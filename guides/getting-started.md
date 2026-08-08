@@ -107,9 +107,17 @@ counters, `a_down_count` and `a_up_count`. The counters go up after the press.
 That is the check that an input actually reached the game rather than just
 being accepted by the server.
 
-`press_button` with no `duration_ms` is a tap. It presses and releases. See
-[playtesting-with-an-agent.md](playtesting-with-an-agent.md) for why the crank
-behaves differently.
+`press_button` with no `duration_ms` is a tap. It presses and releases. For a press that
+stays down across several calls, use `hold_button` and then `release_button`:
+
+```
+hold_button      button=right
+get_screenshot
+release_button   button=right
+```
+
+See [playtesting-with-an-agent.md](playtesting-with-an-agent.md) for when to reach for
+which, and for why the crank behaves differently again.
 
 ## 9. Stop
 

@@ -74,6 +74,42 @@ The general shape, worth keeping: a duration of zero is not a small duration. An
 deadline compared against a clock that only advances between frames needs to say
 what "none" means, rather than letting it fall out of the arithmetic.
 
+### Superseded in part: buttons take the sentinel too, now that a release exists
+
+The paragraph above says a button held with no expiry could never be let go, and
+that was true of the tool surface at the time rather than of buttons. `release_button`
+and `reset_input` exist now, so the harnesses apply one rule - non-positive means no
+expiry - to presses, releases and crank commands alike.
+
+What did not change is the *policy*, which moved cleanly into the Go layer where it
+belongs. `press_button` still substitutes 100ms when a caller omits a duration, for
+exactly the reason above, and it is still the tool an agent should reach for by
+default: omitting a field is the common case, and a tap is the safe reading of it,
+where a hold would leave a button stuck down because someone left an argument out.
+Holding is now a separate verb (`hold_button`, which has no duration field at all) so
+it cannot be arrived at by accident.
+
+`release_button` deliberately does *not* send the sentinel, and that asymmetry is
+worth stating because it looks like an oversight. A release forces not-pressed rather
+than merely clearing the override - so a human driving the same Simulator cannot leak
+a press through - and forcing that for ever would leave the button permanently deaf to
+the player, with no way back but another press. It forces the button up for about
+three frames and then expires to passthrough, which is what letting go means.
+
+The genuinely new hole this closed was the crank's. `set_crank` always activates the
+override and a duration-less one never expires, so between the fix above and
+`reset_input` there was **no command in the protocol** that could give a game its real
+crank reading back. The fix that made the crank hold correctly is the same fix that
+made it unreleasable, which is a pattern worth watching for: a sentinel meaning
+"forever" needs a way to say "stop" in the same change.
+
+`mcp_override_reset` is deliberately not `mcp_override_init`, and the difference is
+the kind that only shows up in a real game. A memset also clears
+`last_effective_pressed`/`override_was_active_last_frame`, so a game holding A would
+have seen the button stop being pressed with no released edge and no `AButtonUp`
+callback at all. Clearing only the override flags leaves the edge tracking intact, and
+the next frame synthesizes the release by itself.
+
 ## The harness is a copy, so it drifts, and that went unnoticed once
 
 `setup` writes `mcp_harness.lua` (or the C pair) *into a game's own source
@@ -141,6 +177,53 @@ field. An empty override schema doesn't work by itself -
 all-empty schema to `true` as a spec-legal shorthand, so the override
 needs real content (a `Description`) to survive as an actual schema
 object instead of collapsing right back to the same `true`.
+
+## A closed set named only in a description is not a constraint
+
+`press_button`'s `button` accepted six values and said so in prose: `"one of a, b, up,
+down, left, right"`. A model reads that fine, which is why it went unnoticed for so
+long. Nothing else can: the schema said `type: string`, so every client, validator and
+input generator was told any string would do.
+
+Found by pointing Specmatic's MCP auto-test at the server, which generates inputs from
+each declared schema. It called `teardown` with `language: "MIRMU"` and `setup` with a
+random `source_dir`, because a random string is exactly what `type: string` asks for.
+
+**Fixed** by declaring the sets as JSON Schema `enum` (`closedSetSchema` in
+`internal/tools/server.go`), for `button`, `crank_dock` and `language`. Two things
+follow. A client now rejects `press_button("A")` before it is sent, with a message that
+lists the valid values because the enum is right there. And a generator produces valid
+inputs, which is what turned auto-test from noise into 40 real assertions.
+
+The handler-side validation stays. It covers what a schema cannot express - the empty
+string meaning "leave the dock alone" - and a constraint worth declaring is worth
+enforcing where the work happens.
+
+Worth knowing about the interaction with resiliency testing: it walks *every* value of
+an enum and expects each to work. `setup(language: "c")` against a Lua project
+correctly fails, so `make mcp-auto-test` runs against a scratch hybrid C+Lua fixture -
+the only shape that can satisfy all three.
+
+## `setup` with an explicit language created directories that were never games
+
+`setup` checked that `source_dir` held a Playdate project only on the auto-detect path,
+because that path calls `DetectLanguage` to answer a different question and got the
+check for free. Pass `language` explicitly and nothing looked - and `setupLua` creates
+`Source/` on its way to writing the harness. So `setup(source_dir: "QBSRK", language:
+"lua")` created `QBSRK/Source/mcp_harness.lua` relative to the server's working
+directory, failed afterwards on the `main.lua` it could not patch, and left the tree
+behind. All three languages did it.
+
+An MCP server inherits an arbitrary working directory, so "relative to the server's cwd"
+is anywhere. A mistyped path that happens to exist - a home directory, a repo root -
+would have had a harness written into it.
+
+Found by the same Specmatic run as the entry above: four such directories appeared in
+the repo root, which is what an unchecked filesystem write looks like from outside.
+`Setup` now requires a detectable project before writing anything. It discards
+`DetectLanguage`'s *answer*, deliberately, because an explicit language is allowed to
+disagree with detection - treating a hybrid project as Lua-only is the reason the
+parameter exists. All it requires is that there is a project there at all.
 
 ## `get_logs` and Lua `print()`/error output - `get_game_logs` exists for this
 

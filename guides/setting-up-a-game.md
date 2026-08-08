@@ -5,7 +5,7 @@ Wiring the harness into a game with the `setup` tool.
 Do this once per project. The server can build and launch a game without it, but
 screenshots, state and input all need the harness.
 
-Once the server is connected (see above), the fastest way to wire the
+Once the server is connected (see [connecting.md](connecting.md)), the fastest way to wire the
 harness into a game is the `setup` tool: call it with `source_dir`
 pointing at your project, and it detects whether the project is Lua, C,
 or a hybrid of both, then copies the harness file(s) in and patches
@@ -30,10 +30,3 @@ rewritten, therefore make `teardown` a no-op. See
 
 Both tools work purely on the filesystem. No simulator needs to be
 running, and neither touches anything outside `source_dir`.
-
-## Wiring a game into the harness by hand
-
-`setup` above automates this for most projects. See
-[harness-wiring.md](harness-wiring.md) for what it does under the
-hood, which is what you need to resolve a `manual_steps` entry or wire a game up
-yourself.

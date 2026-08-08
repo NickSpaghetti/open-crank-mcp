@@ -15,9 +15,10 @@ make go-build     # produces ./open-crank-mcp
 make sdk-path     # confirm it finds your SDK
 ```
 
-Then point a client at the binary, as below. The Simulator appears as an ordinary
-window when a game launches, using your display and your audio, so none of the
-container display profiles above apply.
+Then point a client at the binary: see [connecting.md](connecting.md). The
+Simulator appears as an ordinary window when a game launches, using your display
+and your audio, so none of the container display profiles in
+[container-mode.md](container-mode.md) apply.
 
 Two checks worth running once, if you want to know the environment is sound
 before involving an agent:

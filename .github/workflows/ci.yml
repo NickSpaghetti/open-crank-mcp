@@ -42,6 +42,19 @@ jobs:
           go-version-file: go.mod
       - run: make go-build-cross
 
+  # Every relative Markdown link and heading anchor resolves. bash and grep, no toolchain
+  # and no network - external URLs are deliberately not fetched, so this cannot fail
+  # because someone else's site is down.
+  #
+  # Its own job rather than a step on another, because it is the only check that a
+  # docs-only pull request has any reason to run, and burying it in a job that installs Go
+  # would make a typo fix wait on a toolchain.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make check-doc-links
+
   # Native mode: the server running against an SDK installed on the machine,
   # with no container anywhere. Everything else here proves the containerized
   # path; this is the only job that proves the other one.
@@ -222,6 +235,39 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: make smoke-check
+
+  # Specmatic's MCP auto-test against the real tool surface, over the -http transport.
+  # Generates inputs from each tool's own declared schema, mutates them, and checks the
+  # server rejects what it should. No spec file: it reads tools/list off the running
+  # server, so there is no second artifact to keep in sync.
+  #
+  # Advisory to start with. Not because its findings are unimportant - it is what found
+  # the missing enums and setup's unchecked directory writes - but because it is a
+  # third-party container whose output format this depends on, and a first-party check
+  # should earn a merge gate by being seen green over time. Promote it by dropping
+  # continue-on-error and adding it to main's required checks; the golden-schema half of
+  # the same work already gates through go-test.
+  #
+  # Deliberately not conditional on paths. The tool surface can change from almost
+  # anywhere in internal/, and this is cheap next to the container jobs above.
+  mcp-auto-test:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make mcp-auto-test
+      # Kept whichever way the run went: a passing run's report is how the coverage it
+      # claims gets checked, and a failing one's is the only place the per-tool verdicts
+      # live.
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcp-auto-test-report
+          path: build/reports/specmatic/
+          if-no-files-found: warn
 
   sdk-contract-check:
     runs-on: ubuntu-latest

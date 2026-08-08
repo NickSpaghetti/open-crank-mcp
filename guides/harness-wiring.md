@@ -7,8 +7,6 @@ You do not need this for most projects. `setup` automates all of it, and
 this to understand the wiring, to resolve a `manual_steps` entry, or to wire a
 game up yourself.
 
-wiring, resolving a `manual_steps` entry, or wiring a game up yourself.
-
 There's no package manager for Playdate projects. `pdc` only ever
 compiles what's physically under your own `Source/` directory, and
 CMake's `add_library`/`add_executable` need locally-relative source
@@ -44,14 +42,22 @@ just a call:
    an MCP-driven press, not just `buttonIsPressed`'s "currently held"
    bit. `AButtonHeld`/`BButtonHeld` (fired after a continuous 1-second
    hold) are a separate mechanism and aren't synthesized.
-5. `set_crank` leaves the crank where you put it. Omit `duration_ms` and the
-   override holds until another `set_crank` replaces it, which is what a real
-   crank does. Pass one to have it lapse back to the game's own reading after
-   that many milliseconds. This used to be the other way round: an omitted
-   duration was read as a zero-length one, so the override was created and
-   expired before any frame could read it, and `set_crank` reported success
-   while the game saw nothing.
-6. `set_crank` overrides the angle and delta, and only touches the docked
+5. `hold_button` holds a button down with no expiry, and `release_button` ends
+   it — the same synthesized edges as above, so a held button fires
+   `AButtonDown` once when it goes down and `AButtonUp` once when it is let
+   go, not once per frame. `reset_input` drops every override at once and
+   produces those release edges too, so a reset looks to your game like the
+   player letting go rather than a held button vanishing.
+6. `set_crank` leaves the crank where you put it. Omit `duration_ms` and the
+   override holds until another `set_crank` replaces it, or until
+   `reset_input`, which is what a real crank does. Pass one to have it lapse
+   back to the game's own reading after that many milliseconds. This used to
+   be the other way round: an omitted duration was read as a zero-length one,
+   so the override was created and expired before any frame could read it, and
+   `set_crank` reported success while the game saw nothing. Buttons now follow
+   the same rule; for a while they deliberately did not, because nothing
+   exposed a release.
+7. `set_crank` overrides the angle and delta, and only touches the docked
    state if you ask it to with `crank_dock` (`"docked"` or `"undocked"`).
    Omit it and `playdate.isCrankDocked()` keeps reading whatever the game
    would really see, which is *docked*, in the Simulator at rest. Before
@@ -118,7 +124,7 @@ teardown. In practice this means:
   `getCrankAngle`/`getCrankChange`/`isCrankDocked` calls in place to
   their `mcp_get_*` equivalents (`pd->system` is write-protected in the
   real Simulator, so overrides can only take effect through those
-  wrapper functions, see below). That rewrite can't be marked or
+  wrapper functions — see point 3 under **C games** above). That rewrite can't be marked or
   reversed the way a whole-line insertion can, so once `setup` has
   touched a C project's input calls, `teardown` for it is permanent from
   then on. It becomes a no-op rather than leaving input calls pointing

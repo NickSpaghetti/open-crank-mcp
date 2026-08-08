@@ -638,14 +638,20 @@ asking "yet?" instead of being told.
   runnable via plain `go test ./...`. `scripts/run-c-harness-tests.sh`
   stays bash: converting it would mean adding the Go toolchain to the
   deliberately slim `c-harness-test` Docker stage for very little real
-  logic gained. CI: `test-c-harness` and `smoke-check` required on every
-  PR; `sdk-contract-check` required only on PRs touching harness-related
-  paths (detected via `dorny/paths-filter`, not the workflow trigger's
-  `paths:` key, so the required check always resolves instead of staying
+  logic gained. CI: `test-c-harness` and `smoke-check` run on every
+  PR; `sdk-contract-check` runs its expensive step only on PRs touching
+  harness-related paths (detected via `dorny/paths-filter`, not the workflow trigger's
+  `paths:` key, so the check always resolves instead of staying
   permanently pending on unrelated PRs) and unconditionally once a week
   (`.github/workflows/weekly.yml`, Sunday 9PM EST, matrix over the pinned
   SDK version and Panic's `latest` alias, catching upstream SDK drift even
   when nothing in this repo changed).
+
+  The word "required" was wrong here for a long time and is corrected above. These jobs
+  ran on every PR; none of them gated a merge. `main`'s required checks were
+  `docker-build`, `go-test` and `mutation-test` and nothing else, so seven green jobs
+  were advisory without anyone deciding they should be. Fixed under **Branch protection**
+  below.
 - [x] **Checkpoint 3**: Go server core. `internal/simulator` and
   `internal/harness` already existed (see Scripts rewrite above).
   `internal/build` adds project-type detection (`CMakeLists.txt` means C,
@@ -984,6 +990,10 @@ asking "yet?" instead of being told.
   promoted later has to keep the always-run-the-job, conditionally-run-the-step
   shape, for the reason recorded under **Scripts rewrite** above.
 
+  That did not happen when the leg went green, and nothing noticed for months, because
+  a job that runs and a job that gates look identical from a pull request. Done under
+  **Branch protection** below.
+
   The ubuntu `native` job was validated by running its steps by hand on this
   machine rather than by pushing and watching. Every library in its apt line
   resolves for the real Simulator binary (`ldd` clean, 21 of 21), the SDK fetch
@@ -1169,3 +1179,159 @@ asking "yet?" instead of being told.
   No version bump needed: the fingerprint is content-derived, so changing either
   harness source changes it automatically. Every game already set up will report
   `harness_warning` until `setup` is re-run, which is the mechanism working.
+- [x] **Buttons you can hold, and a contract with the client**: three input tools and
+  the first tests of the MCP surface itself. The two belong together because the second
+  is what reviews the first: this change adds three tools, and until now nothing in the
+  repo looked at the tool surface a client actually reads.
+
+  **The input half closes a hole the previous entry opened.** `harness.CmdRelease` was
+  on the wire from Checkpoint 2, dispatched by both harnesses and driven by
+  `internal/contracttest`, and no MCP tool ever sent it - so `press_button` was pinned
+  to a tap and `internal/tools/input.go` said why out loud. Worse, and unnoticed: making
+  a duration-less `set_crank` hold forever also made it unreleasable, because
+  `set_crank` always activates the override and nothing could clear it. There was no
+  command in the protocol that could give a game back its real crank reading. A sentinel
+  meaning "forever" needs a way to say "stop" in the same change; this one did not get
+  one.
+
+  So: `hold_button` (no duration field at all), `release_button`, `reset_input`, and one
+  rule in the harnesses - non-positive means no expiry, for presses, releases and crank
+  commands alike. The policy that differs per tool lives in Go, which is the split the
+  previous entry established: `press_button` keeps substituting 100ms because omitting a
+  field is the common case and a tap is the safe reading of it, while a hold that
+  happened by accident leaves a button stuck down. `release_button` substitutes a
+  duration too, and that asymmetry is deliberate - a release *forces* not-pressed rather
+  than clearing the override, so forever would mean permanently deaf.
+
+  `mcp_override_reset` is not `mcp_override_init`, and that is the detail worth keeping.
+  A memset would also clear the edge-tracking fields, so a game holding A would see it
+  stop being pressed with no released edge and no `AButtonUp` at all. Clearing only the
+  override flags leaves the next frame to synthesize the release itself, so a reset looks
+  like letting go rather than a held button vanishing. Asserted in `test_pure_logic.c`;
+  reverting it to a memset fails there.
+
+  Verified at three levels, and the middle one is the one that matters: the C mechanism
+  under ASan, the Go layer's bytes on the wire, and both harnesses against a real
+  Simulator. The last is not optional here - a hold is a frame-timing property and every
+  unit test drives the clock by hand. Both the C and the Lua hold assertions were
+  confirmed to fail against the unmodified harnesses before the fix landed, which is the
+  only way to know a frame-timing test has teeth.
+
+  **The contract half is two layers, and neither can drift, for different reasons.**
+  `internal/mcpcontract` drives the real server through a real client over an in-memory
+  transport: a golden `docs/mcp-schema.json` regenerated by the same test that asserts
+  it (`make mcp-schema`), plus rules for the shapes that have actually bitten. It needs
+  no SDK and no Simulator, so it runs in the ordinary `go test` job everywhere. The
+  golden file's whole purpose is that a schema change appears in a pull request where
+  someone sees it, which is what was missing when `read_save_data`'s `any` field became
+  `"data": true` and took out `tools/list` for every tool at once. CI verifies and never
+  regenerates: a job that regenerated and committed it would delete the only thing it is
+  for.
+
+  Then Specmatic's MCP auto-test, which turned out better than the Checkpoint 2 note
+  guessed. It needs **no spec file** - it reads `tools/list` off the running server,
+  generates inputs from the declared schemas and validates responses against them - so
+  the second-source-of-truth objection to it simply does not apply. What it does need is
+  Streamable HTTP, hence an off-by-default `-http` flag serving the same `RegisterAll`
+  (loopback only, enforced in `internal/httpserve`: this server builds code and launches
+  processes and has no authentication).
+
+  It earned its place twice over on the first run, which is the argument for the whole
+  layer:
+
+  - Every closed set was named in a *description* rather than as a JSON Schema `enum`.
+    Auto-test called `teardown` with `language: "MIRMU"`, because a random string is
+    what `type: string` asks for. A model reads prose; no validator, client or generator
+    can. Now declared as enums, so a client rejects `press_button("A")` before sending
+    it.
+  - `setup` with an explicit `language` never checked that `source_dir` was a project -
+    only the auto-detect path did, incidentally - and `setupLua` creates `Source/` on its
+    way to writing the harness. Four directories named after random strings appeared in
+    the repo root. An MCP server inherits an arbitrary working directory, so a mistyped
+    but real path would have had a harness written into it.
+
+  And one trap in the tool itself, worth recording because it is the kind that makes a
+  green job meaningless: `specmatic mcp test` **exits 0 with 17 of 19 tools failing**.
+  `scripts/mcp-auto-test.sh` asserts on the printed summary instead, matching
+  `Failed: 0` rather than counting failures, so an output-format change fails the check
+  rather than quietly satisfying it.
+
+  What that layer cannot cover is structural and is written down rather than papered
+  over. This server's state lives in the connection, and auto-test calls each tool once,
+  in isolation, with generated arguments - so it can never call `launch_simulator` with a
+  real `.pdx` first, and nothing downstream of a launch can answer with anything but
+  "simulator not running". Those tools are covered by `internal/contracttest` against a
+  real Simulator instead. The skip list is a denylist so a new tool joins the run
+  automatically and shows up as a failure if it needs skipping, rather than being
+  silently omitted - the same reasoning as the paths-filter guards in CI.
+
+  One smaller thing found while doing it: resiliency testing walks every value of an
+  enum and expects each to work, so `setup(language: "c")` against a Lua fixture
+  correctly fails. The target runs against a scratch hybrid C+Lua project, the only
+  shape that satisfies all three.
+- [x] **Docs drift from the README split**: Checkpoint 10 moved most of the README into
+  `guides/`, and phrases that were true inside one document stopped being true once it
+  was eleven. Seven references pointed at nothing: "as below" and "the container display
+  profiles above" in `native-mode.md`, "(see above)" in `setting-up-a-game.md`, "the
+  `127.0.0.1` port binding described under `up-vnc` above" in `shared-session.md` (that
+  section is in `container-mode.md`), a stray "the readme's" in the same file, and - in
+  the README itself, which is the one nobody thinks to check - `See "Volume" above`,
+  aimed at a section that had left for `container-mode.md`.
+
+  The seventh is the one worth singling out, because it read as correct: a "see below" in
+  `harness-wiring.md` pointing at an explanation that extraction had moved *above* it.
+  Both halves survived the move, in the same file, and only the direction broke. Nothing
+  about the sentence looks wrong until you go looking for the referent and find it
+  forty lines earlier.
+
+  Worth being precise about the class, because it is not "broken links". Every one of
+  these was *prose*. A link that survives a move and a link whose target left look
+  identical, but a sentence that says "above" cannot even be checked mechanically. Three
+  other "see below" references were fine, because their referents moved with the text -
+  so a blanket ban on the words would be wrong too.
+
+  `Rough edges` had become a second copy of `troubleshooting.md`: four items stated in
+  full in both places, the whole `pkill` bracket explanation included. Now one line each
+  plus a link to the entry that fixes it. Two of those items turned out not to be
+  duplicates at all - `GAME_DIR` and root-owned output existed *only* in the README - so
+  they moved into `container-mode.md`, where a container user would look. Three details
+  went the other way, into `troubleshooting.md`: the container `pkill` variant, why `-9`
+  is required, and that it also kills a Simulator you started by hand. Reducing a
+  duplicate is only safe once you have checked which copy is longer.
+
+  `guides/README.md` is now a bare index. It enumerated all eleven guides with its own
+  descriptions, as did the README, and the two had already drifted apart in wording.
+
+  The guard is `make check-doc-links`, and its limits are the point: it resolves every
+  relative link and heading anchor, and it would have caught **none** of the six
+  references above, because none of them were links. What it catches is the next step of
+  the same mistake - a link written by hand with a wrong path or a mis-slugged anchor -
+  and that is not hypothetical, since this change wrote nine of them.
+  `#any-os-universal-fallback-vnc--audio-stream` has a double hyphen because a `+`
+  vanished between two spaces, and nothing but this check knows that.
+
+  It runs in `make test`, in CI as its own `docs` job (bash and grep, no toolchain, no
+  network), and in the pre-commit hook unconditionally - a link breaks when a *target*
+  moves, so a commit that renames a heading need not touch a `.md` at all. The hook
+  previously ran nothing whatsoever for a Markdown-only commit, on the reasonable
+  grounds that no suite read a `.md`. That gap is where this all landed.
+- [ ] **Branch protection**: `main`'s required checks were `docker-build`, `go-test` and
+  `mutation-test`, and had been since Checkpoint 1. Everything added after that ran on
+  every PR and gated nothing: `go-build-cross`, `test-c-harness`, `smoke-check`,
+  `sdk-contract-check`, `shared`, `native`, `mutation-test-scan`. This document asserted
+  otherwise in two places, corrected in both.
+
+  The reason it went unnoticed for months is worth more than the fix: a job that runs and
+  a job that gates are indistinguishable from a pull request. Both show a green tick.
+  Nothing in the repo can assert this either, because it is a setting in a GitHub API
+  rather than a file in the tree - which is also why it is the one item here that is not
+  a code change and cannot be verified by running anything.
+
+  `native-macos` stays advisory, deliberately: it stops before running a game until the
+  first-run modal is solved (`docs/GOTCHAS.md`), so requiring it would gate merges on a
+  job that is knowingly incomplete. `mcp-auto-test` starts advisory too, until it has
+  been seen green on enough PRs to trust.
+
+  Left unchecked until the setting is actually applied, which needs a green run on this
+  branch first. Reading `[x]` here while the API still says three checks is exactly the
+  drift being fixed.

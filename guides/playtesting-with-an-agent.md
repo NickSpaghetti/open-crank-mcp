@@ -12,7 +12,7 @@ An agent playtests by repeating four steps.
 1. **Look.** `get_screenshot` for the frame, `list_entities` for where sprites
    are.
 2. **Read.** `get_game_state` for what the game thinks is happening.
-3. **Act.** `press_button` or `set_crank`.
+3. **Act.** `press_button`, `hold_button`/`release_button`, or `set_crank`.
 4. **Check.** `get_game_state` again, and `get_game_logs` if something went
    wrong.
 
@@ -20,27 +20,37 @@ Step 2 is the one that decides whether any of this works. Without a registered
 state function the agent is reading pixels and guessing. See
 [exposing-game-state.md](exposing-game-state.md).
 
-## Input: a button taps, the crank holds
+## Input: tap, hold, let go
 
-The two input tools treat an omitted `duration_ms` differently, and it catches
-people out.
+Pick the verb that matches what a player would do.
 
-| Tool | Omit `duration_ms` | Why |
+| Tool | What it does | Use it for |
 |---|---|---|
-| `press_button` | taps and releases | Nothing exposes a release, so a button held with no expiry could never be let go |
-| `set_crank` | holds until replaced | A crank is a position. A real one stays where you left it |
+| `press_button` | taps and releases | Menus, confirming, firing once |
+| `hold_button` | stays down until released | Walking, steering, charging a shot |
+| `release_button` | lets go, then back to real input | Ending a hold |
+| `set_crank` | holds the angle until replaced | A crank is a position; a real one stays where you left it |
+| `reset_input` | drops every override at once | Handing the game back, and the only way to release a held crank |
 
-So `press_button` with no duration is a tap, which is what you want almost
-always. Pass a duration only when you need a hold, and know it still releases
-when that elapses.
+`press_button` with a `duration_ms` holds for that long and then releases on its own,
+which covers most short holds. Reach for `hold_button` when the hold has to outlast the
+call — steering while you take a screenshot, reading state, and steering some more. It
+stays down until `release_button` or `reset_input`, so pair it with one.
 
 `set_crank` with no duration stays put until the next `set_crank`. Pass a
-duration when you want it to lapse back to what the game would really read.
+duration when you want it to lapse back to what the game would really read, or
+call `reset_input`.
 
 One more thing about the crank. `crank_dock` defaults to leaving the dock alone,
 and the Simulator reports the crank **docked** at rest. A game that only reads
 the crank while undocked will ignore an angle you set. Pass
 `crank_dock: "undocked"` in that case.
+
+### Holding two buttons at once
+
+Nothing special needed: each button has its own override, so `hold_button left` followed
+by `press_button a` gives you both. Release them individually, or `reset_input` for all
+of them.
 
 ## Verifying an input landed
 
