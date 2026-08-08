@@ -25,13 +25,21 @@ void mcp_override_init(McpOverrideState *ov)
     memset(ov, 0, sizeof(*ov));
 }
 
+/* duration_ms <= 0 holds the button down until something replaces it, the same rule
+   mcp_override_apply_crank uses. See MCP_NO_EXPIRY.
+
+   This used to be now_ms + duration_ms unconditionally, and the asymmetry with the
+   crank was deliberate and documented: nothing exposed a release, so a button held
+   with no expiry could never be let go. The release_button and reset_input tools
+   removed that constraint, so the mechanism is one rule again. */
 void mcp_override_apply_press(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms)
 {
     int idx = mcp_button_index(button);
     if (idx < 0) return;
     ov->button_override_active[idx] = 1;
     ov->button_override_value[idx] = 1;
-    ov->button_override_expires_at_ms[idx] = now_ms + duration_ms;
+    ov->button_override_expires_at_ms[idx] =
+        duration_ms > 0 ? now_ms + duration_ms : MCP_NO_EXPIRY;
 }
 
 void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms)
@@ -42,10 +50,17 @@ void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int dura
        not just clearing the override to passthrough. A passthrough-only
        release wouldn't actually force the button up if something else was
        also driving real input (e.g. a human using the visual profile) at
-       the same time. */
+       the same time.
+
+       Same no-expiry rule as press, so a hand-written command.json means the same
+       thing for both. Nothing in Go sends it: release_button substitutes a real
+       duration, because forcing a button up forever would leave it permanently deaf
+       to the player, and mcp_override_reset is the call that means "hand everything
+       back". */
     ov->button_override_active[idx] = 1;
     ov->button_override_value[idx] = 0;
-    ov->button_override_expires_at_ms[idx] = now_ms + duration_ms;
+    ov->button_override_expires_at_ms[idx] =
+        duration_ms > 0 ? now_ms + duration_ms : MCP_NO_EXPIRY;
 }
 
 /* duration_ms <= 0 holds the crank until something else moves it, rather than
@@ -58,8 +73,9 @@ void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int dura
    and now_ms >= now_ms + 0 is immediately true - so the override was created and
    destroyed before the game ever read it.
 
-   Buttons keep expiring, deliberately. Nothing exposes a release to whoever is
-   driving this, so a button held indefinitely could never be let go. */
+   Buttons now take the same rule, and did not when this was written; see
+   mcp_override_apply_press. What the crank still has no equivalent of is a release,
+   so mcp_override_reset is the only way to give a held crank back to the game. */
 void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
                               int docked_set, int docked, int duration_ms, long now_ms)
 {
@@ -72,10 +88,24 @@ void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
         duration_ms > 0 ? now_ms + duration_ms : MCP_NO_EXPIRY;
 }
 
+/* Clears the override flags and nothing else. See the header for why this is not
+   mcp_override_init: the edge-tracking fields have to survive so the next
+   mcp_override_update_edges reports the release a held button just had. */
+void mcp_override_reset(McpOverrideState *ov)
+{
+    for (int i = 0; i < 6; i++) {
+        ov->button_override_active[i] = 0;
+    }
+    ov->crank_override_active = 0;
+    ov->crank_override_docked_active = 0;
+}
+
 void mcp_override_expire(McpOverrideState *ov, long now_ms)
 {
     for (int i = 0; i < 6; i++) {
-        if (ov->button_override_active[i] && now_ms >= ov->button_override_expires_at_ms[i]) {
+        if (ov->button_override_active[i] &&
+            ov->button_override_expires_at_ms[i] != MCP_NO_EXPIRY &&
+            now_ms >= ov->button_override_expires_at_ms[i]) {
             ov->button_override_active[i] = 0;
         }
     }
@@ -247,6 +277,7 @@ static McpCommandType mcp_command_type_from_string(const char *s)
     if (strcmp(s, "state") == 0)      return MCP_CMD_STATE;
     if (strcmp(s, "ping") == 0)       return MCP_CMD_PING;
     if (strcmp(s, "entities") == 0)   return MCP_CMD_ENTITIES;
+    if (strcmp(s, "reset") == 0)      return MCP_CMD_RESET;
     return MCP_CMD_UNKNOWN;
 }
 
@@ -479,6 +510,10 @@ void mcp_harness_update(PlaydateAPI *pd)
             case MCP_CMD_CRANK:
                 mcp_override_apply_crank(&g_override, cmd.crank_angle, cmd.crank_delta,
                                          cmd.crank_docked_set, cmd.crank_docked, cmd.duration_ms, now_ms);
+                resp.ok = 1;
+                break;
+            case MCP_CMD_RESET:
+                mcp_override_reset(&g_override);
                 resp.ok = 1;
                 break;
             case MCP_CMD_STATE:

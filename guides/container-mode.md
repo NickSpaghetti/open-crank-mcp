@@ -16,6 +16,23 @@ headless/automated use. Screenshots come from the Playdate API's real
 framebuffer, not a window capture. Headless mode covers every tool this
 server exposes.
 
+## Two constraints that come with the container
+
+Neither has a fix; both are worth knowing before they surprise you. Native mode has
+neither.
+
+**The game directory is fixed when the container starts.** It is a bind mount, chosen
+by `GAME_DIR` at `make up` time, so switching to a different game means `make down` and
+starting again with a new one.
+
+**Output is written as root.** The container runs as root, so `build_game` leaves
+root-owned `build/` and `.pdx` output inside your game directory, and `.shared-data/` is
+root-owned too. Both are readable without `sudo`; deleting them needs `sudo`, or a
+`docker compose run --rm` doing the `rm` from inside a container. Natively everything is
+written as you.
+
+## Seeing and hearing it
+
 For a visual, sighted spot check with real audio, there are three profiles.
 Pick the one that matches how you run Docker. All three are optional.
 Nothing here is required for the MCP server's own tools, which only use the

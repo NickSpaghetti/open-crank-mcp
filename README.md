@@ -135,7 +135,8 @@ SDK or none.
 
 ## Tools
 
-Sixteen, in roughly the order you use them.
+Nineteen, in roughly the order you use them. Every one of their schemas, exactly as a
+client receives them, is in [docs/mcp-schema.json](docs/mcp-schema.json).
 
 | Tool | What it does |
 |---|---|
@@ -147,8 +148,11 @@ Sixteen, in roughly the order you use them.
 | `restart_simulator` | Stops and relaunches with the same `.pdx`. |
 | `get_status` | Whether the Simulator is running, its bundle ID, and whether the harness answers. |
 | `get_screenshot` | The current screen as a PNG. |
-| `press_button` | Presses `a`, `b`, `up`, `down`, `left` or `right`. Omit `duration_ms` for a tap. |
+| `press_button` | Taps `a`, `b`, `up`, `down`, `left` or `right`. Omit `duration_ms` for a tap; pass one to hold for that long. Releases either way. |
+| `hold_button` | Holds a button down until something lets it go. For what a player would hold rather than tap: walking, steering, charging a shot. |
+| `release_button` | Ends a hold. Forces the button up briefly, then hands it back to real input. |
 | `set_crank` | Overrides the crank angle and delta. Omit `duration_ms` and it holds. `crank_dock` takes `docked` or `undocked`. |
+| `reset_input` | Drops every override at once, buttons and crank. The only way to release a crank set with no `duration_ms`. |
 | `get_game_state` | Your game's registered state inspector, as JSON. The shape is entirely game-defined. |
 | `list_entities` | Sprites in the display list: position, bounds, tag, z-index, visibility. Complete for Lua. For C only sprites with a collision rect are included, so check the `complete` field. |
 | `get_logs` | The Simulator process's own stdout and stderr. |
@@ -159,69 +163,52 @@ Sixteen, in roughly the order you use them.
 The two log tools are not interchangeable. See
 [guides/reading-the-logs.md](guides/reading-the-logs.md).
 
-`press_button` and `set_crank` treat an omitted `duration_ms` differently. A
-button is an event and taps. The crank is a position and stays where you put it.
+Three verbs for buttons rather than one flag, because they are three different
+intentions. `press_button` taps — omit `duration_ms` and you get a press the game is
+guaranteed to see, then a release. `hold_button` takes no duration at all and stays
+down. `release_button` lets go.
+
+`press_button` and `set_crank` still treat an omitted `duration_ms` differently, and
+that difference is deliberate: a tap is what you almost always mean by "press", while a
+crank is a position and stays where you put it. `reset_input` hands everything back.
 
 
 ## Rough edges
 
+Known limitations, one line each, with a link to the fix. Anything stated in full here
+would be a second copy of what
+[guides/troubleshooting.md](guides/troubleshooting.md) already says, and two copies of
+one fact drift.
+
 **Both modes**
 
-- Nothing supervises the Simulator an agent launched. If a client disconnects
-  without calling `stop_simulator`, the Simulator keeps running: reparented to
-  the container's init, or orphaned on your desktop. The next connection's
-  `launch_simulator` then starts a second one alongside it. Both run the same
-  `.pdx`, so both resolve to the same bundle ID and the same Data directory, and
-  both harnesses poll the same `mcp/command.json`. A tool response can come back
-  from either instance. Worth clearing before you trust what you are seeing:
-
-  ```
-  pkill -9 -f 'bin/PlaydateSimulato[r]'                                   # native
-  docker compose exec simulator-shared pkill -9 -f 'bin/PlaydateSimulato[r]'   # container
-  ```
-
-  `-9` is required. The Simulator ignores `SIGTERM`, which is why the server's own
-  `stop_simulator` uses `SIGKILL` too. Natively, note this also kills a Simulator
-  you started by hand.
-
-  The bracket is not a typo. `pkill -f` matches every process's whole command
-  line, including the shell running the `pkill`. Without the bracket it kills
-  your own shell, silently, and you conclude the Simulator was never running.
-- A button cannot be held open-endedly. `press_button` is a tap: omit
-  `duration_ms` and it holds for a default that is long enough for the game to
-  see a real press, then releases. Ask for a long one and it still releases when
-  that elapses, because nothing exposes a release, so a button held with no
-  expiry could never be let go.
+- Nothing supervises the Simulator an agent launched, so a client that disconnects
+  without calling `stop_simulator` leaves it running, and the next `launch_simulator`
+  adds a second one answering the same harness. See
+  [Two Simulators answer at once](guides/troubleshooting.md#two-simulators-answer-at-once).
 
 **Container mode only**
 
-- The game directory is fixed when the container starts. Switching games means
-  `make down` and starting over with a new `GAME_DIR`.
-- The container runs as root, so `build_game` leaves root-owned `build/` and
-  `.pdx` output inside your game directory, and `.shared-data/` is root-owned
-  too. Both are readable without `sudo`. Deleting them needs `sudo`, or a
-  `docker compose run --rm` doing the `rm` from inside a container. Native mode
-  has neither problem: everything is written as you.
-- Audio starts when you click the Playdate's volume slider, because nothing in
-  the SDK can set that slider and nothing can read it. See "Volume" above. It is
-  the first thing to suspect if a future SDK version rearranges the device frame.
-  Native mode has real audio and needs none of this.
+- The game directory is fixed when the container starts, so switching games means
+  `make down` and a new `GAME_DIR`. See
+  [Two constraints that come with the container](guides/container-mode.md#two-constraints-that-come-with-the-container).
+- Build output is written as root, because the container runs as root. Same section as
+  above.
+- Audio starts only when you click the Playdate's volume slider, because nothing in the
+  SDK can set it and nothing can read it. See
+  [Volume](guides/container-mode.md#volume).
 
 **Native mode only**
 
-- Running headless needs `SDL_AUDIODRIVER=dummy`. The Simulator treats SDL
-  initialisation as fatal and will not start without a working audio driver, so
-  on a machine with no audio device, such as a CI runner or a server over SSH, it exits
-  before doing anything, reporting `dsp: No such audio device`. Nothing about
-  that message suggests audio is optional, which it is. A desktop with real audio
-  needs none of this, and the container image already sets it.
-- Building the same game in both modes will hit a stale `CMakeCache.txt`, because
-  cmake records absolute paths and the container sees your game at `/workspace`
-  while a native run sees its real path. `build_game` detects that specific
-  failure, clears the cache, says so in its output, and reconfigures. Worth
-  knowing so the message is not alarming.
-- Detection is silent when it succeeds. If a tool reports no SDK, or the wrong
-  one, `make sdk-path` prints what was found and every candidate considered.
+- Running headless needs `SDL_AUDIODRIVER=dummy`, or the Simulator exits before doing
+  anything. See
+  [The Simulator exits immediately, headless](guides/troubleshooting.md#the-simulator-exits-immediately-headless).
+- Building the same game in both modes hits a stale `CMakeCache.txt`, which `build_game`
+  detects and clears itself. See
+  [cmake fails on a stale CMakeCache.txt](guides/troubleshooting.md#cmake-fails-on-a-stale-cmakecachetxt).
+- SDK detection is silent when it succeeds, so a wrong or missing SDK needs
+  `make sdk-path` to diagnose. See
+  [No SDK found, or the wrong one](guides/troubleshooting.md#no-sdk-found-or-the-wrong-one).
 
 ## Local development
 
@@ -281,6 +268,10 @@ needs Docker. It skips `shared-check` and `test-shared-types` only because
 | `make mutation-test-scan` / `mutation-test-rest` | Go | The same run split in two, which is what CI uses. `internal/scan` is byte-loop code where a flipped comparison hangs the loop instead of failing it, and gremlins sizes its per-mutant timeout from the scope's own baseline. Split out, a hang there costs 3s instead of 60s. `make mutation-test` locally still does the whole module. |
 | `make mutation-test-diff` | Go, git | Mutates only the lines that changed against `MUTATION_DIFF_REF`. Seconds instead of minutes, which is what the pre-commit hook runs. Not a substitute for the full run: a change can weaken a test for code it does not touch. |
 | `make hooks` | git | Points `core.hooksPath` at `.githooks`, enabling the pre-commit hook. Bypass one commit with `--no-verify`. |
+| `make check-doc-links` | bash, grep | Every relative Markdown link and heading anchor in the docs resolves. No network: external URLs are not fetched, so a dead third-party link never blocks a commit. The pre-commit hook runs it on every commit, including Markdown-only ones, which used to run nothing at all. |
+| `make mcp-schema` | Go | Regenerates `docs/mcp-schema.json` from the running server. Run it after changing a tool's name, description or input/output types, and commit the result — the diff is how a change to what every client is served gets reviewed. |
+| `make mcp-schema-check` | Go | Fails if that file no longer matches what the server serves, and if any schema is one a client would reject (a bare `true`, a nullable input union, a closed set with no `enum`). `go test ./...` already runs it, in CI and in the pre-commit hook. |
+| `make mcp-auto-test` | Docker | Specmatic's MCP auto-test against the real tool surface over HTTP: it generates inputs from each tool's own declared schema, mutates them, and checks the server rejects what it should. No spec file, so nothing to keep in sync. See the script for what it covers and what it cannot. |
 | `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |
 | `make smoke-check` | Docker | The SDK is where the image expects it and the Simulator starts. |
 | `make sdk-contract-check` | Docker | The MCP tools driving a real Simulator, so an SDK release that changes behaviour shows up here. |
@@ -290,6 +281,14 @@ needs Docker. It skips `shared-check` and `test-shared-types` only because
 | `make sdk-path` | A host SDK | Prints the resolved SDK, which source found it, and every candidate considered. The first thing to run when detection surprises you. |
 | `make smoke-check-native` | A host SDK | Same subject as `smoke-check`, no container: libraries resolve, `pdc` runs, the Simulator starts. |
 | `make sdk-contract-check-native` | A host SDK | Same subject as `sdk-contract-check`, no container. Sets `OPEN_CRANK_SDK_CONTRACT`, which is what those tests skip without. |
+
+### Flags
+
+One, and you almost certainly do not want it.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-http <addr>` | unset (stdio) | Serves MCP over Streamable HTTP on a loopback address instead of stdio. It exists because contract-testing tools speak HTTP and not stdio — Specmatic's MCP auto-test accepts only `STREAMABLE_HTTP`. MCP clients use stdio; leave this alone unless you are running `make mcp-auto-test` or something like it. Loopback addresses only, and that is enforced rather than advised: this server builds code and launches processes on request and has no authentication, so `0.0.0.0` is refused with a message saying why. |
 
 ### Environment variables
 

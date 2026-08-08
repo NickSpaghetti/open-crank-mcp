@@ -132,6 +132,36 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 	assertStateField(t, resp, "a_down_count", float64(1))
 	assertStateField(t, resp, "a_up_count", float64(1))
 
+	// A press with no duration holds, across many frames.
+	//
+	// This is hold_button's request, and it is the assertion that fails against the
+	// harnesses as they were: a press used to take now+duration unconditionally, so a
+	// zero deadline was already past by the time any frame read it. Verified by
+	// reverting mcp_override_apply_press before this landed - it failed here.
+	//
+	// The sleep is what gives it teeth. Both harnesses expire overrides at the top of
+	// every frame, so a query landing on the same frame as the command would pass even
+	// under the old behaviour. 300ms is ~9 frames at 30fps.
+	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
+		ID: "4d", Type: harness.CmdPress, Button: "a"}))
+	time.Sleep(300 * time.Millisecond)
+	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "4e", Type: harness.CmdState}))
+	assertStateField(t, resp, "current", float64(32)) // kButtonA bit, still held
+
+	// And a release ends it - the other half of hold_button/release_button. Asserted on
+	// a_up_count rather than the released bit, which is one frame wide and would need
+	// this query to land on exactly the right frame.
+	before := stateMap(t, resp)["a_up_count"]
+	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
+		ID: "4f", Type: harness.CmdRelease, Button: "a", DurationMs: 200}))
+	time.Sleep(300 * time.Millisecond)
+	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "4g", Type: harness.CmdState}))
+	assertStateField(t, resp, "current", float64(0))
+	if got := stateMap(t, resp)["a_up_count"]; got == before {
+		t.Errorf("a_up_count stayed at %v after releasing a held button; the game saw the "+
+			"button stop being pressed with no ButtonUp callback", got)
+	}
+
 	// What the game's own dock reading is before anything overrides it.
 	//
 	// Asserted to be true rather than merely recorded, because the value is what
@@ -203,6 +233,38 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 		t.Errorf("crank_angle=%v after the replacing override should have expired; "+
 			"a duration-less crank is meant to be replaceable, not permanent", got)
 	}
+
+	// reset gives a held crank back, which nothing else can do.
+	//
+	// The crank has no release. set_crank always activates the override and a
+	// duration-less one never expires, so before CmdReset existed there was no command in
+	// this protocol that could return the real crank reading to a game. Held button too,
+	// in the same call, since "hand input back to the player" is one action.
+	//
+	// Baseline captured first rather than compared against a hardcoded 0: the assertion
+	// is "the game reads what it would really read", and hardcoding a value would pass by
+	// agreeing with a default if reset silently did nothing.
+	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6j", Type: harness.CmdState}))
+	realAngle := stateMap(t, resp)["crank_angle"]
+
+	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
+		ID: "6k", Type: harness.CmdCrank, CrankAngle: 271.0, CrankDock: harness.DockUndocked}))
+	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
+		ID: "6l", Type: harness.CmdPress, Button: "a"}))
+	time.Sleep(300 * time.Millisecond)
+	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6m", Type: harness.CmdState}))
+	assertStateField(t, resp, "crank_angle", 271.0)
+	assertStateField(t, resp, "current", float64(32))
+
+	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6n", Type: harness.CmdReset}))
+	time.Sleep(300 * time.Millisecond)
+	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6o", Type: harness.CmdState}))
+	if got := stateMap(t, resp)["crank_angle"]; got != realAngle {
+		t.Errorf("crank_angle=%v after reset, want the real reading %v; a held crank was not "+
+			"handed back, which is the one thing reset exists for", got, realAngle)
+	}
+	assertStateField(t, resp, "current", float64(0))
+	assertStateField(t, resp, "crank_docked", true)
 
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "7", Type: harness.CmdScreenshot}))
 	if resp.Width != screenshot.Width || resp.Height != screenshot.Height {

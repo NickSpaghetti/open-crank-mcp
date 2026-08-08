@@ -14,6 +14,7 @@ import (
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
+	crankSetup "github.com/NickSpaghetti/open-crank-mcp/internal/setup"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -39,6 +40,51 @@ func readSaveDataOutputSchema() *jsonschema.Schema {
 		panic(fmt.Sprintf("inferring ReadSaveDataOutput schema: %v", err))
 	}
 	return s
+}
+
+// closedSetSchema infers In's input schema and pins the named properties to the exact
+// values they accept, as JSON Schema `enum`.
+//
+// The values were only ever named in prose before - "one of a, b, up, down, left,
+// right" in a description - and a description is not a constraint. Two things follow
+// from making it one. A client can reject press_button("A") before it is sent, rather
+// than the server being the first thing that notices; and anything generating inputs
+// from the schema produces valid ones. That second one is not hypothetical: Specmatic's
+// auto-test called teardown with language "MIRMU" and setup with a random source_dir,
+// because a random string is what a schema saying `type: string` asks for. See
+// docs/GOTCHAS.md.
+//
+// The handler-side validation stays. It is what produces the message that names the
+// alternatives, it covers the values a schema cannot express (crank_dock's empty string
+// meaning "unchanged"), and a constraint worth declaring is worth enforcing where the
+// work happens too.
+func closedSetSchema[In any](enums map[string][]any) *jsonschema.Schema {
+	s, err := jsonschema.For[In](nil)
+	if err != nil {
+		panic(fmt.Sprintf("inferring %T schema: %v", *new(In), err))
+	}
+	for property, values := range enums {
+		prop, ok := s.Properties[property]
+		if !ok {
+			// A panic rather than a silent skip: this runs at registration, so it
+			// fails on the first connection rather than shipping a schema whose
+			// constraint quietly went missing when a field was renamed.
+			panic(fmt.Sprintf("closedSetSchema: %T has no property %q to constrain", *new(In), property))
+		}
+		prop.Enum = values
+	}
+	return s
+}
+
+// asAny widens a list of allowed values for jsonschema's Enum field, which is []any
+// because JSON Schema allows any type in an enum. Takes ~string so a named string type
+// (setup.Language) needs no conversion at the call site.
+func asAny[T ~string](values []T) []any {
+	out := make([]any, len(values))
+	for i, v := range values {
+		out[i] = string(v)
+	}
+	return out
 }
 
 const responseTimeout = 5 * time.Second
@@ -244,6 +290,10 @@ func (s *Server) roundTripLocked(cmd harness.Command) (harness.Response, error) 
 
 // RegisterAll wires every tool onto server.
 func RegisterAll(server *mcp.Server, s *Server) {
+	// The closed sets, declared once each and shared by the tools that take them, so a
+	// new button or language cannot reach one tool's schema and miss another's.
+	languageEnum := map[string][]any{"language": asAny(crankSetup.Languages)}
+
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "setup",
 		Description: "Wires the MCP harness into a game project: copies mcp_harness.lua (Lua) or mcp_harness.{h,c} " +
@@ -252,10 +302,12 @@ func RegisterAll(server *mcp.Server, s *Server) {
 			"language is given explicitly. Safe to re-run. For C, some steps may not be confidently automatable " +
 			"(e.g. finding the right PlaydateAPI pointer inside your update callback) - check manual_steps in the " +
 			"response for anything left to do by hand.",
+		InputSchema: closedSetSchema[SetupInput](languageEnum),
 	}, s.setupHarness)
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "teardown",
 		Description: "Reverses setup: removes the copied harness file(s) and strips everything setup patched into main.lua/CMakeLists.txt/the eventHandler file.",
+		InputSchema: closedSetSchema[TeardownInput](languageEnum),
 	}, s.teardownHarness)
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -290,15 +342,44 @@ func RegisterAll(server *mcp.Server, s *Server) {
 		Description: "Returns a Lua game's own print() output, plus tracebacks from errors raised inside the game's update function, captured to disk by the harness (lua/mcp_harness.lua) so they are complete the moment you ask. Prefer this over get_logs for a game's own output, which stdout buffering makes unreliable. Errors from the button callbacks the harness itself invokes are captured here too. Requires the game to use the harness's print()/mcp.run() capture. Not applicable to C games.",
 	}, s.getGameLogs)
 
+	buttonEnum := map[string][]any{"button": asAny(harness.ButtonNames)}
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "press_button",
-		Description: "Presses a button (a, b, up, down, left, right) for duration_ms.",
+		Name: "press_button",
+		Description: "Taps a button (a, b, up, down, left, right). Omit duration_ms for a short press the " +
+			"game is guaranteed to see; pass one to hold for that long. Either way it releases on its own - " +
+			"use hold_button for a press that stays down.",
+		InputSchema: closedSetSchema[PressButtonInput](buttonEnum),
 	}, s.pressButton)
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "hold_button",
+		Description: "Holds a button (a, b, up, down, left, right) down until release_button or reset_input " +
+			"lets it go, or another command replaces it. For anything a player would hold rather than tap: " +
+			"walking, steering, charging a shot.",
+		InputSchema: closedSetSchema[HoldButtonInput](buttonEnum),
+	}, s.holdButton)
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "release_button",
+		Description: "Releases a button, ending a hold. Forces it up briefly - so a human driving the same " +
+			"Simulator cannot leak a press through - and then hands it back to real input.",
+		InputSchema: closedSetSchema[ReleaseButtonInput](buttonEnum),
+	}, s.releaseButton)
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "reset_input",
+		Description: "Drops every input override at once, buttons and crank, so the game reads real input " +
+			"again. The only way to release a crank set with no duration_ms, since set_crank holds it " +
+			"indefinitely by design.",
+	}, s.resetInput)
+	mcp.AddTool(server, &mcp.Tool{
 		Name: "set_crank",
-		Description: "Overrides the crank's angle and delta for duration_ms. Optionally overrides the docked state " +
-			"too: crank_dock takes \"docked\" or \"undocked\", and omitting it leaves the dock reading whatever the " +
-			"game would really see.",
+		Description: "Overrides the crank's angle and delta. Omit duration_ms and it stays where you put it, " +
+			"the way a real crank does - reset_input is what hands it back. Optionally overrides the docked " +
+			"state too: crank_dock takes \"docked\" or \"undocked\", and omitting it leaves the dock reading " +
+			"whatever the game would really see.",
+		// The enum lists the three modes but cannot say "or leave it out": that is what
+		// the field being optional means, and it is the ordinary case.
+		InputSchema: closedSetSchema[SetCrankInput](map[string][]any{
+			"crank_dock": asAny(harness.DockModes),
+		}),
 	}, s.setCrank)
 
 	mcp.AddTool(server, &mcp.Tool{

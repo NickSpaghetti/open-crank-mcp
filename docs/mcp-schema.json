@@ -1,0 +1,644 @@
+[
+  {
+    "description": "Detects a game's project type (C or Lua) and builds it into a .pdx. Returns compile errors and warnings either way.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "source_dir": {
+          "description": "path to the game's source directory",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_dir"
+      ],
+      "type": "object"
+    },
+    "name": "build_game",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "output": {
+          "type": "string"
+        },
+        "pdx_path": {
+          "type": "string"
+        },
+        "project_type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_type",
+        "pdx_path",
+        "output"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Returns a Lua game's own print() output, plus tracebacks from errors raised inside the game's update function, captured to disk by the harness (lua/mcp_harness.lua) so they are complete the moment you ask. Prefer this over get_logs for a game's own output, which stdout buffering makes unreliable. Errors from the button callbacks the harness itself invokes are captured here too. Requires the game to use the harness's print()/mcp.run() capture. Not applicable to C games.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "tail_n": {
+          "description": "number of trailing entries to return; 0 or omitted returns everything still retained (the harness keeps two 256KB generations)",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_game_logs",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "ms": {
+                "type": "integer"
+              },
+              "type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "message",
+              "ms"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Returns the game's registered state inspector output as JSON. The shape is entirely game-defined.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "get_game_state"
+  },
+  {
+    "description": "Returns the Simulator process's own stdout/stderr: GTK warnings, startup messages, and - unreliably - a Lua game's print() output and tracebacks. Unreliably because the simulator is launched line-buffered so its own startup diagnostics arrive immediately, but a Lua game's print() still does not reliably appear here. Use get_game_logs for a game's own output; it is written to disk per entry.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "tail_n": {
+          "description": "number of trailing lines to return; 0 or omitted returns everything",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "get_logs",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "lines": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "required": [
+        "lines"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Returns the current screen as a PNG image.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "get_screenshot"
+  },
+  {
+    "description": "Reports whether the simulator is running, its bundle ID, and whether the harness is reachable.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "get_status",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "harness_reachable": {
+          "type": "boolean"
+        },
+        "harness_warning": {
+          "type": "string"
+        },
+        "running": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "running",
+        "harness_reachable"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Holds a button (a, b, up, down, left, right) down until release_button or reset_input lets it go, or another command replaces it. For anything a player would hold rather than tap: walking, steering, charging a shot.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "button": {
+          "description": "one of a, b, up, down, left, right",
+          "enum": [
+            "a",
+            "b",
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "button"
+      ],
+      "type": "object"
+    },
+    "name": "hold_button",
+    "outputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "description": "Launches PlaydateSimulator with the given .pdx.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "pdx_path": {
+          "description": "path to the built .pdx",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pdx_path"
+      ],
+      "type": "object"
+    },
+    "name": "launch_simulator",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "data_dir": {
+          "type": "string"
+        },
+        "data_dir_source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "data_dir",
+        "data_dir_source"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Lists sprites currently in the display list (position, bounds, tag, z-index, visibility, and class name for Lua games). For Lua games this is a complete list. For C-built games, only sprites with a collision rect set are included - purely decorative/visual sprites are commonly missed, since the C API has no true 'list all sprites' query. Check the complete field.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "list_entities",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "complete": {
+          "type": "boolean"
+        },
+        "entities": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "class_name": {
+                "type": "string"
+              },
+              "height": {
+                "type": "number"
+              },
+              "tag": {
+                "type": "integer"
+              },
+              "visible": {
+                "type": "boolean"
+              },
+              "width": {
+                "type": "number"
+              },
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "z_index": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "tag",
+              "class_name",
+              "x",
+              "y",
+              "width",
+              "height",
+              "z_index",
+              "visible"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "required": [
+        "entities",
+        "complete"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Taps a button (a, b, up, down, left, right). Omit duration_ms for a short press the game is guaranteed to see; pass one to hold for that long. Either way it releases on its own - use hold_button for a press that stays down.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "button": {
+          "description": "one of a, b, up, down, left, right",
+          "enum": [
+            "a",
+            "b",
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "type": "string"
+        },
+        "duration_ms": {
+          "description": "how long to hold the button, in ms. Omit for a short tap.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "button"
+      ],
+      "type": "object"
+    },
+    "name": "press_button",
+    "outputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "description": "Reads a JSON save file from the game's data directory. Omit filename to list available files instead.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "description": "specific file to read; omit to list available files instead",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "read_save_data",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "description": "arbitrary JSON value read from the save file"
+        },
+        "files": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "Releases a button, ending a hold. Forces it up briefly - so a human driving the same Simulator cannot leak a press through - and then hands it back to real input.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "button": {
+          "description": "one of a, b, up, down, left, right",
+          "enum": [
+            "a",
+            "b",
+            "up",
+            "down",
+            "left",
+            "right"
+          ],
+          "type": "string"
+        },
+        "duration_ms": {
+          "description": "how long to force the button up, in ms. Omit for the default.",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "button"
+      ],
+      "type": "object"
+    },
+    "name": "release_button",
+    "outputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "description": "Drops every input override at once, buttons and crank, so the game reads real input again. The only way to release a crank set with no duration_ms, since set_crank holds it indefinitely by design.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "reset_input",
+    "outputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "description": "Stops and relaunches the simulator with the same .pdx it was last launched with.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "restart_simulator",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "bundle_id": {
+          "type": "string"
+        },
+        "data_dir": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bundle_id",
+        "data_dir"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Overrides the crank's angle and delta. Omit duration_ms and it stays where you put it, the way a real crank does - reset_input is what hands it back. Optionally overrides the docked state too: crank_dock takes \"docked\" or \"undocked\", and omitting it leaves the dock reading whatever the game would really see.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "crank_angle": {
+          "type": "number"
+        },
+        "crank_delta": {
+          "type": "number"
+        },
+        "crank_dock": {
+          "description": "one of unchanged, docked, undocked; omit to leave the dock state as the game sees it",
+          "enum": [
+            "unchanged",
+            "docked",
+            "undocked"
+          ],
+          "type": "string"
+        },
+        "duration_ms": {
+          "description": "how long to hold the crank, in ms. Omit to leave it there.",
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "set_crank",
+    "outputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "description": "Wires the MCP harness into a game project: copies mcp_harness.lua (Lua) or mcp_harness.{h,c} (C) in and patches main.lua/CMakeLists.txt/the eventHandler file to call it. Auto-detects Lua, C, or hybrid C+Lua (hybrid only needs the Lua harness - a real Lua VM still drives the update loop) unless language is given explicitly. Safe to re-run. For C, some steps may not be confidently automatable (e.g. finding the right PlaydateAPI pointer inside your update callback) - check manual_steps in the response for anything left to do by hand.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "description": "one of lua, c, hybrid; omit to auto-detect",
+          "enum": [
+            "lua",
+            "c",
+            "hybrid"
+          ],
+          "type": "string"
+        },
+        "source_dir": {
+          "description": "path to the game's source directory",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_dir"
+      ],
+      "type": "object"
+    },
+    "name": "setup",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "files_copied": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "files_patched": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "changed"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "language": {
+          "type": "string"
+        },
+        "manual_steps": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "required": [
+        "language"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "description": "Stops the running simulator.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "stop_simulator",
+    "outputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "description": "Reverses setup: removes the copied harness file(s) and strips everything setup patched into main.lua/CMakeLists.txt/the eventHandler file.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "language": {
+          "description": "one of lua, c, hybrid; omit to auto-detect",
+          "enum": [
+            "lua",
+            "c",
+            "hybrid"
+          ],
+          "type": "string"
+        },
+        "source_dir": {
+          "description": "path to the game's source directory",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_dir"
+      ],
+      "type": "object"
+    },
+    "name": "teardown",
+    "outputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "files_patched": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "changed": {
+                "type": "boolean"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "changed"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "files_removed": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "Writes a JSON value to a save file in the game's data directory.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "description": "JSON value to write"
+        },
+        "filename": {
+          "description": "file to write, relative to the game's data directory",
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "data"
+      ],
+      "type": "object"
+    },
+    "name": "write_save_data",
+    "outputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  }
+]

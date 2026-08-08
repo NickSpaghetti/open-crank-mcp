@@ -3,9 +3,8 @@
 One long-lived container that an agent drives and you watch at the same time.
 
 This is the `shared` compose profile. It is optional. Container mode and native
-mode both work without it. See the readme's
-[container-mode.md](container-mode.md) for the modes
-themselves.
+mode both work without it. See [container-mode.md](container-mode.md) for the
+modes themselves.
 
 Every profile above and the "Connecting" command above it are two
 independent things. `docker compose run` (what an MCP client uses) always
@@ -27,9 +26,11 @@ without it, rather than silently mounting this repo as your game.
 Unlike every other `up*` target, this one runs detached. It keeps running
 in the background instead of occupying your terminal. Open
 `http://localhost:6080/` for video and audio in one tab, with the same
-Simulator defaults and the same `127.0.0.1` port binding described under
-`up-vnc` above. The binding matters more here. This container is detached,
-so anything published stays reachable in the background.
+[Simulator defaults](container-mode.md#simulator-defaults) and the same
+`127.0.0.1` port binding as
+[`make up-vnc`](container-mode.md#any-os-universal-fallback-vnc--audio-stream).
+The binding matters more here. This container is detached, so anything published
+stays reachable in the background.
 
 Then point your MCP client at the *same* container instead of spinning up
 a new one. That means `docker compose exec` instead of `docker compose

@@ -9,6 +9,25 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+// The four input tools and how they divide up one wire command each.
+//
+// Both harnesses implement a single rule - a non-positive duration_ms means no
+// expiry - for presses, releases and crank commands alike. Which tools actually send
+// a non-positive value is policy, and it lives here, because this is the layer that
+// knows what an agent meant. The split matters enough to state: the harnesses are the
+// mechanism, this file is the policy, and neither should be read as describing the
+// other.
+//
+//	press_button    a tap; substitutes defaultPressMs when the caller omits one
+//	hold_button     held until released; sends the sentinel, and takes no duration
+//	release_button  lets go; substitutes defaultPressMs, then expires to passthrough
+//	reset_input     drops every override at once, buttons and crank
+//
+// press_button keeps its tap default rather than becoming a hold. Omitting the
+// duration is the common case for an agent, and a tap is the safe reading of it - the
+// alternative leaves a button stuck down because a caller left a field out. Holding
+// is the deliberate act, so it gets its own verb.
+
 type PressButtonInput struct {
 	Button string `json:"button" jsonschema:"one of a, b, up, down, left, right"`
 	// DurationMs is how long to hold the button. Omit it for a tap; see
@@ -16,48 +35,122 @@ type PressButtonInput struct {
 	DurationMs int `json:"duration_ms,omitempty" jsonschema:"how long to hold the button, in ms. Omit for a short tap."`
 }
 
-// defaultPressMs is how long an omitted duration holds a button for.
+// defaultPressMs is how long an omitted duration holds a button for, in press_button
+// and release_button alike.
 //
-// It cannot be zero. The harness computes edges once per frame and deliberately
-// defers a fresh command's edge to the *next* frame, so an override that expires
-// before that frame arrives produces no press at all - press_button would report
-// success and the game would never see it. Games run at around 30fps, so a frame
-// is about 33ms; 100ms is three of them, enough that jitter in the round trip
-// cannot swallow the press.
+// It cannot be zero, and that is not the same statement it was: a zero now means "no
+// expiry" rather than "expire immediately", so sending one would hold the button
+// forever instead of doing nothing. Either way it is not a tap.
 //
-// Buttons get a default rather than the crank's hold-forever treatment because
-// nothing exposes a release: a button held indefinitely could never be let go.
+// The lower bound is a frame. The harnesses compute edges once per frame and
+// deliberately defer a fresh command's edge to the *next* frame, so an override that
+// expires before that frame arrives produces no press at all - the tool would report
+// success and the game would never see it. Games run at around 30fps, so a frame is
+// about 33ms; 100ms is three of them, enough that jitter in the round trip cannot
+// swallow the press.
 const defaultPressMs = 100
 
 type PressButtonOutput struct{}
 
-// pressButton validates the button name here rather than trusting the harness to
-// complain, because neither harness does: an unrecognised name maps to no button
-// and is still answered with status "ok", so press_button("A") reported success
-// and did nothing. Confirmed against a real game for "x", "", "A" and "start".
-// This is the only one of the three layers that can hand a useful message back to
-// whoever asked.
-func (s *Server) pressButton(_ context.Context, _ *mcp.CallToolRequest, in PressButtonInput) (*mcp.CallToolResult, PressButtonOutput, error) {
-	if !harness.ValidButton(in.Button) {
+// buttonCommand validates a button name and sends cmdType for it. Returns a
+// model-visible result, or nil when the round trip succeeded.
+//
+// The name is validated here rather than by trusting the harness to complain, because
+// neither harness does: an unrecognised name maps to no button and is still answered
+// with status "ok", so press_button("A") reported success and did nothing. Confirmed
+// against a real game for "x", "", "A" and "start". This is the only one of the three
+// layers that can hand a useful message back to whoever asked - which is also why the
+// three button tools share this rather than each writing their own message.
+func (s *Server) buttonCommand(cmdType, button string, durationMs int) (*mcp.CallToolResult, error) {
+	if !harness.ValidButton(button) {
 		return errorResult(fmt.Sprintf("unknown button %q, want one of %s",
-			in.Button, strings.Join(harness.ButtonNames, ", "))), PressButtonOutput{}, nil
+			button, strings.Join(harness.ButtonNames, ", "))), nil
 	}
 
+	_, err := s.roundTrip(harness.Command{
+		Type:       cmdType,
+		Button:     button,
+		DurationMs: durationMs,
+	})
+	if err != nil {
+		return handleRoundTripErr(err)
+	}
+	return nil, nil
+}
+
+func (s *Server) pressButton(_ context.Context, _ *mcp.CallToolRequest, in PressButtonInput) (*mcp.CallToolResult, PressButtonOutput, error) {
 	duration := in.DurationMs
 	if duration <= 0 {
 		duration = defaultPressMs
 	}
+	result, err := s.buttonCommand(harness.CmdPress, in.Button, duration)
+	return result, PressButtonOutput{}, err
+}
 
-	_, err := s.roundTrip(harness.Command{
-		Type:       harness.CmdPress,
-		Button:     in.Button,
-		DurationMs: duration,
-	})
+// HoldButtonInput has no duration field at all, rather than an ignored one. The whole
+// tool is "hold this until I say otherwise", and a duration on it would mean
+// press_button - offering one would be inviting a caller to write a hold that is
+// secretly a tap.
+type HoldButtonInput struct {
+	Button string `json:"button" jsonschema:"one of a, b, up, down, left, right"`
+}
+
+type HoldButtonOutput struct{}
+
+// holdButton sends a press with duration 0, which both harnesses read as no expiry.
+// The zero has to reach them intact, so nothing here substitutes a default - the same
+// reason set_crank does not, and the reason harness.Command has no omitempty.
+func (s *Server) holdButton(_ context.Context, _ *mcp.CallToolRequest, in HoldButtonInput) (*mcp.CallToolResult, HoldButtonOutput, error) {
+	result, err := s.buttonCommand(harness.CmdPress, in.Button, 0)
+	return result, HoldButtonOutput{}, err
+}
+
+type ReleaseButtonInput struct {
+	Button string `json:"button" jsonschema:"one of a, b, up, down, left, right"`
+	// DurationMs is how long to force the button up before handing it back to the
+	// player. Omit it; the default is right in almost every case.
+	DurationMs int `json:"duration_ms,omitempty" jsonschema:"how long to force the button up, in ms. Omit for the default."`
+}
+
+type ReleaseButtonOutput struct{}
+
+// releaseButton substitutes a real duration when the caller omits one, rather than
+// sending the no-expiry sentinel like holdButton does. The harnesses would accept the
+// sentinel - a release forces not-pressed rather than merely clearing the override, so
+// that a human driving real input at the same time cannot leak a press through - and
+// forcing it for ever would leave the button permanently deaf to the player, with no
+// way back except another press. Forcing it up for three frames and then expiring to
+// passthrough is what "let go" means.
+//
+// reset_input is the tool for handing everything back at once, and the only one that
+// can do it for a held crank.
+func (s *Server) releaseButton(_ context.Context, _ *mcp.CallToolRequest, in ReleaseButtonInput) (*mcp.CallToolResult, ReleaseButtonOutput, error) {
+	duration := in.DurationMs
+	if duration <= 0 {
+		duration = defaultPressMs
+	}
+	result, err := s.buttonCommand(harness.CmdRelease, in.Button, duration)
+	return result, ReleaseButtonOutput{}, err
+}
+
+type ResetInputInput struct{}
+
+type ResetInputOutput struct{}
+
+// resetInput drops every override in one round trip.
+//
+// It exists for the crank, which has no release: set_crank always activates the
+// override and a duration-less one never expires, so before this there was no call
+// that could give a game back its real crank reading. Buttons come along because the
+// same command clears them and "hand input back to the player" is one action, not
+// seven.
+func (s *Server) resetInput(_ context.Context, _ *mcp.CallToolRequest, _ ResetInputInput) (*mcp.CallToolResult, ResetInputOutput, error) {
+	_, err := s.roundTrip(harness.Command{Type: harness.CmdReset})
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
-		return result, PressButtonOutput{}, wrapErr
+		return result, ResetInputOutput{}, wrapErr
 	}
-	return nil, PressButtonOutput{}, nil
+	return nil, ResetInputOutput{}, nil
 }
 
 // SetCrankInput keeps omitempty where harness.Command deliberately dropped it,

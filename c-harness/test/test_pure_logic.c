@@ -36,6 +36,20 @@ static void test_parse_crank(void)
     assert(cmd.crank_docked == 1);
 }
 
+/* reset carries no fields at all, so the only thing to get wrong is the dispatch
+   string - and getting it wrong is silent, because an unrecognised type is answered
+   with an error the caller sees as "unknown command type" rather than a stuck
+   override. */
+static void test_parse_reset(void)
+{
+    const char *json = "{\"id\":\"z\",\"type\":\"reset\"}";
+    McpCommand cmd;
+    int ok = mcp_parse_command(json, strlen(json), &cmd);
+    assert(ok == 1);
+    assert(cmd.type == MCP_CMD_RESET);
+    assert(strcmp(cmd.id, "z") == 0);
+}
+
 static void test_parse_missing_type_fails(void)
 {
     const char *json = "{\"id\":\"x\"}";
@@ -424,21 +438,115 @@ static void test_override_crank_held_is_replaceable(void)
     assert(mcp_override_get_crank_angle(&ov, 999.0f) == 999.0f);
 }
 
-/* Buttons deliberately do not get the crank's treatment. Nothing exposes a
-   release, so a button held with no expiry could never be let go - the Go layer
-   substitutes a real duration instead. This asserts the asymmetry is on purpose,
-   so that anyone copying the crank change down to buttons has to argue with a
-   test first. */
-static void test_override_press_zero_duration_still_expires(void)
+/* Buttons take the crank's no-expiry rule, which is a reversal: this test used to
+   assert the opposite, and the asymmetry was on purpose because nothing exposed a
+   release. release_button and reset_input do now, so a held button can be let go.
+
+   The clock is walked absurdly far past the press, not just one tick, so this cannot
+   pass against a merely long deadline - same shape as
+   test_override_crank_negative_duration_holds below. */
+static void test_override_press_zero_duration_holds(void)
 {
     McpOverrideState ov;
     mcp_override_init(&ov);
     mcp_override_apply_press(&ov, kButtonA, 0, 0);
 
-    mcp_override_expire(&ov, 1);
     PDButtons cur, pushed, released;
+    mcp_override_expire(&ov, 1);
     mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((cur & kButtonA) != 0);
+
+    mcp_override_expire(&ov, 100000000L);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((cur & kButtonA) != 0);
+}
+
+/* A negative duration is the same request as zero, for the same reason it is for the
+   crank: nothing in Go sends one, but the harness parses whatever is on disk, and a
+   naive now_ms + duration_ms would expire in the past. */
+static void test_override_press_negative_duration_holds(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_press(&ov, kButtonA, -50, 5000);
+
+    PDButtons cur, pushed, released;
+    mcp_override_expire(&ov, 5001);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((cur & kButtonA) != 0);
+}
+
+/* A held button is not stuck: a release with a real duration ends it, and that
+   release then expires back to passthrough on its own. This is the whole
+   hold_button -> release_button sequence, which is what makes holding safe to
+   expose at all. */
+static void test_override_held_press_is_releasable(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    PDButtons cur, pushed, released;
+    PDButtons real_current = kButtonA; /* the player is really holding it too */
+
+    mcp_override_apply_press(&ov, kButtonA, 0, 0);
+    mcp_override_expire(&ov, 100000L);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((cur & kButtonA) != 0);
+
+    mcp_override_apply_release(&ov, kButtonA, 100, 100000L);
+    mcp_override_get_button_state(&ov, real_current, 0, 0, &cur, &pushed, &released);
+    assert((cur & kButtonA) == 0); /* forced up, even against real input */
+
+    mcp_override_expire(&ov, 100200L);
+    mcp_override_get_button_state(&ov, real_current, 0, 0, &cur, &pushed, &released);
+    assert((cur & kButtonA) != 0); /* and back to what the player is doing */
+}
+
+/* Reset drops every override at once - the point being the crank, which has no
+   release of its own, so before mcp_override_reset a held crank could not be given
+   back to the game at all. */
+static void test_override_reset_clears_buttons_and_crank(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    mcp_override_apply_press(&ov, kButtonA, 0, 0);
+    mcp_override_apply_release(&ov, kButtonB, 0, 0);
+    mcp_override_apply_crank(&ov, 45.0f, 2.0f, 1, 0, 0, 0);
+
+    mcp_override_reset(&ov);
+
+    PDButtons cur, pushed, released;
+    PDButtons real_current = kButtonB;
+    mcp_override_get_button_state(&ov, real_current, 0, 0, &cur, &pushed, &released);
+    assert((cur & kButtonA) == 0); /* held press gone */
+    assert((cur & kButtonB) != 0); /* forced release gone, real bit passes through */
+    assert(mcp_override_get_crank_angle(&ov, 999.0f) == 999.0f);
+    assert(mcp_override_get_crank_change(&ov, 7.0f) == 7.0f);
+    assert(mcp_override_get_crank_docked(&ov, 1) == 1);
+}
+
+/* The reason mcp_override_reset is not mcp_override_init. A memset would also clear
+   last_effective_pressed/override_was_active_last_frame, and a game holding A would
+   see it stop being pressed with no released edge and no ButtonUp callback. Reverting
+   mcp_override_reset to a memset makes this fail. */
+static void test_override_reset_still_produces_released_edge(void)
+{
+    McpOverrideState ov;
+    mcp_override_init(&ov);
+    PDButtons cur, pushed, released;
+
+    mcp_override_apply_press(&ov, kButtonA, 0, 0);
+    mcp_override_update_edges(&ov, 0); /* pushed edge consumed here */
+
+    mcp_override_reset(&ov);
+    mcp_override_update_edges(&ov, 0);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((released & kButtonA) != 0);
     assert((cur & kButtonA) == 0);
+
+    /* And not repeated on the following tick. */
+    mcp_override_update_edges(&ov, 0);
+    mcp_override_get_button_state(&ov, 0, 0, 0, &cur, &pushed, &released);
+    assert((released & kButtonA) == 0);
 }
 
 /* crank_dock parsing, all three values plus the absent case. The wire carries a
@@ -500,6 +608,7 @@ int main(void)
     test_parse_crank();
     test_parse_crank_dock_modes();
     test_parse_full_command_shape();
+    test_parse_reset();
     test_parse_missing_type_fails();
     test_parse_unknown_type_fails();
     test_parse_empty_fails();
@@ -530,7 +639,11 @@ int main(void)
     test_override_crank_zero_duration_holds();
     test_override_crank_negative_duration_holds();
     test_override_crank_held_is_replaceable();
-    test_override_press_zero_duration_still_expires();
+    test_override_press_zero_duration_holds();
+    test_override_press_negative_duration_holds();
+    test_override_held_press_is_releasable();
+    test_override_reset_clears_buttons_and_crank();
+    test_override_reset_still_produces_released_edge();
 
     printf("pure logic: all tests passed\n");
     return 0;

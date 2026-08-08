@@ -54,6 +54,11 @@ go.work.sum
 /c-harness/test/fixture-game/src/mcp_harness.h
 /lua/test-fixture/Source/mcp_harness.lua
 
+# Where `make mcp-auto-test` leaves specmatic's log and JSON report. The path is
+# specmatic's own default inside its container (build/reports/specmatic), kept rather
+# than relocated so anyone following their docs finds the report where they expect.
+/build/
+
 # Editor/IDE
 # .vscode/
 

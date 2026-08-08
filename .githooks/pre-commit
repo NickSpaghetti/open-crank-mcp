@@ -41,11 +41,20 @@ if [ -z "$staged" ]; then
   exit 0
 fi
 
-# Markdown-only commits run nothing. No suite here reads a .md file, and without
-# this the hook is annoying enough on a typo fix to get bypassed out of habit - a
-# hook that is always bypassed being worse than no hook.
+# Markdown-only commits run the doc link check and nothing else. It is a grep over
+# seventeen files, so it costs nothing on a typo fix, and the hook stays cheap enough not
+# to get bypassed out of habit - a hook that is always bypassed being worse than no hook.
+#
+# This used to run *nothing at all* for a Markdown-only commit, on the grounds that no
+# suite read a .md file. That was true and it was the gap the README split fell into:
+# guides were extracted, several cross-references were left pointing at nothing, and no
+# check anywhere had an opinion about it.
 if ! printf '%s\n' "$staged" | grep -qv '\.md$'; then
-  echo "pre-commit: only Markdown staged, nothing to run"
+  echo "pre-commit: only Markdown staged"
+  if ! make check-doc-links; then
+    echo "pre-commit: check-doc-links failed" >&2
+    exit 1
+  fi
   exit 0
 fi
 
@@ -83,6 +92,11 @@ run() {
 # Cheapest first, so an obvious break fails in seconds rather than after a
 # container boot. no-regex leads: it is a git ls-files and a grep, and a rule
 # with no allowlist is worth enforcing before the commit rather than after.
+#
+# check-doc-links is unconditional rather than gated on a want_* flag: a link breaks when
+# a *target* moves, and a commit that renames a heading or deletes a file need not touch
+# any .md itself.
+run check-doc-links
 $want_go     && run no-regex
 $want_go     && run go-test
 $want_shared && run test-shared-unit

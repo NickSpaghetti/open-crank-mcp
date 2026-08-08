@@ -78,8 +78,12 @@ type Command struct {
 
 	// Button is one of the six names in ButtonNames, for press and release, and
 	// "" for every other command type - which both harnesses map to no button.
-	Button     string `json:"button"`
-	DurationMs int    `json:"duration_ms"`
+	Button string `json:"button"`
+	// DurationMs is how long the override lasts. Non-positive means no expiry: hold
+	// it until something replaces it. That rule is uniform across presses, releases
+	// and crank commands in both harnesses; which tools actually send a non-positive
+	// value is a separate decision that lives in internal/tools, and they differ.
+	DurationMs int `json:"duration_ms"`
 
 	CrankAngle float64 `json:"crank_angle"`
 	CrankDelta float64 `json:"crank_delta"`
@@ -141,6 +145,14 @@ const (
 	CmdState      = "state"
 	CmdScreenshot = "screenshot"
 	CmdEntities   = "entities"
+	// CmdReset drops every override at once, buttons and crank, handing input back
+	// to the player. It carries no fields.
+	//
+	// It exists because a crank override has no release. CmdRelease answers a held
+	// button, but set_crank always activates the crank override and a duration-less
+	// one never expires, so before this there was no call in the protocol that could
+	// return the real crank reading to a game.
+	CmdReset = "reset"
 )
 
 // ButtonNames are the only button names either harness recognises.

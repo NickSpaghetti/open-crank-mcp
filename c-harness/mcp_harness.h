@@ -31,7 +31,8 @@ typedef enum {
     MCP_CMD_CRANK,
     MCP_CMD_STATE,
     MCP_CMD_PING,
-    MCP_CMD_ENTITIES
+    MCP_CMD_ENTITIES,
+    MCP_CMD_RESET
 } McpCommandType;
 
 typedef struct {
@@ -70,7 +71,13 @@ typedef struct {
 } McpResponse;
 
 /* Sentinel expiry meaning "never". Negative so it can never collide with a real
-   deadline, which is always now_ms + a duration and therefore non-negative. */
+   deadline, which is always now_ms + a duration and therefore non-negative.
+
+   Applies to buttons and the crank alike: a non-positive duration on any override
+   means "hold it until something replaces it". The two are not symmetric at the
+   *tool* layer - press_button substitutes a real duration and hold_button does not -
+   but that is policy, and it lives in Go. This file only implements the mechanism,
+   which is one rule. */
 #define MCP_NO_EXPIRY (-1L)
 
 typedef struct {
@@ -104,6 +111,17 @@ int mcp_format_response(const McpResponse *r, char *buf, size_t buflen);
 int mcp_json_escape_string(const char *in, char *out, size_t out_len);
 
 void mcp_override_init(McpOverrideState *ov);
+
+/* Drops every override - all six buttons and the crank - so the game reads real
+   input again. The only way back to passthrough for a crank held with no expiry.
+
+   Deliberately not mcp_override_init: that memsets, which would also clear
+   last_effective_pressed and override_was_active_last_frame, and a button that was
+   being held would then go from pressed to not-pressed with no released edge for the
+   game to see. Clearing only the override flags leaves the edge tracking intact, so
+   the next mcp_override_update_edges synthesizes the up edges by itself - the reset
+   looks to a game exactly like letting go. */
+void mcp_override_reset(McpOverrideState *ov);
 void mcp_override_apply_press(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms);
 void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms);
 void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
