@@ -1,6 +1,6 @@
-PLAYDATE_SDK_VERSION ?= 3.1.1
+PLAYDATE_SDK_VERSION ?= 3.1.2
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit plugin-check plugin-schema-check shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mcp-schema mcp-schema-check mcp-auto-test check-doc-links no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit plugin-check plugin-schema-check sdk-pin-check shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mcp-schema mcp-schema-check mcp-auto-test check-doc-links no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -102,6 +102,11 @@ plugin-check:
 # Weekly, not per-PR - see the script for why.
 plugin-schema-check:
 	bash scripts/plugin-schema-check.sh
+
+# Notices when PLAYDATE_SDK_VERSION falls behind what Panic ships. Weekly, not
+# per-PR: see the header of the script.
+sdk-pin-check:
+	bash scripts/sdk-pin-check.sh
 
 # Boots the shared container against the in-repo Lua fixture and asserts the
 # workspace invariants: pages served, window manager configuration, where the

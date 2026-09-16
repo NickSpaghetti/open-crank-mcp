@@ -17,7 +17,7 @@ jobs:
           context: .
           push: false
           build-args: |
-            PLAYDATE_SDK_VERSION=3.1.1
+            PLAYDATE_SDK_VERSION=3.1.2
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -111,7 +111,7 @@ jobs:
           mkdir -p "$HOME/PlaydateSDK"
           tar -xzf /tmp/playdate-sdk.tar.gz --strip-components=1 -C "$HOME/PlaydateSDK"
         env:
-          PLAYDATE_SDK_VERSION: '3.1.1'
+          PLAYDATE_SDK_VERSION: '3.1.2'
 
       # Fails loudly if detection found nothing, and prints which source won.
       # First because everything after it depends on the answer, and because a
@@ -212,7 +212,7 @@ jobs:
           unzip -q /tmp/sdk.zip -d /tmp/sdk
           sudo installer -pkg /tmp/sdk/PlaydateSDK.pkg -target /
         env:
-          PLAYDATE_SDK_VERSION: '3.1.1'
+          PLAYDATE_SDK_VERSION: '3.1.2'
 
       # Fails loudly if detection found nothing, and prints which of the three
       # sources won. A detection regression is the failure this job most needs

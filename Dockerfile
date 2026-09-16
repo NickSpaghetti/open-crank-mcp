@@ -1,6 +1,6 @@
 FROM ubuntu:24.04 AS c-harness-test
 
-ARG PLAYDATE_SDK_VERSION=3.1.1
+ARG PLAYDATE_SDK_VERSION=3.1.2
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,7 +25,7 @@ COPY scripts/run-c-harness-tests.sh ./scripts/run-c-harness-tests.sh
 
 FROM ubuntu:24.04 AS simulator
 
-ARG PLAYDATE_SDK_VERSION=3.1.1
+ARG PLAYDATE_SDK_VERSION=3.1.2
 ARG GO_VERSION=1.26.5
 ENV DEBIAN_FRONTEND=noninteractive
 

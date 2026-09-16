@@ -17,31 +17,12 @@
 # The `shared` profile was called `byos` ("bring your own simulator") until
 # Checkpoint 6. It runs its own Simulator and shares it, so the name described
 # something it never did.
-# The Simulator asks panic.com for announcements on startup and shows unseen ones
-# as a modal over its own window. When SDK 3.1.2 shipped, that modal covered the
-# volume slider in every container pinned to 3.1.1 and the shared profile's pixel
-# scan read the dialog instead of the trough. Nothing here changed. Panic shipped
-# a release.
-#
-# Pointing the host at loopback makes the fetch fail, which the Simulator logs and
-# ignores. Ticking "Don't show this update again" writes [SoapBox] displayedID
-# into the INI instead, but that only silences the announcement you already know
-# about.
-#
-# extra_hosts because Docker rewrites /etc/hosts at container start, so this
-# cannot be baked into the image.
-x-no-soapbox: &no-soapbox
-  extra_hosts:
-    - "panic.com:127.0.0.1"
-    - "www.panic.com:127.0.0.1"
-
 services:
   simulator:
-    <<: *no-soapbox
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     environment:
       - DISPLAY=:99
     command: ["bash", "-c", "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && exec bash"]
@@ -49,11 +30,10 @@ services:
     tty: true
 
   simulator-visual:
-    <<: *no-soapbox
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["visual"]
     environment:
       - DISPLAY=${DISPLAY}
@@ -72,11 +52,10 @@ services:
   # WSLg exports DISPLAY/WAYLAND_DISPLAY/PULSE_SERVER there already. Untested
   # against a real Windows machine, see README.
   simulator-visual-wsl:
-    <<: *no-soapbox
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["wsl"]
     environment:
       - DISPLAY=${DISPLAY}
@@ -94,11 +73,10 @@ services:
   # on Linux, Windows, and macOS through Docker Desktop's normal port
   # publishing. Video over noVNC in a browser, audio as an MP3 stream.
   simulator-vnc:
-    <<: *no-soapbox
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["vnc"]
     command: ["bash", "/workspace/scripts/run-vnc.sh"]
     # Loopback by default. x11vnc runs with -nopw -shared (see run-vnc.sh),
@@ -128,11 +106,10 @@ services:
   # never the same container/display/filesystem as whatever `up-vnc`
   # separately started.
   simulator-shared:
-    <<: *no-soapbox
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["shared"]
     environment:
       # Set at the container level, not just inside run-vnc.sh's own
