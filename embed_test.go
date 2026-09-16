@@ -2,6 +2,7 @@ package opencrank
 
 import (
 	"io/fs"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -34,9 +35,29 @@ func TestHarnessFSContainsRealHarnesses(t *testing.T) {
 	}
 }
 
+// embeddedFiles is every path the binary is allowed to carry. Exhaustive, and
+// the exhaustiveness is the point - see TestHarnessFSCarriesNothingExtra. Sorted
+// by the test rather than by hand, so an entry added in the wrong place fails
+// with a useful diff instead of two identical-looking lists in a different order.
+var embeddedFiles = []string{
+	"c-harness/mcp_harness.c",
+	"c-harness/mcp_harness.h",
+	"lua/mcp_harness.lua",
+}
+
 // The embed patterns name three files individually rather than globbing
 // c-harness/*, so that the C test suite and the fixture game stay out of the
 // binary. This is what notices if someone widens them to a glob.
+//
+// It compares the exact path set rather than counting, and that distinction is
+// load-bearing rather than fastidious. This test is half of the licence guard:
+// the Playdate SDK License bans redistributing the SDK, and published release
+// binaries are licence-clean only because everything go:embed carries is this
+// repo's own MIT code. A count of three passes just as happily if one harness
+// source is swapped for an SDK header - same number of files, different
+// contents, and a published artifact that redistributes Panic's work. The other
+// half of the guard is in .github/workflows/release.yml, which asserts the
+// uploaded artifact list; this half asserts what is inside the artifact.
 func TestHarnessFSCarriesNothingExtra(t *testing.T) {
 	var got []string
 	err := fs.WalkDir(HarnessFS, ".", func(p string, d fs.DirEntry, err error) error {
@@ -51,7 +72,16 @@ func TestHarnessFSCarriesNothingExtra(t *testing.T) {
 	if err != nil {
 		t.Fatalf("walking HarnessFS: %v", err)
 	}
-	if len(got) != 3 {
-		t.Errorf("HarnessFS carries %d files, want exactly 3: %v", len(got), got)
+
+	want := slices.Clone(embeddedFiles)
+	slices.Sort(want)
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
+		t.Errorf("HarnessFS carries:\n  %s\nwant exactly:\n  %s\n\n"+
+			"Every embedded file ships inside published release binaries. Anything here "+
+			"that is not this repo's own code would redistribute it - see the licence "+
+			"guard in .github/workflows/release.yml and the SDK-redistribution reasoning "+
+			"in README.md.",
+			strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
 }

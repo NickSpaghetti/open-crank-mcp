@@ -436,7 +436,7 @@ Re-measuring this properly on macOS would need the high-volume variant - print
 once per frame for several seconds, then let the Simulator exit rather than
 killing it. Nothing depends on the answer, which is why it has not been chased.
 
-Windows is unchecked and will stay that way. Windows-native is unsupported, see
+Windows is unchecked so far. Windows-native is not supported yet, see
 `docs/ROADMAP.md`.
 
 ### The fix: `get_game_logs` + `mcp.run()`

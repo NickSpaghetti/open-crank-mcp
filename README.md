@@ -64,9 +64,17 @@ the other.
 Checkpoints 1-11 done. Both modes work: the harnesses, the Go server, all the MCP
 tools, the container profiles, and native SDK detection with per-OS paths. Native
 mode is verified on Linux. macOS path values come from a probe on a real install
-rather than from running there; Windows-native is not supported, see below. See
-[`docs/ROADMAP.md`](docs/ROADMAP.md) for exactly what is built, what is verified
-and how, and what is left.
+rather than from running there; Windows-native is not supported, see below.
+
+The project has a version as of `0.1.0`, held in `plugin/plugin.json`, and a
+release workflow that publishes digest-pinned binaries for `linux/amd64`,
+`darwin/amd64` and `darwin/arm64` when a `v*` tag is pushed. Until a tag exists
+there is nothing to download and building from source is the only route, which is
+what the rest of this README describes. Packaging the server as an editor plugin
+is the work that builds on it, and is not landed yet.
+
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for exactly what is built, what is
+verified and how, and what is left.
 
 ## Requirements
 
@@ -88,10 +96,11 @@ and how, and what is left.
   because that job would fail otherwise. On Arch that is one package,
   `webkit2gtk-4.1` from `extra`.
 
-Windows-native is not supported: WSL2 covers Windows through container mode, and
-nobody here can run or debug a native Windows path. Its layout values in
+Windows-native is not supported yet: WSL2 covers Windows through container mode,
+so verifying the native path has not been a priority. Its layout values in
 `internal/sdk` are correct and covered by tests, so the code compiles and the
-logic is exercised on every platform. It is simply not verified by running.
+logic is exercised on every platform. It is simply not verified by running, and
+promoting it is additive when someone gets to it.
 
 ## Building
 
@@ -284,10 +293,11 @@ needs Docker. It skips `shared-check` and `test-shared-types` only because
 
 ### Flags
 
-One, and you almost certainly do not want it.
+Two, and you almost certainly do not want the second one.
 
 | Flag | Default | What it does |
 |---|---|---|
+| `-version` | off | Prints the version and exits. A binary built by `make go-build` reports `dev`, which is true of it — only a release build is stamped, from the version in `plugin/plugin.json`. Worth asking first when a release binary behaves unexpectedly, since a cached one can outlive the version that fetched it. |
 | `-http <addr>` | unset (stdio) | Serves MCP over Streamable HTTP on a loopback address instead of stdio. It exists because contract-testing tools speak HTTP and not stdio — Specmatic's MCP auto-test accepts only `STREAMABLE_HTTP`. MCP clients use stdio; leave this alone unless you are running `make mcp-auto-test` or something like it. Loopback addresses only, and that is enforced rather than advised: this server builds code and launches processes on request and has no authentication, so `0.0.0.0` is refused with a message saying why. |
 
 ### Environment variables

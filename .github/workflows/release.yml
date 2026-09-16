@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # creating the release and uploading its assets
+  id-token: write # Sigstore OIDC, for the build provenance attestation
+  attestations: write # recording that attestation against this repository
+
+jobs:
+  # The published platforms, and the only place they are listed.
+  #
+  # Derived from the SDKs Panic ships rather than from what Go can cross-compile: a
+  # server binary is useless where there is no Simulator to drive. Panic offers macOS (a
+  # universal .zip), Windows (.exe) and Linux (.tar.gz, x86-64 only).
+  #
+  # Two exclusions that look alike and are not:
+  #   - No linux/arm64, because Panic ships no ARM64 Linux SDK. Not our choice.
+  #   - No windows/amd64, even though Panic does ship a Windows SDK. That one is ours:
+  #     the native Windows path is not verified yet (docs/ROADMAP.md Checkpoint 8) and
+  #     WSL2 serves those users through container mode in the meantime.
+  #     `make go-build-cross` keeps it compiling; it just does not get an asset yet.
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # The tag and the manifest must agree, and the manifest wins the argument: it is
+      # what the plugin's launcher reads to decide which asset to fetch, so a release
+      # tagged v0.2.0 carrying a manifest that says 0.1.0 would publish assets named
+      # after a version no launcher will ever ask for.
+      #
+      # Checked in every matrix job rather than once, because the version is what names
+      # the file each job produces.
+      - name: the tag matches plugin/plugin.json
+        id: version
+        run: |
+          set -uo pipefail
+          version=$(jq -er .version plugin/plugin.json) || exit 1
+          tag_version=${GITHUB_REF_NAME#v}
+          if [ "$tag_version" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match plugin/plugin.json version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # No leading "v" in the asset name: the tag is v0.1.0 and the asset is 0.1.0.
+      - name: build
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -uo pipefail
+          name="open-crank-mcp_${VERSION}_${GOOS}_${GOARCH}"
+          go build -trimpath -buildvcs=false \
+            -ldflags "-s -w -X main.version=${VERSION}" \
+            -o "dist/${name}" ./cmd/open-crank-mcp || exit 1
+          echo "built ${name}"
+
+      # Licence guard, half one: what goes *inside* the artifact.
+      #
+      # The Playdate SDK License bans redistributing the SDK. These binaries are
+      # licence-clean only because everything go:embed carries is this repo's own MIT
+      # Lua and C harness source. The test asserts the exact embedded path set rather
+      # than a count, so swapping a harness file for an SDK header fails here.
+      - name: nothing but our own code is embedded
+        run: go test -count=1 -run 'TestHarnessFS' .
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/open-crank-mcp_*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Licence guard, half two: what the release is made *of*.
+      #
+      # Only the build jobs' uploads land here, and each uploads exactly the one binary
+      # it compiled. There is no step between building and publishing that could
+      # introduce an SDK tarball, an extracted C_API or a saved Docker image, so the
+      # payload is constrained by construction rather than by an allow-list checking
+      # afterwards.
+      #
+      # Scope, stated honestly: this covers the release. It is not a claim that SDK
+      # bytes never leave a developer's machine - ci.yml's docker-build uses
+      # `cache-to: type=gha,mode=max`, so image layers containing the SDK already
+      # persist in the repo-scoped Actions cache. That is not redistribution, but a
+      # comment implying otherwise would be false. What is absolute is that no image is
+      # ever pushed: see README.md, and note that this workflow builds none.
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          pattern: binary-*
+          merge-multiple: true
+
+      # sha256sum's own format, so a user can check a download with `sha256sum -c` on
+      # Linux or `shasum -a 256 -c` on macOS without parsing anything.
+      #
+      # This proves a download arrived intact. It is not evidence of origin - it travels
+      # the same channel as the binaries it describes. That claim is the attestation.
+      - name: checksums
+        run: |
+          set -uo pipefail
+          cd dist || exit 1
+          sha256sum -- open-crank-mcp_* > checksums.txt || exit 1
+          cat checksums.txt
+
+      # Keyless Sigstore, signed by this workflow in this repository, so there is no key
+      # to hold or rotate. A user verifies with:
+      #
+      #   gh attestation verify --owner NickSpaghetti <file>
+      #
+      # Subjects come from the checksums file rather than a glob, which is what
+      # goreleaser recommends: the signature then covers exactly the name-and-digest
+      # list users check their downloads against, instead of being a second,
+      # independently computed claim about the same bytes. Only the binaries are listed
+      # in it, so LICENSE and checksums.txt are not subjects - neither is executed.
+      - name: attest the binaries
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: dist/checksums.txt
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp LICENSE dist/
+          ls -l dist/
+          gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag

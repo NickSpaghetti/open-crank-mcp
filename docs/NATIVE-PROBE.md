@@ -16,13 +16,26 @@ buffered one, and its own empty capture is better explained by buffering. See th
 Status section. It blocks nothing, because the answer either way leaves
 `get_game_logs` in place.
 
-Windows is done too. Its values are corrected in `internal/sdk`, and one of its
-answers settled the scope question permanently: the SDK ships as an interactive
-installer `.exe`, with no archive. CI fetches and extracts a `.tar.gz` to
-provision Linux, so a Windows runner cannot provision itself, which means
-Windows-native could never get the per-PR verification the other platforms have.
-That turns "unsupported for now" into "unsupported". Recorded in
-`docs/ROADMAP.md`.
+Windows is done too, and its values are corrected in `internal/sdk`.
+
+One of its answers was read as settling the scope question permanently, and that
+reading was wrong. This used to say: the SDK ships as an interactive installer
+`.exe` with no archive, CI provisions Linux by extracting a `.tar.gz`, so a
+Windows runner cannot provision itself, so Windows-native could never get per-PR
+verification - which turned "unsupported for now" into "unsupported".
+
+The premise is right and the conclusion does not follow. The download is an
+installer, and it is an NSIS one (`Nullsoft Install System v3.09`, from its own PE
+manifest), which means `/S` and `/D=<dir>`. The bundled VC++ redistributable that
+could still have blocked a silent run is invoked `/q` by the script. Checked
+2026-09-15 by inspecting the installer; see `docs/ROADMAP.md`, Checkpoint 8, for
+what that does and does not prove. "Installer, not archive" does not imply
+"cannot be automated" - the same category error this page made about macOS, whose
+`.pkg` installs fine via `installer -pkg`.
+
+Windows-native is still unsupported, for the reason that actually holds: it has
+not been verified by running yet, and WSL2 serves those users through container
+mode in the meantime.
 
 One thing on this page is outstanding: the Lua-stdout row for macOS, described
 under Status. Everything else is settled.
@@ -615,11 +628,15 @@ d-----         7/29/2026   5:55 PM                Playdate Simulator
 
 the installer is an .exe
 
-One question no script can answer: **is the Windows SDK an installer `.exe` or an
-archive?** CI provisions the Linux SDK by fetching a `.tar.gz` and extracting it.
-If Windows only ships an interactive installer, a Windows CI job cannot set
-itself up, which is an argument for leaving Windows unsupported permanently
-rather than temporarily.
+**Answered, and the follow-up question it was really asking is answered too.** The
+Windows SDK is an installer `.exe`, not an archive - so the literal question this
+asked is settled. But it was asked in order to conclude that a Windows CI job
+could never set itself up, and that conclusion is wrong: the installer is NSIS and
+takes `/S`, with its bundled VC++ redistributable already invoked `/q`. Checked by
+inspection on 2026-09-15, not by running it. See `docs/ROADMAP.md`, Checkpoint 8.
+
+So this is no longer an argument for leaving Windows unsupported permanently. What
+remains is simply that the native Windows path has not been verified yet.
 
 ## Sending results back
 

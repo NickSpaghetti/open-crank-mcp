@@ -7,8 +7,8 @@ import "runtime"
 // Deliberately a value selected at runtime rather than three build-tagged files.
 // Build tags were the first attempt and they are wrong here: a tagged
 // paths_darwin.go can only be compiled on darwin, so its logic can only be
-// tested on a Mac, and the macOS layout is precisely the part nobody here can
-// verify by running it. Keeping every layout compiled on every platform is what
+// tested on a Mac, and the macOS layout is precisely the part least often
+// verified by running it. Keeping every layout compiled on every platform is what
 // lets the fstest suite exercise all three in CI on every commit. The per-OS
 // files stay separate for readability; they just are not conditional.
 //
