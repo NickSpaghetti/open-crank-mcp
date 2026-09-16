@@ -1490,3 +1490,80 @@ asking "yet?" instead of being told.
   Deliberately not here: the plugin itself - the manifests, the launcher, the skills.
   This checkpoint ends at a tag producing downloadable, digest-pinned binaries, which
   is what the launcher will fetch.
+- [x] **`-doctor`, and one answer to "why is this not working"**: the second half of
+  packaging this as an editor plugin, landed on its own because it is useful to
+  native-mode users today and needs nothing from the plugin.
+
+  The problem was reach, not absence. `cmd/smoke-check` already resolved the SDK,
+  checked shared libraries, ran `pdc` and launched the Simulator - but it is a second
+  binary behind `make`, and someone who installed this as an editor plugin has neither
+  a checkout nor a Makefile. So the checks moved into `internal/doctor` and both
+  callers are shells around them: `open-crank-mcp -doctor` and `cmd/smoke-check`.
+  Writing a second set would have put two answers to one question in the tree, which
+  is the thing this repo keeps deleting. The pattern is already documented in
+  `cmd/sdk-path/main.go`: "the rendering lives in `sdk.Paths.Describe` so it can be
+  tested; this is the shell around it."
+
+  **Scoped as a behaviour-preserving extraction, and verified as one rather than
+  asserted.** `smoke-check` gates every PR, so it had to do and print exactly what it
+  did before. Both binaries were built and run against a real SDK and a real Simulator
+  launch, and against an empty `HOME` with no SDK at all; stdout, stderr and exit
+  status were byte-identical on both paths. `main.go` went from 105 lines to 64.
+
+  **The launch is opt-in, behind `-doctor-launch`.** On Linux the cheap check catches
+  the common case - a missing `webkit2gtk-4.1` is an unresolved symbol `ldd` sees
+  without starting anything, and it is exit 127 before any of Panic's code runs.
+  Actually launching is a side effect: it puts a window on the user's desktop, and
+  "nothing supervises the Simulator an agent launched" is already a rough edge. A
+  diagnostic should not add to it unless asked. `smoke-check` still launches, because
+  that is what `smoke-check` is for.
+
+  **Exit 0 even when it finds problems.** "No SDK found" is the ordinary state on a
+  machine that has just installed the plugin, not a failure. Severity goes in the
+  text. A non-zero exit would also make the obvious `-doctor || echo broken` wrapper
+  lie on a fresh install.
+
+  **Prose, not JSON.** `docs/mcp-schema.json` is this project's structured surface and
+  it has a contract test guarding it; a second structured output would be a second
+  contract with nothing guarding it. The readers are a person and a model, and both
+  read prose.
+
+  **The macOS first-run dialog is now predicted rather than only documented.** It is
+  the most likely thing a new plugin install hits on a Mac, and it presents as a game
+  that loads and never runs. `docs/GOTCHAS.md` establishes by observation that the
+  Simulator "rewrites `~/Library/Preferences/date.play.simulator.plist` on every
+  launch", so an absent plist means it has almost certainly never started. That is an
+  **inference** and the output says so in its own words - "the Simulator appears never
+  to have run on this machine" - rather than in a comment nobody reading it will see.
+  A deleted plist reads the same way, which is an acceptable trade for a warning and
+  would not be for anything that changed behaviour. There is a test asserting the
+  wording, because the hedge is the feature.
+
+  **Two decisions were to leave things out.** Harness fingerprints were in an earlier
+  draft: a fingerprint means nothing on its own, only compared against a game's
+  vendored copy, and `get_status` already answers exactly that through
+  `harness_warning`. That `-doctor` runs when the server will not start does not
+  rescue it, since a harness mismatch presupposes a running server. And nothing is
+  reported about how the binary was verified: the launcher does that and then `exec`s
+  a binary inheriting nothing about it, so it would need a breadcrumb - and defining
+  that format here, with its only writer arriving alongside the launcher and a
+  tolerance branch no test could exercise, is a file with no producer.
+
+  **File layout is driven by the gremlins exclusions, deliberately.** `launch.go`
+  holds only the real-Simulator launch and `gather.go` only the I/O composition,
+  because gremlins excludes by path and a single file holding both those and
+  `pdc --version` would have had its exclusion swallow testable code. That is
+  Checkpoint 7's lesson applied before it bites rather than after: a basename-matched
+  exclusion once hid 48 mutants and made the reported score better than the config
+  asked for. `internal/build` already splits `detect.go` from `exec.go` the same way.
+  Moving the check out of `cmd/smoke-check` also retired two now-dead exclusion
+  entries pointing at files that no longer exist there.
+
+  Mutation coverage went from 95.28% to 96.43% as a result, with `libs_linux.go` and
+  the error-marker scan now killed where they were previously excluded outright.
+
+  One reported figure is a false negative and is recorded so nobody re-investigates
+  it: gremlins says `internal/doctor/report.go`'s `case f.LaunchErr != nil:` is NOT
+  COVERED, while `go tool cover` reports the function 100% covered. Applying that
+  mutant by hand fails two tests, so the branch is covered and gremlins is
+  mis-attributing coverage for a case in a tagless `switch`.

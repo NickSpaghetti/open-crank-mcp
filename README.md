@@ -293,10 +293,13 @@ needs Docker. It skips `shared-check` and `test-shared-types` only because
 
 ### Flags
 
-Two, and you almost certainly do not want the second one.
+Four. `-doctor` is the one to reach for when something is wrong; `-http` you
+almost certainly do not want.
 
 | Flag | Default | What it does |
 |---|---|---|
+| `-doctor` | off | Checks the environment and prints a report, then exits: the resolved SDK and every candidate considered, whether the Simulator's shared libraries resolve, what `pdc --version` says, where a game's data directory would be looked for, and on macOS whether the Simulator appears never to have run. The same checks `make smoke-check-native` runs, reachable from the binary alone — which is what someone who installed this as an editor plugin has. **Exits 0 even when it finds problems**, because "no SDK found" is the ordinary state on a fresh install rather than a failure; severity is in the text. |
+| `-doctor-launch` | off | With `-doctor`, also start the Simulator and see whether it stays up. Off by default because it puts a window on your desktop, and nothing supervises a Simulator once started. |
 | `-version` | off | Prints the version and exits. A binary built by `make go-build` reports `dev`, which is true of it — only a release build is stamped, from the version in `plugin/plugin.json`. Worth asking first when a release binary behaves unexpectedly, since a cached one can outlive the version that fetched it. |
 | `-http <addr>` | unset (stdio) | Serves MCP over Streamable HTTP on a loopback address instead of stdio. It exists because contract-testing tools speak HTTP and not stdio — Specmatic's MCP auto-test accepts only `STREAMABLE_HTTP`. MCP clients use stdio; leave this alone unless you are running `make mcp-auto-test` or something like it. Loopback addresses only, and that is enforced rather than advised: this server builds code and launches processes on request and has no authentication, so `0.0.0.0` is refused with a message saying why. |
 

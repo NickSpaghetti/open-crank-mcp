@@ -81,6 +81,25 @@ shell instead, silently, and you conclude the Simulator was never running.
 `stop_simulator` uses `SIGKILL` too. Natively, note this also kills a Simulator you
 started by hand.
 
+## The Simulator will not start at all
+
+Not "starts and quits" — never starts, usually with exit status 127 before any of
+Panic's own code runs. That is a missing shared library rather than anything about
+the Simulator.
+
+```
+open-crank-mcp -doctor
+```
+
+The `shared libraries` line names what is unresolved. On Arch the whole list is
+one package, `webkit2gtk-4.1`; elsewhere the authoritative list is the `apt` line
+in the `native` job of `.github/workflows/ci.yml`, which stays correct because
+that job would fail otherwise.
+
+On macOS the check can only confirm the binary exists — the dynamic loader there
+resolves lazily and reports at launch, so use `-doctor -doctor-launch` to actually
+start it and read what it says.
+
 ## The Simulator exits immediately, headless
 
 It reports `dsp: No such audio device` and stops before doing anything.
@@ -107,12 +126,15 @@ output, and reconfigures. The message is expected rather than alarming.
 ## No SDK found, or the wrong one
 
 ```
-make sdk-path
+make sdk-path          # from a checkout
+open-crank-mcp -doctor # from the binary alone
 ```
 
-That prints the SDK it resolved, which of the three sources found it, and every
+Either prints the SDK it resolved, which of the three sources found it, and every
 candidate it considered. Detection is silent when it succeeds, so this is the
-first thing to reach for.
+first thing to reach for. `-doctor` is the one to use if you installed this as an
+editor plugin, since there is no Makefile there — it adds the shared-library and
+`pdc` checks, and exits 0 either way, so read the text rather than the status.
 
 Resolution order is `PLAYDATE_SDK_PATH`, then `SDKRoot` in `~/.Playdate/config`,
 then the per-OS default location.
@@ -122,6 +144,12 @@ then the per-OS default location.
 A first-run dialog is open behind the Simulator window, and the game is waiting
 on a click that never comes. `Loading: <game>.pdx/` appears on stdout, so the
 launch looks fine.
+
+`open-crank-mcp -doctor` warns about this before you hit it, on any Mac where the
+Simulator appears never to have run. That is an inference, not a measurement: the
+Simulator rewrites `~/Library/Preferences/date.play.simulator.plist` on every
+launch, so an absent plist means it has almost certainly never started — but a
+deleted one would read the same way.
 
 Dismiss it once by hand. The documented setting does not suppress it, and the
 symptoms differ between C and Lua games, which makes it easy to misdiagnose.

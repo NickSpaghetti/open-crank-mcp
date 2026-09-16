@@ -3,20 +3,23 @@
 // The environment-health check: run it when the SDK moves, the image changes, or
 // a host install is new.
 //
-// The two platform-specific parts are in display_*.go and libs_*.go. On Linux it
-// runs under a throwaway Xvfb and greps ldd; elsewhere the desktop is already
-// there and there is no ldd to grep. run() itself has no platform branch.
+// The checks themselves live in internal/doctor, because `open-crank-mcp -doctor`
+// answers the same question for someone who installed this as an editor plugin
+// and has neither this binary nor a Makefile. This is the shell around them, and
+// it keeps the one thing that is genuinely its own: the throwaway Xvfb, which is
+// about the environment a check runs in rather than the check. A desktop already
+// has a display; a container does not.
+//
+// display_*.go is what remains platform-specific here. The ldd-versus-stat split
+// moved with the check it belongs to.
 package main
 
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
-	"time"
 
+	"github.com/NickSpaghetti/open-crank-mcp/internal/doctor"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
-	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
 )
 
 func main() {
@@ -41,15 +44,15 @@ func run() error {
 	simBin := paths.SimulatorBin
 	pdcBin := paths.PDC
 
-	if err := checkSharedLibraries(simBin); err != nil {
+	if err := doctor.SharedLibraries(simBin); err != nil {
 		return err
 	}
 
-	out, err := exec.Command(pdcBin, "--version").CombinedOutput()
+	out, err := doctor.PDCVersion(pdcBin)
 	if err != nil {
-		return fmt.Errorf("pdc --version: %w\n%s", err, out)
+		return err
 	}
-	fmt.Print(string(out))
+	fmt.Print(out)
 
 	stopDisplay, err := startDisplay()
 	if err != nil {
@@ -57,49 +60,5 @@ func run() error {
 	}
 	defer stopDisplay()
 
-	sim, err := simulator.Launch(simBin, "")
-	if err != nil {
-		return fmt.Errorf("launching simulator: %w", err)
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- sim.Wait() }()
-
-	select {
-	case err := <-done:
-		return fmt.Errorf("simulator exited early (%v), expected it to keep running:\n%s", err, sim.Output())
-	case <-time.After(5 * time.Second):
-		// Still running after 5s - expected for a GUI app. Force-kill it:
-		// PlaydateSimulator doesn't exit on SIGTERM.
-		if err := sim.Stop(); err != nil {
-			return fmt.Errorf("stopping simulator: %w", err)
-		}
-		<-done
-	}
-
-	if err := checkForErrors(sim.Output()); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// Both the correctly-spelled and the typo'd form SDL2 itself uses ("could not
-// be initalized") are listed - the typo was seen directly in this project's own
-// SDL2 audio-driver debugging, not a hypothetical.
-var errorMarkers = []string{
-	"could not be initalized",
-	"could not be initialized",
-	"error",
-	"not found",
-}
-
-func checkForErrors(output string) error {
-	lower := strings.ToLower(output)
-	for _, marker := range errorMarkers {
-		if strings.Contains(lower, marker) {
-			return fmt.Errorf("simulator reported an error:\n%s", output)
-		}
-	}
-	return nil
+	return doctor.Launch(simBin)
 }

@@ -62,6 +62,23 @@ unleash:
     # is fully unit-tested using a trivial stand-in process, the same
     # pattern internal/simulator's own tests use.
     - "internal/tools/launch.go"
+    # Starts a real PlaydateSimulator, waits to see whether it stays up, and
+    # kills it. Needs the actual Simulator binary and a display; there is no
+    # stand-in that would exercise anything real. Everything testable that used
+    # to sit beside it - pdc --version, the error-marker scan - is in
+    # internal/doctor/checks.go and stays mutated, which is the whole reason the
+    # two are separate files. Same split as internal/build's detect.go/exec.go.
+    - "internal/doctor/launch.go"
+    # I/O composition: resolve, exec, stat, optionally launch. Every branch is
+    # about whether a real machine has a real SDK on it. The findings it builds
+    # are rendered by internal/doctor/report.go, which is pure and fully covered.
+    - "internal/doctor/gather.go"
+    # The library check's non-native half. Never compiled on the platform the
+    # tests run on, so no Linux runner can cover it - the same reason
+    # internal/simulator/proc_windows.go is excluded below. Its Linux
+    # counterpart, libs_linux.go, is deliberately not excluded: in this package
+    # it is reachable with any dynamically linked binary, and its mutants die.
+    - "internal/doctor/libs_other.go"
     # Startup glue: reads an env var and wires the MCP server together.
     # internal/tools.RegisterAll (called from here) has its own test
     # confirming every tool's schema is valid.
@@ -83,13 +100,11 @@ unleash:
     # logic of its own. Verified for real via `make shared-load` and
     # `make shared-check`.
     - "cmd/shared-load/main.go"
-    # The platform halves of smoke-check, split out of its main.go, which was
-    # already excluded above for exactly this reason: Xvfb, ldd and the real
-    # Simulator binary. The exclusion follows the code.
+    # The display halves of smoke-check, split out of its main.go, which was
+    # already excluded above for exactly this reason: Xvfb and the real Simulator
+    # binary. The exclusion follows the code.
     - "cmd/smoke-check/display_linux.go"
     - "cmd/smoke-check/display_other.go"
-    - "cmd/smoke-check/libs_linux.go"
-    - "cmd/smoke-check/libs_other.go"
     # Never compiled on the platform the tests run on, so no test on any Linux
     # runner can cover it. Its Unix counterpart is covered by
     # internal/simulator's own tests and is deliberately not excluded.
