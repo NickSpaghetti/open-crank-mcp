@@ -1,0 +1,15 @@
+{
+  "name": "open-crank-mcp",
+  "description": "An MCP server for the Playdate Simulator, so an agent can playtest a game instead of only reading its source.",
+  "owner": {
+    "name": "Nick Spahetti",
+    "url": "https://github.com/NickSpaghetti"
+  },
+  "plugins": [
+    {
+      "name": "open-crank-mcp",
+      "source": "./plugin",
+      "description": "See the screen, press buttons, turn the crank, read game state and logs."
+    }
+  ]
+}

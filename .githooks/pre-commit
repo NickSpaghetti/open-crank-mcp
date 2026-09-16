@@ -66,9 +66,9 @@ want_sim=false       # anything that changes what a real Simulator does
 want_shared=false    # the shared/VNC profile and its browser tests
 
 matches '\.go$|^go\.(mod|sum)$'                              && want_go=true
-# Anticipatory: nothing Go-side reads plugin/ today, so this currently just means a
-# plugin.json edit also runs go-test. It becomes load-bearing in the plugin PR, when
-# the manifests gain Go tests and can break one with no .go file staged.
+# internal/plugincontract reads the manifests, so a plugin.json edit can break a Go
+# test with no .go file staged: the version every manifest repeats, the portable
+# pair against the vendored 1.0.0 schemas, and the rules a schema cannot express.
 matches '^plugin/'                                           && want_go=true
 matches '^c-harness/'                                        && want_c=true
 matches '\.go$|^lua/|^c-harness/|^internal/(harness|simulator|build|screenshot|contracttest)/' && want_sim=true

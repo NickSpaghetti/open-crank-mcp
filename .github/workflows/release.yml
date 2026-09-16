@@ -40,9 +40,9 @@ jobs:
           go-version-file: go.mod
 
       # The tag and the manifest must agree, and the manifest wins the argument: it is
-      # what the plugin's launcher reads to decide which asset to fetch, so a release
+      # what the install skill reads to decide which asset to fetch, so a release
       # tagged v0.2.0 carrying a manifest that says 0.1.0 would publish assets named
-      # after a version no launcher will ever ask for.
+      # after a version nothing will ever ask for.
       #
       # Checked in every matrix job rather than once, because the version is what names
       # the file each job produces.
