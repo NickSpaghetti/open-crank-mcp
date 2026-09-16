@@ -72,7 +72,36 @@ matches '\.go$|^go\.(mod|sum)$'                              && want_go=true
 matches '^plugin/'                                           && want_go=true
 matches '^c-harness/'                                        && want_c=true
 matches '\.go$|^lua/|^c-harness/|^internal/(harness|simulator|build|screenshot|contracttest)/' && want_sim=true
-matches '^scripts/|^tests/browser/|^docker-compose\.yml$|^Dockerfile$' && want_shared=true
+# The shared/VNC profile's own files, named rather than caught by a `^scripts/`
+# wildcard. That wildcard fired the 75-second browser suite for any script in the
+# repo - deleting an unrelated test harness was enough.
+#
+# It was a wildcard for a real reason, recorded in ci.yml: a named list went stale
+# once, when `byos` was renamed to `shared`, and quietly stopped matching. A filter
+# naming a path that no longer exists matches nothing and passes while testing
+# nothing. So the names are checked against the tree here, and a missing one stops
+# the commit instead of narrowing the filter in silence.
+shared_paths='scripts/shared-check.sh
+scripts/shared-lib.sh
+scripts/shared-watch.sh
+scripts/run-vnc.sh
+scripts/ensure-xauth.sh
+scripts/find-volume-slider.awk
+tests/browser
+docker-compose.yml
+Dockerfile'
+
+while IFS= read -r shared_path; do
+	[ -e "$shared_path" ] || {
+		printf 'pre-commit: the shared filter names %s, which does not exist.\n' "$shared_path" >&2
+		printf '  Update shared_paths in .githooks/pre-commit, and ci.yml alongside it.\n' >&2
+		exit 1
+	}
+done <<SHARED_PATHS
+$shared_paths
+SHARED_PATHS
+
+matches "^($(printf '%s' "$shared_paths" | sed 's/\./\\./g' | paste -sd'|' -))(\$|/)" && want_shared=true
 
 # Docker is needed by everything except the two host-only suites, so check for it
 # once, up front, rather than letting the first container-dependent stage fail

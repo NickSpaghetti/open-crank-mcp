@@ -210,6 +210,24 @@ check_true "window pinned to the top-left corner" \
 check "window size matches the 1x formula" "$(bash -c "source '$REPO_DIR/scripts/shared-lib.sh'; shared_window_size 1")" \
   "${win_w}x${win_h}"
 
+# --- nothing is covering the Simulator -------------------------------------
+#
+# The slider checks read pixels inside the Simulator's geometry. They cannot tell
+# a missing widget from a covered one, so both report "no trough found" and send
+# you after the scanner, which is fine.
+#
+# That happened. SDK 3.1.2 shipped and the Simulator put an "SDK Update" modal
+# over its own volume slider. docker-compose.yml blocks that fetch. This catches
+# the next one.
+#
+# Exact match, not an allowlist. A window nobody expected is worth failing on even
+# when it misses the slider, and a reject list only names what has already bitten.
+windows=$(in_container bash -c '
+  for w in $(xdotool search --onlyvisible --name "." 2>/dev/null); do
+    xdotool getwindowname "$w" 2>/dev/null
+  done' | tr -d '\r' | sort | paste -sd', ' -)
+check "only the Simulator window is open" "Playdate Simulator" "$windows"
+
 # --- the published slider layout -------------------------------------------
 layout=$(curl -s --max-time 10 "$BASE_URL/pd-layout.json")
 trough_x=$(echo "$layout" | awk -F'[:,]' '/troughX/ { gsub(/ /, "", $2); print $2 }')
