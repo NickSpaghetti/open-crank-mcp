@@ -66,11 +66,9 @@ want_sim=false       # anything that changes what a real Simulator does
 want_shared=false    # the shared/VNC profile and its browser tests
 
 matches '\.go$|^go\.(mod|sum)$'                              && want_go=true
-# The plugin's own files are read by internal/plugincontract, so they can break a Go
-# test without a .go file being staged: plugin/plugin.json carries the version every
-# asset name is derived from, release-targets.txt is the list those names are built
-# over, and checksums.sha256 is what has to cover them. Bumping the version and
-# forgetting `make plugin-pin` is the mistake this catches before CI does.
+# Anticipatory: nothing Go-side reads plugin/ today, so this currently just means a
+# plugin.json edit also runs go-test. It becomes load-bearing in the plugin PR, when
+# the manifests gain Go tests and can break one with no .go file staged.
 matches '^plugin/'                                           && want_go=true
 matches '^c-harness/'                                        && want_c=true
 matches '\.go$|^lua/|^c-harness/|^internal/(harness|simulator|build|screenshot|contracttest)/' && want_sim=true
