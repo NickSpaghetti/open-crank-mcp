@@ -54,6 +54,10 @@ go.work.sum
 /c-harness/test/fixture-game/src/mcp_harness.h
 /lua/test-fixture/Source/mcp_harness.lua
 
+# Release binaries built by `make plugin-pin`. The binaries are artifacts; what gets
+# committed is their digests, in plugin/lib/checksums.sha256.
+/dist/
+
 # Where `make mcp-auto-test` leaves specmatic's log and JSON report. The path is
 # specmatic's own default inside its container (build/reports/specmatic), kept rather
 # than relocated so anyone following their docs finds the report where they expect.

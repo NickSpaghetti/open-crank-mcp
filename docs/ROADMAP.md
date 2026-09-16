@@ -902,15 +902,57 @@ asking "yet?" instead of being told.
   download is a `.zip` containing a `.pkg`, and a `.pkg` installs without
   interaction via `installer -pkg` - "installer, not archive" simply does not
   imply "cannot be automated". Windows installers routinely take a silent flag
-  too, and nobody has checked whether this one does.
+  too, and nobody had checked whether this one does.
 
-  So the honest position is narrower than what was here. Windows-native is
-  unsupported because nobody here can run or debug it and WSL2 already serves
-  those users through container mode - a scoping decision, and a revisitable one.
-  It is not unsupported because provisioning is impossible; that was asserted
-  without being tested. Its layout values are still
-  correct (see `docs/NATIVE-PROBE.md`) because keeping them right costs nothing
-  and makes promoting Windows additive if that ever changes.
+  **Checked, 2026-09-15. It does: `/S`.** The installer was inspected rather than
+  reasoned about, on Linux, which is enough to answer it. Four findings, in the
+  order they matter:
+
+  - It is **NSIS**, and the PE manifest names the build: `Nullsoft Install System
+    v3.09`. So `/S` (silent) and `/D=<dir>` (target directory, which NSIS requires
+    last and unquoted) come from the NSIS stub itself, and under `/S` pages are
+    skipped rather than auto-accepted.
+  - The thing that would have made `/S` hang anyway is **already quiet**. Over half
+    the 45 MB download is a bundled `$PLUGINSDIR/VC_redist.x64.exe`, and NSIS `/S`
+    suppresses only NSIS's own UI - a nested installer invoked bare would sit on its
+    own dialog forever. The script invokes it as `"VC_redist.x64.exe" /q`,
+    unconditionally rather than gated on silent mode. Reading that required
+    LZMA-decompressing the NSIS header, because the script's string table is
+    compressed and `strings` on the `.exe` shows nothing of it.
+  - **No application-specific `MessageBox`.** Every prompt-shaped string in the
+    header is stock NSIS/MUI boilerplate - "Click Next to continue", the abort
+    warning, the finish-page reboot options - all of which belong to pages `/S`
+    does not show.
+  - It declares `requestedExecutionLevel level="requireAdministrator"`, so it
+    **needs an elevated context**. GitHub's `windows-latest` runners already are
+    one; a non-elevated shell gets a UAC prompt, which unattended is a hang rather
+    than an error.
+
+  Also worth recording, since it is easy to get wrong: the Windows download lives
+  under a `Windows/` path segment
+  (`download.panic.com/playdate_sdk/Windows/PlaydateSDK-<version>.exe`), which the
+  macOS `.zip` does not.
+
+  What this does **not** establish is that a silent install works, only that the
+  flags are there and nothing in the installer obviously blocks them. It has not
+  been run yet. That is the same gap as before, just a narrower one.
+
+  So the honest position is narrower again. Windows-native is unsupported because
+  it has not been verified yet and WSL2 already serves those users through
+  container mode - a prioritisation, and a revisitable one. Provisioning is not an
+  obstacle: the one mechanism that was supposed to make Windows hard to verify
+  turns out to be available. Its layout
+  values are still correct (see `docs/NATIVE-PROBE.md`) because keeping them right
+  costs nothing and makes promoting Windows additive if that ever changes.
+
+  Two things a future promotion should start from rather than rediscover. The
+  installer writes a `Software\PlaydateSDK` registry key, and the probe found
+  Windows has **no `~/.Playdate/config` at all**, so resolution there falls
+  straight through to guessed directories - that key is the natural Windows
+  equivalent of the config file and a better second source than guessing. And
+  promoting Windows is not one line in the release workflow's build matrix: the
+  plugin's launcher is bash and is written to refuse on MSYS/MINGW, so a Windows
+  asset needs a launcher story before it needs a build target.
 
   Done when the `fstest` suite passes under `go-build-cross`, `make sdk-path`
   names both the resolved SDK and which source found it, `make
@@ -1335,3 +1377,116 @@ asking "yet?" instead of being told.
   Left unchecked until the setting is actually applied, which needs a green run on this
   branch first. Reading `[x]` here while the API still says three checks is exactly the
   drift being fixed.
+- [x] **A version, and published release binaries**: the first half of packaging this
+  server as an editor plugin, landed on its own because it is useful without the plugin
+  and because the plugin cannot exist without it. Three months of this repo had no
+  version at all - no tags, no version string, `mcp.Implementation` carrying `Name` and
+  nothing else - and the only way to get the server was to clone and `make go-build`.
+
+  **The version lives in `plugin/plugin.json`, not in a `VERSION` file or a Go
+  constant.** That file is the plugin's portable manifest, so it has to carry a version
+  regardless; putting it anywhere else would have created a second place and a check to
+  keep them equal. `cmd/open-crank-mcp` takes it through `-ldflags -X main.version`,
+  reports it on a new `-version` flag and in the MCP handshake, and defaults to `"dev"`
+  when nothing stamps it. That default is deliberate rather than lazy: a local build
+  claiming to be `0.1.0` would be worse than one admitting it is unreleased, because a
+  cached release binary outliving the version that fetched it is a failure mode this
+  project now has.
+
+  **Checksums are a release asset, and the release is a build matrix.** Three decisions
+  collapsed into one over a single review, and they are recorded together because each
+  removal is what exposed the next.
+
+  The first design committed `plugin/lib/checksums.sha256` and had CI rebuild and refuse
+  to publish unless the digests reproduced. The argument was that a `checksums.txt`
+  served from the same release as the asset proves only that the transfer was not
+  truncated, while a committed digest is reviewed in a pull request.
+
+  That argument does not survive contact with what the pattern is for. Every precedent
+  for committed digests - `go.sum`, lockfile `integrity`, Nix, PKGBUILD, Homebrew,
+  Claude Code's own marketplace `archive` `sha256` - pins **someone else's** artifact.
+  Homebrew is explicit that the point is being a different party from upstream: an
+  attacker who takes over an upstream account cannot redirect Homebrew users, because
+  Homebrew keeps its own checksums. We are the vendor. Our repository and our release
+  are one trust domain, so a digest we commit about a binary we publish defends only
+  against an attacker who can write releases but not push - and the Sigstore attestation
+  covers that case properly, with provenance rather than self-consistency. goreleaser,
+  which is what most Go projects use, publishes `checksums.txt` as a release asset and
+  attests it, and that is now what happens here.
+
+  Removing the reproducibility gate removed the reason for the rest. The exact
+  `GOTOOLCHAIN` pin existed to make locally pinned digests reproduce in CI; with nothing
+  comparing them, it had no job. A Go `plugin-pin` command existed so that local and CI
+  builds were one identical invocation; with no local pinning step, nobody needs to
+  build the release set locally, and `make go-build-cross` already proves it compiles
+  everywhere. And `plugin/lib/release-targets.txt` existed as data because it had two
+  readers in two languages; both were gone, leaving a hand-rolled parser and three tests
+  for it feeding a single Go caller. The platform list is now the release workflow's
+  build matrix, which is where a list of platforms to build on belongs.
+
+  The measurement that drove the `GOTOOLCHAIN` pin is worth keeping even though the pin
+  is gone, because it will be relevant again if anything here ever needs reproducible
+  builds. `go.mod` says `go 1.26.5`, which is a *floor*: under the default
+  `GOTOOLCHAIN=auto` the local toolchain is used if it satisfies the floor, and this
+  machine's is `go1.27.1-X:nodwarf5` - Arch's patched build, as the suffix says - while
+  CI's `go-version-file: go.mod` installs exactly 1.26.5. Same flags, same source,
+  `linux/amd64`:
+
+  ```
+  go1.26.5            c2257d884bed547b7a202b8ee212ca5c30143535d311e653e9c4c4bedff2a0f1
+  go1.27.1-X:nodwarf5 3e6c0fad7374e835491f2bc9053b6c7de42918b74739e526de37c25cd3e7ba63
+  ```
+
+  So an assertion phrased as "the local toolchain matches `go.mod`" passes while the
+  bytes differ. Anything that pins digests locally has to pin the toolchain exactly and
+  read the **effective** one back from the built artifact rather than asking the
+  toolchain its version.
+
+  **The asset name has one definition, in the build matrix's `build` step**, which is
+  also the only thing that writes it. A launcher asking for a name the release never
+  uploaded breaks every install silently on the first run, so when the launcher lands it
+  will need its own copy of the format in bash - it runs before any binary exists and
+  cannot call Go. That copy, and a check that it agrees with what the workflow produces,
+  belong with the launcher rather than here: while there is no launcher, a second
+  definition has no reader and a test guarding it proves nothing.
+
+  The launcher cannot call Go - it runs before any binary exists - so it will need its
+  own copy of the name format in bash. That copy, and the check that it agrees with
+  `pin.AssetName`, belong with the launcher in the plugin PR rather than here: while
+  there is no launcher, a second definition has no reader and the test guarding it
+  proves nothing. Checkpoint note for whoever writes it: the shared definition is the
+  point, and a bash library's locals need prefixing, because a caller that declares
+  `manifest` readonly makes an unprefixed `local manifest` fail - and with `set -e` off
+  as these scripts have it, that error prints and the function carries on.
+
+  **Published targets follow the SDKs Panic ships, not what Go can cross-compile**: a
+  server binary is useless on a platform with no Simulator to drive. Panic offers
+  macOS (a universal `.zip`), Windows (`.exe`) and Linux (`.tar.gz`, x86-64 only), so
+  the list is `linux/amd64`, `darwin/amd64`, `darwin/arm64`. The two exclusions look
+  alike and are not, and the distinction is worth keeping: there is no `linux/arm64`
+  because Panic ships no ARM64 Linux SDK, which is not our choice, and no
+  `windows/amd64` even though Panic does ship a Windows SDK, which is entirely our
+  choice - Checkpoint 8's scoping, WSL2 through container mode instead.
+  `make go-build-cross` keeps Windows compiling; it just does not get an asset.
+
+  **The licence guard is two halves, because there are two ways SDK bytes could reach a
+  published artifact.** Inside the binary: `embed_test.go` already asserted the
+  embedded set, but as `len(got) != 3` - a *count*, which passes just as happily if a
+  harness source is swapped for an SDK header. It compares the exact path set now, and
+  the test says why. Around the binary: the publish job's payload is whatever the build
+  jobs uploaded, and each uploads exactly the one binary it compiled, so an SDK tarball,
+  an extracted `C_API` or a saved image has no step it could enter from. The first half
+  was verified by breaking it on purpose and watching it fail; the second is structural,
+  which is why it replaced an allow-list that had to be kept in step with the target
+  list.
+
+  The guard's comment is scoped honestly rather than reassuringly: it covers the
+  release, and it is *not* a claim that SDK bytes never leave a developer's machine,
+  because `ci.yml`'s `docker-build` uses `cache-to: type=gha,mode=max` and those layers
+  carry the SDK into the repo-scoped Actions cache. Not redistribution, and not new,
+  but a comment implying nothing ever leaves would be false. What is absolute is that
+  no image is ever pushed, and the release workflow builds none.
+
+  Deliberately not here: the plugin itself - the manifests, the launcher, the skills.
+  This checkpoint ends at a tag producing downloadable, digest-pinned binaries, which
+  is what the launcher will fetch.

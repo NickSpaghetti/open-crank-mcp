@@ -68,9 +68,8 @@ Run this from inside a WSL2 distro's shell, not PowerShell. Windows 11's
 WSLg already exposes a display and a PulseAudio-compatible audio socket at
 `/mnt/wslg` for this. This profile mounts them through.
 
-Untested against a real Windows machine. Built from documented WSLg
-integration patterns; no Windows/WSL2 environment available to test
-against. If it doesn't work, the mounts and env vars in the
+Untested against a real Windows machine so far. Built from documented WSLg
+integration patterns. If it doesn't work, the mounts and env vars in the
 `simulator-visual-wsl` service in `docker-compose.yml` are the place to fix
 it.
 
