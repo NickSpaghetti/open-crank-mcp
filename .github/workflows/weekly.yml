@@ -29,7 +29,30 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sdk_version: ['3.1.1', 'latest']
+        sdk_version: ['3.1.2', 'latest']
     steps:
       - uses: actions/checkout@v7
       - run: make sdk-contract-check PLAYDATE_SDK_VERSION=${{ matrix.sdk_version }}
+
+  # Whether the pin is still current, which the sweep above does not answer. That
+  # one builds `latest` and proves the harness works on it; it passed every week
+  # while 3.1.2 shipped, because nothing was broken. A stale pin is not a broken
+  # build, it is a Simulator showing an update modal over its own volume slider.
+  sdk-pin-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make sdk-pin-check
+
+  # Upstream schema drift. The Agent Plugins 1.0.0 schemas are vendored at
+  # plugin/schemas/1.0.0 so per-PR validation is offline and deterministic; this
+  # is what notices when the published versions move away from them.
+  #
+  # Here rather than in ci.yml for the same reason the SDK sweep is: it reports
+  # on somebody else's release schedule, and a pull request should not go red
+  # because of one - or because a third-party site was briefly down.
+  plugin-schema-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: make plugin-schema-check

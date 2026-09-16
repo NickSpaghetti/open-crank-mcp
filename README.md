@@ -16,6 +16,7 @@ has been executed.
 
 | Guide | What it covers |
 |---|---|
+| [as a plugin](guides/plugin.md) | Your editor installs the server: no clone, no `make`, no path to write down. Claude Code and Cursor install it as a plugin; OpenCode gets a generated config. Native mode only, so Linux and macOS. |
 | [container mode](guides/container-mode.md) | Docker, carrying its own SDK, headless. The default, and the only mode CI exercises end to end. |
 | [native mode](guides/native-mode.md) | Your own SDK, a real Simulator window, no container and no bind mounts. |
 | [connecting a client](guides/connecting.md) | Pointing Claude Code, OpenCode or Cursor at either mode. |
@@ -293,13 +294,14 @@ needs Docker. It skips `shared-check` and `test-shared-types` only because
 
 ### Flags
 
-Four. `-doctor` is the one to reach for when something is wrong; `-http` you
-almost certainly do not want.
+Five, plus two overrides. `-doctor` is the one to reach for when something is
+wrong; `-http` you almost certainly do not want.
 
 | Flag | Default | What it does |
 |---|---|---|
 | `-doctor` | off | Checks the environment and prints a report, then exits: the resolved SDK and every candidate considered, whether the Simulator's shared libraries resolve, what `pdc --version` says, where a game's data directory would be looked for, and on macOS whether the Simulator appears never to have run. The same checks `make smoke-check-native` runs, reachable from the binary alone — which is what someone who installed this as an editor plugin has. **Exits 0 even when it finds problems**, because "no SDK found" is the ordinary state on a fresh install rather than a failure; severity is in the text. |
 | `-doctor-launch` | off | With `-doctor`, also start the Simulator and see whether it stays up. Off by default because it puts a window on your desktop, and nothing supervises a Simulator once started. |
+| `-print-config <client>` | off | Prints the MCP config block for `opencode`, `claude` or `cursor` and exits. For clients that cannot install this themselves — OpenCode has plugins, but its v1 plugin API has no config or MCP hook, so its config is written by hand. The command it emits is this binary's own resolved path, so the block works wherever the binary already is. |
 | `-version` | off | Prints the version and exits. A binary built by `make go-build` reports `dev`, which is true of it — only a release build is stamped, from the version in `plugin/plugin.json`. Worth asking first when a release binary behaves unexpectedly, since a cached one can outlive the version that fetched it. |
 | `-http <addr>` | unset (stdio) | Serves MCP over Streamable HTTP on a loopback address instead of stdio. It exists because contract-testing tools speak HTTP and not stdio — Specmatic's MCP auto-test accepts only `STREAMABLE_HTTP`. MCP clients use stdio; leave this alone unless you are running `make mcp-auto-test` or something like it. Loopback addresses only, and that is enforced rather than advised: this server builds code and launches processes on request and has no authentication, so `0.0.0.0` is refused with a message saying why. |
 

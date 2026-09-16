@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "open-crank-mcp": {
+      "command": "${CLAUDE_PLUGIN_DATA}/bin/open-crank-mcp",
+      "env": {
+        "PLAYDATE_SDK_PATH": "${user_config.playdate_sdk_path}"
+      }
+    }
+  }
+}

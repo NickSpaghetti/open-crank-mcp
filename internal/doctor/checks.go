@@ -38,11 +38,33 @@ var errorMarkers = []string{
 	"not found",
 }
 
+// checkForErrors reports whether the Simulator's output complains about anything.
+//
+// Line by line, and lines that announce themselves as warnings are skipped. That
+// exclusion is doing real work: `error` is in the marker list, and a healthy
+// containerised run prints
+//
+//	libEGL warning: DRI3 error: Could not get DRI3 device
+//
+// which failed `make smoke-check` on a machine where the Simulator had started
+// perfectly well. Matching the whole output as one string cannot tell that apart
+// from a real failure, because the word it keys on is inside a line that already
+// said it was a warning.
+//
+// Broad markers over precise ones is still the right trade - the Simulator's
+// failures have no stable format and a missed one is a green check on a broken
+// environment - but "a warning is not an error" costs nothing and removes the
+// false positive that was actually happening.
 func checkForErrors(output string) error {
-	lower := strings.ToLower(output)
-	for _, marker := range errorMarkers {
-		if strings.Contains(lower, marker) {
-			return fmt.Errorf("simulator reported an error:\n%s", output)
+	for _, line := range strings.Split(output, "\n") {
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "warning") {
+			continue
+		}
+		for _, marker := range errorMarkers {
+			if strings.Contains(lower, marker) {
+				return fmt.Errorf("simulator reported an error:\n%s", output)
+			}
 		}
 	}
 	return nil

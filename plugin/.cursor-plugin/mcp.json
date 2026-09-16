@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "open-crank-mcp": {
+      "command": "open-crank-mcp"
+    }
+  }
+}

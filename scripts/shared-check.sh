@@ -101,7 +101,7 @@ cp "$REPO_DIR/lua/mcp_harness.lua" "$GAME_DIR/Source/"
 trap cleanup EXIT
 
 echo "booting an isolated shared container on port $VNC_PORT with the Lua fixture"
-PLAYDATE_SDK_VERSION="${PLAYDATE_SDK_VERSION:-3.1.1}" \
+PLAYDATE_SDK_VERSION="${PLAYDATE_SDK_VERSION:-3.1.2}" \
   "${COMPOSE[@]}" --profile shared build simulator-shared >/dev/null 2>&1
 GAME_DIR="$GAME_DIR" "${COMPOSE[@]}" --profile shared up -d simulator-shared >/dev/null 2>&1 || {
     echo "FAIL container did not start"
@@ -209,6 +209,24 @@ check_true "window pinned to the top-left corner" \
 # The window's own size should match the measured formula for 1x.
 check "window size matches the 1x formula" "$(bash -c "source '$REPO_DIR/scripts/shared-lib.sh'; shared_window_size 1")" \
   "${win_w}x${win_h}"
+
+# --- nothing is covering the Simulator -------------------------------------
+#
+# The slider checks read pixels inside the Simulator's geometry. They cannot tell
+# a missing widget from a covered one, so both report "no trough found" and send
+# you after the scanner, which is fine.
+#
+# That happened. SDK 3.1.2 shipped, the Simulator announced it, and the modal
+# covered the volume slider on every container still pinned to 3.1.1. The fix was
+# to bump the pin. This catches the next one, before it looks like a scanner bug.
+#
+# Exact match, not an allowlist. A window nobody expected is worth failing on even
+# when it misses the slider, and a reject list only names what has already bitten.
+windows=$(in_container bash -c '
+  for w in $(xdotool search --onlyvisible --name "." 2>/dev/null); do
+    xdotool getwindowname "$w" 2>/dev/null
+  done' | tr -d '\r' | sort | paste -sd', ' -)
+check "only the Simulator window is open" "Playdate Simulator" "$windows"
 
 # --- the published slider layout -------------------------------------------
 layout=$(curl -s --max-time 10 "$BASE_URL/pd-layout.json")

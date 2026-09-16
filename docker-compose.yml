@@ -22,7 +22,7 @@ services:
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     environment:
       - DISPLAY=:99
     command: ["bash", "-c", "Xvfb :99 -screen 0 1280x800x24 & sleep 1 && exec bash"]
@@ -33,7 +33,7 @@ services:
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["visual"]
     environment:
       - DISPLAY=${DISPLAY}
@@ -55,7 +55,7 @@ services:
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["wsl"]
     environment:
       - DISPLAY=${DISPLAY}
@@ -76,7 +76,7 @@ services:
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["vnc"]
     command: ["bash", "/workspace/scripts/run-vnc.sh"]
     # Loopback by default. x11vnc runs with -nopw -shared (see run-vnc.sh),
@@ -109,7 +109,7 @@ services:
     build:
       context: .
       args:
-        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.1}
+        PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["shared"]
     environment:
       # Set at the container level, not just inside run-vnc.sh's own

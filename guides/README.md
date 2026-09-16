@@ -13,6 +13,7 @@ Why things work the way they do is in [`../docs/`](../docs/), starting with
 
 ## Running the server
 
+- [plugin.md](plugin.md)
 - [container-mode.md](container-mode.md)
 - [native-mode.md](native-mode.md)
 - [connecting.md](connecting.md)

@@ -1,6 +1,11 @@
 # Connecting a client
 
-How to point Claude Code, OpenCode, or Cursor at the server.
+How to point Claude Code, OpenCode, or Cursor at the server, by hand.
+
+If you want the short path, [install it as a plugin](plugin.md) instead: the
+editor fetches the server and there is no path to write down. This guide is for
+hand-configuration — a container-mode setup, a build of your own, or OpenCode,
+whose v1 plugin API cannot register an MCP server.
 
 Do this after you can build and run in one of the two modes. See
 [getting-started.md](getting-started.md) if you have not got that far.

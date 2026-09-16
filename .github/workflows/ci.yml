@@ -17,7 +17,7 @@ jobs:
           context: .
           push: false
           build-args: |
-            PLAYDATE_SDK_VERSION=3.1.1
+            PLAYDATE_SDK_VERSION=3.1.2
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -41,6 +41,19 @@ jobs:
         with:
           go-version-file: go.mod
       - run: make go-build-cross
+
+  # The plugin's manifests. Host-only - no Docker, no SDK - and guarding the thing
+  # that only fails on a user's machine: a manifest a client rejects. `go test ./...`
+  # covers plugincontract too; this job exists so a failure says "plugin" rather than
+  # being buried in the full suite.
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: make plugin-check
 
   # Every relative Markdown link and heading anchor resolves. bash and grep, no toolchain
   # and no network - external URLs are deliberately not fetched, so this cannot fail
@@ -98,7 +111,7 @@ jobs:
           mkdir -p "$HOME/PlaydateSDK"
           tar -xzf /tmp/playdate-sdk.tar.gz --strip-components=1 -C "$HOME/PlaydateSDK"
         env:
-          PLAYDATE_SDK_VERSION: '3.1.1'
+          PLAYDATE_SDK_VERSION: '3.1.2'
 
       # Fails loudly if detection found nothing, and prints which source won.
       # First because everything after it depends on the answer, and because a
@@ -199,7 +212,7 @@ jobs:
           unzip -q /tmp/sdk.zip -d /tmp/sdk
           sudo installer -pkg /tmp/sdk/PlaydateSDK.pkg -target /
         env:
-          PLAYDATE_SDK_VERSION: '3.1.1'
+          PLAYDATE_SDK_VERSION: '3.1.2'
 
       # Fails loudly if detection found nothing, and prints which of the three
       # sources won. A detection regression is the failure this job most needs

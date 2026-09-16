@@ -950,9 +950,36 @@ asking "yet?" instead of being told.
   Windows has **no `~/.Playdate/config` at all**, so resolution there falls
   straight through to guessed directories - that key is the natural Windows
   equivalent of the config file and a better second source than guessing. And
-  promoting Windows is not one line in the release workflow's build matrix: the
-  plugin's launcher is bash and is written to refuse on MSYS/MINGW, so a Windows
-  asset needs a launcher story before it needs a build target.
+  promoting Windows is not one line in the release workflow's build matrix.
+
+  **The order matters, and the launcher is the third step rather than the first.**
+  It is tempting to look at `plugin/bin/open-crank-mcp-launcher` being bash and
+  conclude that is what excludes Windows. It is not. The binding constraint today
+  is that the release matrix publishes `linux/amd64` and both darwin arches and
+  nothing else, so there is no Windows asset for any launcher to fetch. Rewriting
+  the launcher in something portable before that changes would buy nothing.
+
+  So: verify the native Windows path by running it, then add `windows/amd64` to
+  the matrix, and only then does the launcher need solving.
+
+  **And the launcher step is the hard one, for a reason worth knowing in advance.**
+  An MCP server's `command` is a single token, in both Claude Code's schema and
+  agent-plugins.org 1.0.0, with no per-platform selection - so a plugin cannot ship
+  `launcher` for Unix and `launcher.cmd` for Windows and have the client pick. The
+  bash-plus-`.cmd` pair that would be the obvious answer has nowhere to be declared.
+
+  The way out is probably to stop self-downloading on Windows and instead name a
+  bare executable resolved on `PATH`, which the portable spec explicitly permits,
+  with a documented install step behind it (scoop, winget, or a downloaded `.exe`).
+  That is a real trade rather than a detail: the plugin exists to remove the install
+  step, and this puts it back for one platform. Two launchers with different
+  contracts, or one platform that installs differently from the other two, are both
+  worse than they sound. Whoever picks this up should decide that question before
+  writing any code, because it determines whether there is a launcher on Windows at
+  all.
+
+  Note also that container mode already serves these users through WSL2, which is
+  why none of this is urgent.
 
   Done when the `fstest` suite passes under `go-build-cross`, `make sdk-path`
   names both the resolved SDK and which source found it, `make
@@ -1567,3 +1594,121 @@ asking "yet?" instead of being told.
   COVERED, while `go tool cover` reports the function 100% covered. Applying that
   mutant by hand fails two tests, so the branch is covered and gremlins is
   mis-attributing coverage for a case in a tagless `switch`.
+- [x] **The plugin**: the server installs itself into an editor. No clone, no
+  `make`, no absolute path written into a config by hand - which was the whole
+  install story until now, and is documented correctly in `guides/connecting.md`
+  precisely because every path in it is per-machine.
+
+  **Four manifests, two MCP configs.** The portable pair (`plugin/plugin.json`,
+  `plugin/mcp.json`) is agent-plugins.org 1.0.0; `plugin/.claude-plugin/` and
+  `plugin/.cursor-plugin/` carry each client's own. The two MCP configs cannot be
+  one file, and an earlier draft of the plan claimed they could: the 1.0.0 spec
+  makes `type` required, does **not** interpolate `command`, and resolves a
+  `./`-relative command against the plugin root, none of which matches Claude
+  Code. Cursor expands `${CLAUDE_PLUGIN_ROOT}` and will follow a path into
+  `.claude-plugin/`, so it shares Claude Code's file rather than needing a third.
+
+  `plugin/mcp.json` deliberately has **no `cwd`**. Cursor's own documented Agent
+  Plugin example sets `"cwd": "${CURSOR_PLUGIN_ROOT}"`, which fails the 1.0.0
+  schema's `cwd` pattern outright, and `${PLUGIN_ROOT}` is not expanded by Cursor
+  - so omitting it is the only form both accept. Someone "fixing" this file by
+  following Cursor's docs is the expected way it breaks, which is why
+  `internal/plugincontract` asserts the key's absence and says so in the failure.
+
+  **The launcher's four non-negotiables** (`plugin/bin/open-crank-mcp-launcher`):
+  nothing on stdout ever, because the client is reading it as JSON-RPC and one
+  curl progress line corrupts the framing; `exec` rather than a child, because the
+  Simulator it manages ignores SIGTERM and a shell in between is a process that
+  can be signalled separately from the one holding the pipes; no plugin-root
+  variable, because the spike measured that *no* client exports one into the
+  server's environment, so the root comes from argv0 with symlinks resolved; and
+  `bash` + `curl` + `sha256sum` as the entire floor, since a hard dependency here
+  reaches the user as "server failed to connect" with the explanation on a
+  silenced stream.
+
+  **The asset name has one definition, and it is not in the launcher.** It
+  downloads `checksums.txt` - needed anyway for the integrity check - and selects
+  its own line by matching the end of the name against `_<goos>_<goarch>`. An
+  earlier draft had the launcher carry a copy of the format plus a check that the
+  copy still agreed, which is detecting drift rather than removing it. It also
+  produces a better failure: constructing a name and getting a 404 says nothing,
+  while zero matching lines says "this release publishes no binary for your
+  platform", which is true and is the correct answer on `linux/arm64`. Two guards:
+  exactly one match required, and the match anchored to the end of the name.
+
+  **Verification is two tiers that fail differently, on purpose.** The digest is
+  mandatory and proves the download arrived intact - not where it came from, since
+  `checksums.txt` travels the same channel as the asset. `gh attestation verify`
+  is the origin claim, and runs only if `gh` is installed: absent, it proceeds and
+  says so; present and failing, it refuses. A missing verifier must never be the
+  same outcome as a failed verification, and `scripts/run-launcher-tests.sh` has a
+  case for each because that is exactly the distinction a happy-path suite would
+  let collapse.
+
+  Those tests run against a fake release served over `file://`, which is what
+  `OPEN_CRANK_MCP_BASE_URL` exists for. Most of the launcher's branches are only
+  reachable when something has already gone wrong - a tampered download, a
+  release with no asset for this platform, an ambiguous one - and none of them
+  would otherwise be exercised before a user hit them. 32 checks, and stdout
+  silence is asserted on every one rather than in a test of its own, because it is
+  a property of every path including the failures.
+
+  **Two bugs the tests found before a user could.** `curl -sSL` exits **0** on a
+  404 and writes GitHub's error page into the output file, after which the
+  asset-name scan found no matching lines and reported "no binary for your
+  platform" - a confident, wrong diagnosis for "there is no such release". `-f`
+  fixes it. And the first version of the gh-absent test set `PATH` to
+  `/usr/bin:/bin`, where `gh` was, so "absent" silently tested the same thing as
+  "present": the suite now builds a sandbox `PATH` from exactly the tools the
+  launcher shells out to.
+
+  **A third bug `claude plugin validate` found, which nothing here would have.**
+  `hooks/hooks.json` had its entries flattened - `{"type","command"}` directly
+  under `SessionStart` rather than wrapped in a matcher carrying its own `hooks`
+  array. Every JSON parser accepts it, it installs, and it is then *ignored at
+  runtime*: the cache warm would simply never have run, and nothing would have
+  said so. `internal/plugincontract` asserts the matcher shape now, because
+  `claude` is not on a CI runner and the alternative is remembering to run
+  validate.
+
+  **The SessionStart hook is honest about what it is.** Spike item 5 measured the
+  MCP server being exec'd ~8ms *before* the hook begins, so it cannot pre-fetch
+  the binary the server is about to need. It warms the second session onward, and
+  goes cold again after every version bump. `guides/plugin.md` therefore states as
+  a documented first-run step, not a footnote, that the first session may show the
+  server failing to connect and that `/reload-plugins` fixes it - and suggests
+  running the doctor skill first, so the download happens somewhere the user is
+  watching it.
+
+  **Skills are the shared surface**, written once at `plugin/skills/`, read by
+  both plugin formats. There is no `commands/` directory: Claude Code's reference
+  says to use `skills/` for new plugins and the portable spec has no command
+  component at all, so one would be a file one client reads and the others ignore.
+  They name tools **bare** (`press_button`, not
+  `mcp__plugin_open-crank-mcp_open-crank-mcp__press_button`) because the spike
+  measured Claude Code namespacing plugin tools and Cursor exposing them bare -
+  hardcoding either form is wrong for the other client.
+
+  **OpenCode gets `-print-config` rather than a plugin.** It *has* plugins - TS/JS
+  modules from `@opencode-ai/plugin` - but its v1 API has no config or MCP hook,
+  so a plugin cannot register a server; that is a narrower claim than an earlier
+  draft's "OpenCode has no plugin format", which was simply wrong. The renderer
+  detects whether it is running from a release binary or a checkout and emits the
+  right command for each, because only the checkout case goes through the launcher
+  and only that case needs OpenCode's `timeout` raised above its 5000ms default -
+  which a cold first run does not fit in, on any machine.
+
+  **Schema validation is offline and pinned.** The 1.0.0 schemas are vendored at
+  `plugin/schemas/1.0.0/`; `make plugin-schema-check` fetches the live ones and
+  diffs them, weekly rather than per-PR, because an upstream revision is news
+  about someone else's release schedule and a PR should not go red for it - the
+  same reasoning `scripts/check-doc-links.sh` already applies to external URLs.
+
+  One wrinkle worth recording: `plugin.schema.json` constrains `name` with a
+  **negative lookahead**, which Go's RE2 cannot compile, so jsonschema-go refuses
+  to resolve the document and validates nothing at all. The vendored copy is not
+  edited; the single unsupported `pattern` key is dropped at load time and the
+  rule it expressed is asserted directly instead, by hand rather than with a
+  pattern, which `make no-regex` requires of Go here anyway. The strip is narrow
+  on purpose - one named key - so a future revision adding another unsupported
+  pattern fails loudly rather than being silently skipped.
