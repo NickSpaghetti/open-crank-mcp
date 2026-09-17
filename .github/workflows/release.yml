@@ -141,13 +141,8 @@ jobs:
         with:
           subject-checksums: dist/checksums.txt
 
-      # A tag with a hyphen in its version is a semver prerelease, and gh does not
-      # infer that - without --prerelease, v0.1.0-rc publishes as the latest stable
-      # release and anyone landing on the repo is offered a release candidate.
-      #
-      # Derived from the tag rather than set by hand, so cutting an rc and cutting a
-      # final are the same command and neither can be mislabelled by forgetting a
-      # flag.
+      # A hyphen in the version means a semver prerelease. gh does not infer it, so
+      # without --prerelease v0.1.0-rc would publish as the latest stable release.
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -159,4 +154,13 @@ jobs:
             *-*) prerelease="--prerelease" ;;
           esac
           echo "publishing $GITHUB_REF_NAME ${prerelease:-as a full release}"
-          gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag $prerelease
+
+          # Publishing a release in the UI creates the tag, which triggers this
+          # workflow - so the release can already exist. `view` rather than
+          # `create || upload`, so a bad token does not look like "already exists".
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME already exists; uploading assets to it"
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag $prerelease
+          fi

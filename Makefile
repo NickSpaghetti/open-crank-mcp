@@ -22,18 +22,9 @@ up-visual-wsl: build
 up-vnc: build
 	docker compose --profile vnc up simulator-vnc
 
-# Detached, unlike every other up* target. Stays running in the background
-# so an MCP client can attach to it separately afterward. See
-# guides/shared-session.md.
-#
-# GAME_DIR is checked here rather than in docker-compose.yml. A compose-level
-# `${GAME_DIR:?}` guard would also fire on `make down`, which parses the shared
-# profile too, so a missing var would block cleanup.
-# Builds its own service rather than depending on `build`. Plain
-# `docker compose build` skips every service that declares a profile, so
-# `build` only ever rebuilds `simulator`. Depending on it would leave a
-# stale shared-profile image in place after any edit to the Dockerfile or
-# run-vnc.sh.
+# Detached so an MCP client can attach later; see guides/shared-session.md.
+# GAME_DIR is checked here, not in compose, where the guard would fire on `make
+# down` too. Builds its own service: `docker compose build` skips profiles.
 up-shared: check-game-dir
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose --profile shared build simulator-shared
 	docker compose --profile shared up -d simulator-shared
@@ -60,25 +51,15 @@ smoke-check: build
 sdk-contract-check: build
 	docker compose run --rm simulator env OPEN_CRANK_SDK_CONTRACT=1 go test ./internal/contracttest/... -v
 
-# Recreates the container against the current GAME_DIR, then builds and launches
-# the game by driving the MCP server exactly as a client would. This is the one
-# command to reach for: GAME_DIR is fixed when the container starts, so a
-# container left over from another game would otherwise keep serving that game.
-#
-# Pass -keep-container to reuse a running one, which is faster and keeps the
-# volume slider and the VNC connection, at the cost of keeping whatever GAME_DIR
-# it started with:
-#   go run ./cmd/shared-load -keep-container
+# Recreates the container for the current GAME_DIR, then builds and launches by
+# driving the MCP server as a client would. GAME_DIR is fixed at container start,
+# so a leftover container keeps serving the old game. -keep-container reuses one.
 shared-load: check-game-dir
 	go run ./cmd/shared-load -compose-file $(CURDIR)/docker-compose.yml
 
-# Rebuilds and reloads on save, using the Simulator's own Ctrl-R, which
-# re-reads the .pdx from disk in the same process - so the display, the
-# container and your browser tab all stay put. The game restarts each time:
-# Reset is the only reload the SDK has.
-#
-# Piped in rather than run from the image, so editing the script takes effect
-# immediately instead of needing a rebuild.
+# Rebuild and reload on save via the Simulator's own Ctrl-R, so the display,
+# container and browser tab survive. The game still restarts - Reset is the only
+# reload the SDK has. Piped in so editing the script needs no rebuild.
 shared-watch:
 	docker compose exec -T simulator-shared bash -s < scripts/shared-watch.sh
 
@@ -87,14 +68,9 @@ shared-watch:
 test-shared-unit:
 	bash scripts/run-shared-unit-tests.sh
 
-# The plugin's manifests: that every one carrying a version agrees, that the
-# portable pair satisfies the published 1.0.0 schemas, and the handful of rules a
-# schema cannot express - no interpolation in the portable command, no cwd, no
-# component path declared at a location discovery already owns.
-#
-# Offline: the schemas are vendored at plugin/schemas/1.0.0. `go test ./...`
-# already runs these, in CI and in the pre-commit hook; this target exists for
-# discoverability, the same way mcp-schema-check does.
+# The plugin's manifests: versions agree, the portable pair satisfies the 1.0.0
+# schemas, plus the rules a schema cannot express. Offline - schemas are vendored
+# at plugin/schemas/1.0.0. `go test ./...` runs it; this is for discoverability.
 plugin-check:
 	go test ./internal/plugincontract
 
@@ -109,16 +85,13 @@ sdk-pin-check:
 	bash scripts/sdk-pin-check.sh
 
 # Boots the shared container against the in-repo Lua fixture and asserts the
-# workspace invariants: pages served, window manager configuration, where the
-# volume slider was found, and that clicking it works.
+# workspace invariants: pages, window manager, slider location, clicking it.
 shared-check:
 	bash scripts/shared-check.sh
 
-# The image tag must match the @playwright/test version in
-# tests/browser/package.json: the image is what carries the browsers, and the
-# package is what drives them. Node is the runtime because Playwright's test
-# runner requires it; Bun and Deno can drive playwright-core but not this
-# runner. It all lives in the container, so the host needs neither.
+# Tag must match @playwright/test in tests/browser/package.json: the image
+# carries the browsers, the package drives them. Node because the runner needs
+# it - Bun and Deno drive playwright-core but not this runner.
 PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.62.0-noble
 # Must match the default in scripts/shared-check.sh.
 CHECK_VNC_PORT ?= 6180
@@ -126,107 +99,54 @@ BROWSER_TESTS = docker run --rm --network host \
 	-v "$(CURDIR)/tests/browser:/work" -w /work $(PLAYWRIGHT_IMAGE) \
 	sh -c "npm install --no-audit --no-fund --loglevel=error >/dev/null &&
 
-# Typechecks the browser tests with tsgo, the Go port of tsc. Playwright's
-# runner transpiles TypeScript itself, so this is a check rather than a build
-# step, and nothing is emitted.
+# Typechecks the browser tests with tsgo. Playwright transpiles TypeScript
+# itself, so this is a check rather than a build step.
 test-shared-types:
 	$(BROWSER_TESTS) npx tsgo --noEmit"
 
-# Browser behaviour for the VNC pages: the scaling redirect, the hidden player,
-# and the mapping from a click on the Playdate's slider to the player's volume.
-# Host networking is how the container reaches port 6080.
-# SHARED_URL points the browser tests at the isolated container shared-check starts,
-# not at whatever is on the default port. The teardown names the same project, so
-# a shared container of your own survives a test run untouched.
+# Browser behaviour for the VNC pages. Host networking reaches port 6080, and
+# SHARED_URL points at the isolated container shared-check starts, so a shared
+# container of your own survives the run.
 test-shared-browser: test-shared-types
 	bash scripts/shared-check.sh --keep
 	$(BROWSER_TESTS) SHARED_URL=http://localhost:$(CHECK_VNC_PORT) npx playwright test"
 	COMPOSE_PROJECT_NAME=open-crank-mcp-check docker compose --profile shared down
 
-# Emits the binary, rather than just proving it compiles. An MCP client running
-# the server natively is configured with a path to this file, so a target that
-# writes nothing would leave those instructions pointing at nothing.
-#
-# ./cmd/open-crank-mcp, not ./... - the latter builds every package including
-# the two other commands, and discards all of it.
+# Emits the binary, not just a compile check: a native client is configured with
+# a path to this file. ./cmd/open-crank-mcp, not ./..., which discards its output.
 go-build:
 	go build -o open-crank-mcp ./cmd/open-crank-mcp
 
 go-test:
 	go test ./...
 
-# The tool surface every MCP client is served, as JSON.
-#
-# Regenerate after changing a tool's name, description or input/output types, and commit
-# the result: the diff in docs/mcp-schema.json is the point. A tool schema is the one
-# part of this server a client parses and validates before anything else, and when
-# read_save_data's changed shape underneath us (docs/GOTCHAS.md) it took out every tool
-# at once with nothing in the repo noticing.
-#
-# The generator is the test itself, run with -update. Deliberately not a separate
-# dumper command: two programs that both claim to produce this file can disagree, and
-# then the check passes while describing a surface nobody is served.
+# Regenerate after changing a tool's name, description or types, and commit it:
+# the diff in docs/mcp-schema.json is the point. The generator is the test with
+# -update, so nothing can produce a file disagreeing with what is served.
 mcp-schema:
 	go test ./internal/mcpcontract -update
 
-# Fails if docs/mcp-schema.json no longer matches what the server serves, and if any
-# schema is one a client would reject. Named for discoverability - `go test ./...`
-# already runs it, in CI and in .githooks/pre-commit, so drift cannot reach main
-# whether or not anyone remembers this target exists.
-#
-# CI verifies and never regenerates. A job that regenerated and committed this file
-# would remove the only thing it is for: a schema change appearing in a pull request
-# where a person sees it.
+# Fails if docs/mcp-schema.json drifts from what the server serves, or if a schema
+# is one a client would reject. CI verifies and never regenerates: the point is a
+# schema change appearing in a pull request where a person sees it.
 mcp-schema-check:
 	go test ./internal/mcpcontract
 
-# Specmatic's MCP auto-test: generates inputs from each tool's own declared schema, calls
-# it, and checks the response against the declared output schema. No spec file - it reads
-# tools/list off the running server - so there is nothing here that can drift.
-#
-# Needs Docker and the -http flag; see scripts/mcp-auto-test.sh for what it covers and,
-# more importantly, what it cannot. It has already earned its place once: it called
-# teardown with language "MIRMU", which is what a schema saying `type: string` asks for,
-# and that is how the closed sets came to declare JSON Schema enums instead of naming
-# their values in prose.
+# Specmatic generates inputs from each tool's declared schema and checks the
+# responses against it. No spec file - it reads tools/list off the running server
+# - so nothing can drift. See the script for what it does not cover.
 mcp-auto-test: go-build
 	bash scripts/mcp-auto-test.sh
 
-# Every relative Markdown link and heading anchor in the docs resolves.
-#
-# Added after the README was split into guides/: an extraction leaves phrases like "see
-# below" pointing at nothing, and a link whose target moved looks exactly like one whose
-# target did not. This cannot read prose, so it does not catch "see below" - what it
-# catches is the next step of the same mistake, a link written by hand with the wrong
-# path or a mis-slugged anchor. GitHub's anchor rules are not guessable
-# (`#any-os-universal-fallback-vnc--audio-stream` has a double hyphen where a `+`
-# vanished between two spaces), so nothing else here knows whether one is right.
-#
-# No network: external URLs are not fetched, so this passes on a plane and a dead
-# third-party link never blocks a commit.
+# Every relative Markdown link and heading anchor resolves. It cannot read prose,
+# so it catches a hand-written path or a mis-slugged anchor - GitHub's anchor
+# rules are not guessable. No network, so a dead external link never blocks you.
 check-doc-links:
 	bash scripts/check-doc-links.sh
 
-# Guards the no-regex rule (https://regexlicensing.org/).
-#
-# There is no allowlist, deliberately. An exemption mechanism is how a rule like
-# this rots: the first entry is always "just until the port lands", and the list
-# only ever grows. The port did land, so the rule is now absolute and the only
-# way to add a pattern is to argue for deleting this target.
-#
-# Why: a pattern reads a source file as a flat byte string, so it cannot tell
-# code from a comment or a string literal, and cannot be widened to accept
-# ordinary spacing without becoming unreadable. internal/setup hit both walls
-# patching real games - calls rewritten inside comments, a call inserted into a
-# commented-out branch where it never compiled, and legal C the patterns refused
-# outright. internal/scan holds the byte-level scanning that replaced them.
-#
-# Grep on the command line is fine. This is about patterns compiled into the
-# binary.
-#
-# Files come from git rather than a bare find, so a new file that is not
-# committed yet is still checked while an ignored working copy of the repo
-# (.claude/worktrees, a vendored tree) is not.
+# Guards the no-regex rule (https://regexlicensing.org/). No allowlist,
+# deliberately - an exemption list only ever grows. internal/scan holds the
+# byte-level scanning that replaced patterns; command-line grep is fine.
 no-regex:
 	@bad=$$(git ls-files --cached --others --exclude-standard '*.go' \
 		| xargs -r grep -lE '"regexp(/[a-z]+)?"' 2>/dev/null || true); \
@@ -238,17 +158,9 @@ no-regex:
 	fi; \
 	echo "no-regex: ok"
 
-# Builds for every platform the server is meant to run on, plus vet, without
-# needing any of them present. This is the only cross-platform claim provable
-# from one machine, so it is the gate that keeps native mode's per-OS code
-# honest between here and a real macOS install.
-#
-# windows is in this list even though Windows-native is unsupported (see
-# docs/ROADMAP.md). Keeping it compiling is cheap, and it is what makes
-# promoting Windows later additive rather than a rewrite. Note the limit of
-# what this proves: it catches a construct that does not exist on a platform,
-# not one that exists and behaves differently. internal/simulator's Exited()
-# was exactly the second kind.
+# Builds and vets every supported platform from one machine - the only
+# cross-platform claim provable here. windows is included though unsupported, to
+# keep it compiling. Catches a missing construct, not one that behaves differently.
 CROSS_PLATFORMS = linux darwin windows
 
 go-build-cross:
@@ -259,52 +171,18 @@ go-build-cross:
 		echo 'build + vet ok'; \
 	done
 
-# Mutation testing: gremlins changes the code in small ways and checks the test
-# suite notices. Catches tests that execute a line without asserting anything
-# about it, which coverage alone reports as covered.
-#
-# Run through `go run` with a pinned version rather than installed, so there is
-# nothing to set up on the host and no way for a local run to drift from CI.
-# Keep this version matching the one in .github/workflows/ci.yml. Thresholds and
-# the exclude list live in .gremlins.yaml.
+# gremlins changes the code and checks the tests notice, catching lines that run
+# without being asserted on. Pinned via `go run` so a local run cannot drift from
+# CI - keep in step with ci.yml. Thresholds and excludes in .gremlins.yaml.
 GREMLINS_VERSION ?= v0.6.0
 
 mutation-test:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash
 
-# The same run, split in two, for CI. The split is not about making the run
-# shorter - it is about how much a hung mutant costs.
-#
-# Gremlins sizes its per-mutant timeout from how long the test suite takes in
-# whatever scope it was given. Those two scopes are nowhere near each other:
-#
-#   whole module      12.02s baseline  ->  60s per hang (coefficient 5)
-#   ./internal/scan    0.62s baseline  ->   3s per hang
-#
-# internal/scan is byte-loop code, and about six of its mutants hang rather than
-# fail - flip a comparison and the loop stops advancing. Run as part of the
-# whole module, each of those pinned a worker for a minute running a hung
-# whole-module test binary, and with two workers a cluster of them left the job
-# making no progress for minutes at a time. That is the state the runner died
-# in, reporting "the runner has received a shutdown signal". All four failures
-# were while mutating internal/scan. Scoped to the package, the same six hangs
-# cost about three seconds each.
-#
-# Ruled out first, each measured rather than assumed: memory (3.6GB peak), CPU
-# (completes pinned to four cores), disk (926MB of build cache), and the run's
-# length - the half without internal/scan runs 189s and passes, longer than any
-# failure managed.
-#
-# Worth knowing if you try to reproduce this locally and cannot: a warm build
-# cache puts the whole-module baseline at ~0.09s instead of CI's 12s, so the
-# timeout budget is well under a second and every hang dies instantly. The
-# mutants that hang show up as harmless TIMED OUT lines and the run completes.
-# The bug only exists on a cold cache.
-#
-# The second config is derived from .gremlins.yaml rather than copied, so the
-# exclude list and the thresholds cannot drift apart. Deriving it is worth the
-# sed: the excludes are load-bearing, and a stale copy of them shows up as a
-# coverage failure nobody can explain.
+# Split in two for CI, not for speed: gremlins sizes its per-mutant timeout from
+# the scope's baseline, so internal/scan's hanging byte-loop mutants cost ~60s
+# each whole-module and ~3s scoped. mutation-test-rest derives its config from
+# .gremlins.yaml so the excludes cannot drift.
 mutation-test-scan:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash ./internal/scan
 
@@ -314,18 +192,9 @@ mutation-test-rest:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash . --config $$tmp; \
 	status=$$?; rm -f $$tmp; exit $$status
 
-# Mutation testing restricted to what changed against a ref, for the pre-commit
-# hook. Around 1-5s instead of 33s, because it only mutates the lines in the
-# diff.
-#
-# Not a replacement for `mutation-test`: a change can weaken a test for code it
-# does not touch, and only the full run sees that. This is the fast local check;
-# CI still runs the whole thing.
-#
-# The exit-code handling is the awkward part. gremlins reports "no mutants at
-# all" as 0.00% efficacy and fails the threshold, so a commit that touches no Go
-# code - or only comments - would fail for having nothing to test. Treat an
-# all-skipped run as the pass it is.
+# Only the lines changed against a ref, for the pre-commit hook. Not a
+# replacement for the full run, which sees tests weakened for untouched code.
+# An all-skipped run is a pass: gremlins reports "no mutants" as 0% efficacy.
 MUTATION_DIFF_REF ?= HEAD
 
 mutation-test-diff:
@@ -337,53 +206,33 @@ mutation-test-diff:
 	fi; \
 	exit $$rc
 
-# Points git at the tracked hooks in .githooks. Not a copy into .git/hooks: a
-# copy goes stale the moment the tracked hook changes, and nothing tells you.
-# core.hooksPath always runs what is in the repo.
-#
-# Opt-in rather than automatic, because git has no way to enable a hook on
-# clone, and a repo that silently starts running a two-minute suite on every
-# commit would be a surprise worth avoiding.
+# Points core.hooksPath at .githooks rather than copying into .git/hooks, where a
+# copy goes stale silently. Opt-in: git cannot enable a hook on clone, and a
+# surprise two-minute suite on every commit is not a good greeting.
 hooks:
 	git config core.hooksPath .githooks
 	@echo "pre-commit hook enabled. Bypass a single commit with --no-verify."
 	@echo "disable with: git config --unset core.hooksPath"
 
-# Prints the SDK internal/sdk would resolve, and which of the three sources
-# found it. The first thing to reach for when detection picks the wrong SDK, or
-# picks none: it turns an invisible decision into one line.
+# Prints the SDK internal/sdk resolves and which source found it. The first thing
+# to reach for when detection picks the wrong SDK, or none.
 sdk-path:
 	@go run ./cmd/sdk-path
 
-# The native counterparts of smoke-check and sdk-contract-check: same subject,
-# no container. `-native` is a suffix rather than a prefix so `make smoke-check`
-# keeps meaning what it always did, and so tab completion groups by subject.
-#
-# Both need an SDK on this machine. OPEN_CRANK_SDK_CONTRACT is what tells the
-# contract tests they are wanted; without it they skip, which is what keeps them
-# from failing on a host that happens to have PLAYDATE_SDK_PATH set but no
-# display.
+# Native counterparts of smoke-check and sdk-contract-check: same subject, no
+# container. Both need a host SDK. OPEN_CRANK_SDK_CONTRACT opts the contract
+# tests in; without it they skip, so a host with no display does not fail.
 smoke-check-native:
 	go run ./cmd/smoke-check
 
 sdk-contract-check-native:
 	OPEN_CRANK_SDK_CONTRACT=1 go test ./internal/contracttest/... -v
 
-# Everything, ordered so it fails as fast as it can. The three host-only suites
-# run first: a broken parser or a Go typo then fails in seconds instead of
-# after several minutes of container boots.
-#
-# test-shared-browser stands in for both test-shared-types and shared-check
-# rather than duplicating them. It declares the typecheck as a prerequisite,
-# and it runs shared-check.sh --keep, where --keep only skips the teardown -
-# every assertion in that script still runs and still decides the exit status.
-# Listing shared-check here too would boot a second container to repeat two
-# dozen checks that had just passed.
-#
-# Sequential $(MAKE) calls rather than prerequisites, because prerequisites are
-# fair game for `make -j` to run concurrently and these suites cannot overlap:
-# they each want Docker, and shared-check and test-shared-browser share one
-# fixed port and one compose project name.
+# Everything, host-only suites first so a Go typo fails in seconds rather than
+# after several container boots. test-shared-browser already runs both
+# test-shared-types and shared-check, so neither is listed again. Sequential
+# $(MAKE) calls, not prerequisites, because `make -j` would overlap suites that
+# share Docker, a port and a compose project name.
 test:
 	$(MAKE) no-regex
 	$(MAKE) check-doc-links
