@@ -1,19 +1,31 @@
 {
   "name": "open-crank-mcp",
+  "displayName": "Open Crank MCP",
+  "version": "0.1.0-rc",
+  "minClientVersions": {
+    "cursor": "3.13.0"
+  },
   "description": "Drive the Playdate Simulator from an agent: see the screen, press buttons, turn the crank, read game state and logs.",
-  "version": "0.1.0",
   "author": {
     "name": "Nick Spaghetti"
   },
   "homepage": "https://github.com/NickSpaghetti/open-crank-mcp",
   "repository": "https://github.com/NickSpaghetti/open-crank-mcp",
   "license": "MIT",
+  "logo": "assets/icons/dim/open-crank-mcp-dim-192.png",
   "keywords": [
     "playdate",
     "simulator",
     "mcp",
     "playtesting",
     "gamedev"
+  ],
+  "category": "developer-tools",
+  "tags": [
+    "playdate",
+    "simulator",
+    "mcp",
+    "playtesting"
   ],
   "mcpServers": "./.cursor-plugin/mcp.json"
 }

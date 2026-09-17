@@ -120,6 +120,19 @@ for file in "${files[@]}"; do
 
     [ -n "$anchor" ] || continue
 
+    # GitHub's theme suffixes are not anchors. Appending #gh-light-mode-only or
+    # #gh-dark-mode-only to an image URL is how GitHub decides which of a pair to
+    # show under a light or dark theme, documented in their 2022-05-19 changelog.
+    # They land on a .png, so the non-Markdown check below would otherwise reject
+    # the one supported way to ship a theme-aware logo.
+    #
+    # The file itself still has to exist - that check already ran above, and it is
+    # the half worth keeping, since a mistyped path here is an image that silently
+    # fails to render for half your readers and looks fine to whoever added it.
+    case "$anchor" in
+      gh-light-mode-only | gh-dark-mode-only) continue ;;
+    esac
+
     case "$resolved" in
       *.md) ;;
       *) report "$file: link target '$target' names an anchor on a non-Markdown file"

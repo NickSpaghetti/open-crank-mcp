@@ -231,3 +231,41 @@ func TestMarketplacePointsAtTheRealPlugin(t *testing.T) {
 		}
 	}
 }
+
+// A declared logo must exist, and it must resolve from the *plugin* root.
+//
+// Cursor turns a relative logo path into a raw.githubusercontent.com URL built
+// from the repository and commit SHA, so a path that is wrong or missing does not
+// fail at install - it produces a listing with a broken image, discovered by
+// whoever looks at the marketplace. Its submission checklist requires "all paths
+// in manifest are relative and valid (no `..`, no absolute paths)".
+//
+// The base is the plugin directory, not the repository root, which is the detail
+// worth pinning: this plugin lives in a subdirectory, so `assets/logo.png` means
+// plugin/assets/logo.png. An earlier plan put it at the repository root, where it
+// would have resolved to a URL with nothing behind it.
+func TestDeclaredLogoExistsUnderThePluginRoot(t *testing.T) {
+	for _, manifest := range []string{
+		"plugin/.cursor-plugin/plugin.json",
+		"plugin/plugin.json",
+	} {
+		logo, _ := readJSON(t, manifest)["logo"].(string)
+		if logo == "" {
+			continue // optional; the checklist says "if provided"
+		}
+		if strings.HasPrefix(logo, "http://") || strings.HasPrefix(logo, "https://") {
+			continue // absolute URLs are explicitly accepted, and not ours to check
+		}
+		if strings.HasPrefix(logo, "/") || strings.Contains(logo, "..") {
+			t.Errorf("%s declares logo %q; the path must be relative with no \"..\"",
+				manifest, logo)
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(repoRoot, "plugin", logo)); err != nil {
+			t.Errorf("%s declares logo %q, which does not exist at plugin/%s. "+
+				"Cursor resolves it against the plugin root and serves it from "+
+				"raw.githubusercontent.com, so a missing file is a broken image in the "+
+				"marketplace listing rather than a failed install.", manifest, logo, logo)
+		}
+	}
+}

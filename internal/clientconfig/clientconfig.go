@@ -21,34 +21,6 @@ import (
 	"strings"
 )
 
-// Invocation is how a client should start this server.
-type Invocation struct {
-	// Argv is the command, already absolute.
-	Argv []string
-
-	// Resolves is true when Argv names the plugin launcher rather than a server
-	// binary - meaning the first run for a version downloads before it serves.
-	//
-	// It exists to decide one field, and only OpenCode has that field. See
-	// openCodeTimeoutMS.
-	Resolves bool
-}
-
-// openCodeTimeoutMS is what OpenCode's `timeout` is set to when the command
-// resolves a binary before serving.
-//
-// OpenCode defaults this to 5000 ms. A cold first run downloads about 10 MB, so
-// the default does not merely risk a timeout - it guarantees one, on every
-// machine, on the first run after install or after a version bump. This is the
-// same first-run problem Claude Code has; OpenCode's answer is a number in a
-// config file rather than a hook, and this is the only place that number can be
-// got right on the user's behalf.
-//
-// Not emitted when the command is a plain binary: there is nothing to resolve,
-// the default is fine, and a raised timeout there would be a number nobody can
-// explain.
-const openCodeTimeoutMS = 120000
-
 // Clients returns the client names Render accepts, for a usage message.
 func Clients() []string {
 	out := make([]string, 0, len(renderers))
@@ -59,23 +31,24 @@ func Clients() []string {
 	return out
 }
 
-var renderers = map[string]func(Invocation) (string, error){
+var renderers = map[string]func([]string) (string, error){
 	"opencode": renderOpenCode,
 	"claude":   renderClaude,
 	"cursor":   renderCursor,
 }
 
-// Render produces the block for one client.
-func Render(client string, inv Invocation) (string, error) {
+// Render produces the block for one client. argv is the command a client should
+// run, already absolute.
+func Render(client string, argv []string) (string, error) {
 	render, ok := renderers[client]
 	if !ok {
 		return "", fmt.Errorf("unknown client %q; known clients are %s",
 			client, strings.Join(Clients(), ", "))
 	}
-	if len(inv.Argv) == 0 {
+	if len(argv) == 0 {
 		return "", fmt.Errorf("no command to render for %q", client)
 	}
-	return render(inv)
+	return render(argv)
 }
 
 // encode renders a config as indented JSON with a trailing newline, so the
@@ -93,14 +66,17 @@ func encode(v any) (string, error) {
 // called `environment` rather than `env`, it is declared `type: "local"`, and it
 // has a timeout that has to be raised. Each one is an easy thing to get subtly
 // right-looking and wrong.
-func renderOpenCode(inv Invocation) (string, error) {
+func renderOpenCode(argv []string) (string, error) {
+	// No `timeout`. OpenCode defaults it to 5000ms, and the command here is a
+	// server binary that starts immediately - the install-server skill has already
+	// put it in place. An earlier design had the MCP command resolve and download
+	// a binary on first use, which did not fit in that default and so needed the
+	// timeout raised; nothing resolves at start-up now, and emitting a number whose
+	// reason no longer applies would be cargo cult.
 	server := map[string]any{
 		"type":        "local",
-		"command":     inv.Argv,
+		"command":     argv,
 		"environment": map[string]any{},
-	}
-	if inv.Resolves {
-		server["timeout"] = openCodeTimeoutMS
 	}
 	return encode(map[string]any{
 		"$schema": "https://opencode.ai/config.json",
@@ -110,13 +86,13 @@ func renderOpenCode(inv Invocation) (string, error) {
 
 // Claude Code and Cursor share a shape: a command string plus an args array, and
 // no type discriminator - stdio is inferred from the presence of `command`.
-func renderCommandAndArgs(inv Invocation) map[string]any {
-	server := map[string]any{"command": inv.Argv[0]}
-	if len(inv.Argv) > 1 {
-		server["args"] = inv.Argv[1:]
+func renderCommandAndArgs(argv []string) map[string]any {
+	server := map[string]any{"command": argv[0]}
+	if len(argv) > 1 {
+		server["args"] = argv[1:]
 	}
 	return map[string]any{"mcpServers": map[string]any{"open-crank-mcp": server}}
 }
 
-func renderClaude(inv Invocation) (string, error) { return encode(renderCommandAndArgs(inv)) }
-func renderCursor(inv Invocation) (string, error) { return encode(renderCommandAndArgs(inv)) }
+func renderClaude(argv []string) (string, error) { return encode(renderCommandAndArgs(argv)) }
+func renderCursor(argv []string) (string, error) { return encode(renderCommandAndArgs(argv)) }

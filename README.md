@@ -1,3 +1,15 @@
+<div align="center">
+
+[![CI](https://img.shields.io/github/actions/workflow/status/NickSpaghetti/open-crank-mcp/ci.yml?style=flat-square&label=CI)](https://github.com/NickSpaghetti/open-crank-mcp/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/NickSpaghetti/open-crank-mcp?style=flat-square&label=RELEASE)](https://github.com/NickSpaghetti/open-crank-mcp/releases)
+[![License](https://img.shields.io/github/license/NickSpaghetti/open-crank-mcp?style=flat-square&label=LICENSE)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/NickSpaghetti/open-crank-mcp?style=flat-square&label=STARS)](https://github.com/NickSpaghetti/open-crank-mcp/stargazers)
+[![Forks](https://img.shields.io/github/forks/NickSpaghetti/open-crank-mcp?style=flat-square&label=FORKS)](https://github.com/NickSpaghetti/open-crank-mcp/forks)
+[![Issues](https://img.shields.io/github/issues/NickSpaghetti/open-crank-mcp?style=flat-square&label=ISSUES)](https://github.com/NickSpaghetti/open-crank-mcp/issues)
+
+![](plugin/assets/icons/dim/open-crank-mcp-dim-128.png#gh-light-mode-only)
+![](plugin/assets/icons/sunlight/open-crank-mcp-sunlight-128.png#gh-dark-mode-only)
+
 # open-crank-mcp
 
 An MCP server for the Playdate Simulator. Lets an AI agent see the screen,
@@ -5,6 +17,8 @@ press buttons, turn the crank, and read game state and logs, so it can
 playtest and debug a game instead of only reading source code.
 
 Works with Lua, C, or a mix of both.
+
+</div>
 
 ## Guides
 
