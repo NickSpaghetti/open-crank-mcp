@@ -1599,6 +1599,43 @@ asking "yet?" instead of being told.
   install story until now, and is documented correctly in `guides/connecting.md`
   precisely because every path in it is per-machine.
 
+  **Superseded in part, and corrected here rather than left to mislead: there is
+  no launcher.** This entry was written against a design where
+  `plugin/bin/open-crank-mcp-launcher`, a bash script, was the command the client
+  spawned - it resolved a binary, downloaded and verified one if needed, and
+  `exec`ed it. Before merge that was replaced by `plugin/skills/install-server`,
+  an explicitly user-invoked skill that performs the same fetch once, and MCP
+  configs that name the installed binary directly:
+  `${CLAUDE_PLUGIN_DATA}/bin/open-crank-mcp` for Claude Code, a bare
+  `open-crank-mcp` on `PATH` for the portable and Cursor configs. The
+  `SessionStart` hook went with it.
+
+  Why the swap is the better trade, since the reasoning outlives either design.
+  The launcher put a download on the critical path of *starting an MCP server* -
+  a path where stdout must stay silent because the client is reading it as
+  JSON-RPC, so its failures arrive as "server failed to connect" with the
+  explanation on a stream nobody sees. Spike item 5 had already established that
+  nothing could pre-warm it: the server is exec'd ~8ms before the `SessionStart`
+  hook begins, so the first run after install or after a version bump was always
+  going to fail once and need `/reload-plugins`. Moving the fetch to a skill the
+  user runs deliberately turns that guaranteed first-run failure into an ordinary
+  install step, with its output somewhere a person is actually looking.
+
+  It costs the thing the launcher was good at: resolution was automatic, and now
+  it is a step someone has to know to take. That is why the skill's description
+  says to run it after installing *and* after the plugin updates, why
+  `guides/plugin.md` leads with it, and why the MCP server failing before it has
+  run is documented as expected rather than as a bug.
+
+  What carried over is every constraint the launcher had discovered, now as
+  instructions in the skill rather than as bash: the version comes from
+  `plugin.json` and is never guessed, the asset name is read out of
+  `checksums.txt` rather than constructed, the digest check is mandatory and the
+  `gh attestation verify` check is opportunistic-but-fatal-on-failure, and the
+  binary is moved into place only after every check passes. The paragraphs below
+  describe how the launcher did those things and why; the reasoning is the part
+  worth keeping.
+
   **Four manifests, two MCP configs.** The portable pair (`plugin/plugin.json`,
   `plugin/mcp.json`) is agent-plugins.org 1.0.0; `plugin/.claude-plugin/` and
   `plugin/.cursor-plugin/` carry each client's own. The two MCP configs cannot be
@@ -1615,7 +1652,8 @@ asking "yet?" instead of being told.
   following Cursor's docs is the expected way it breaks, which is why
   `internal/plugincontract` asserts the key's absence and says so in the failure.
 
-  **The launcher's four non-negotiables** (`plugin/bin/open-crank-mcp-launcher`):
+  **The launcher's four non-negotiables**, for the record, since three of them are
+  now the skill's problem instead:
   nothing on stdout ever, because the client is reading it as JSON-RPC and one
   curl progress line corrupts the framing; `exec` rather than a child, because the
   Simulator it manages ignores SIGTERM and a shell in between is a process that
@@ -1626,8 +1664,8 @@ asking "yet?" instead of being told.
   reaches the user as "server failed to connect" with the explanation on a
   silenced stream.
 
-  **The asset name has one definition, and it is not in the launcher.** It
-  downloads `checksums.txt` - needed anyway for the integrity check - and selects
+  **The asset name has one definition, and it is not in whatever fetches it.** The
+  fetcher downloads `checksums.txt` - needed anyway for the integrity check - and selects
   its own line by matching the end of the name against `_<goos>_<goarch>`. An
   earlier draft had the launcher carry a copy of the format plus a check that the
   copy still agreed, which is detecting drift rather than removing it. It also
@@ -1671,7 +1709,8 @@ asking "yet?" instead of being told.
   `claude` is not on a CI runner and the alternative is remembering to run
   validate.
 
-  **The SessionStart hook is honest about what it is.** Spike item 5 measured the
+  **The SessionStart hook, now removed along with the launcher it warmed.** It was
+  honest about what it was. Spike item 5 measured the
   MCP server being exec'd ~8ms *before* the hook begins, so it cannot pre-fetch
   the binary the server is about to need. It warms the second session onward, and
   goes cold again after every version bump. `guides/plugin.md` therefore states as
@@ -1692,11 +1731,19 @@ asking "yet?" instead of being told.
   **OpenCode gets `-print-config` rather than a plugin.** It *has* plugins - TS/JS
   modules from `@opencode-ai/plugin` - but its v1 API has no config or MCP hook,
   so a plugin cannot register a server; that is a narrower claim than an earlier
-  draft's "OpenCode has no plugin format", which was simply wrong. The renderer
-  detects whether it is running from a release binary or a checkout and emits the
-  right command for each, because only the checkout case goes through the launcher
-  and only that case needs OpenCode's `timeout` raised above its 5000ms default -
-  which a cold first run does not fit in, on any machine.
+  draft's "OpenCode has no plugin format", which was simply wrong. It emits this
+  binary's own resolved path, through `EvalSymlinks` so that a config does not name
+  a link the next install replaces.
+
+  It used to do more, and the removal belongs with the launcher's. The renderer
+  detected whether it was running from a release binary or from a checkout and
+  emitted a launcher path for the latter, along with OpenCode's `timeout` raised
+  above its 5000ms default - which a cold first run could not fit in. With nothing
+  resolving at start-up the default is correct, so `Invocation.Resolves`, the
+  raised timeout, the detection and its two override flags all went: a branch that
+  could never be taken, and flags that could never do anything.
+  `TestOpenCodeEmitsNoTimeout` now asserts the absence, so reinstating the number
+  without reinstating its reason fails.
 
   **Schema validation is offline and pinned.** The 1.0.0 schemas are vendored at
   `plugin/schemas/1.0.0/`; `make plugin-schema-check` fetches the live ones and

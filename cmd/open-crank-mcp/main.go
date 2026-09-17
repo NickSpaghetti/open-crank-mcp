@@ -39,13 +39,6 @@ func main() {
 	printConfig := flag.String("print-config", "",
 		"print the MCP config block for a client ("+strings.Join(clientconfig.Clients(), ", ")+
 			") and exit")
-	// A wrong guess about how the user got this binary would be silent, and the
-	// override costs one flag.
-	configLauncher := flag.Bool("print-config-launcher", false,
-		"with -print-config, always emit the plugin launcher's path")
-	configBinary := flag.Bool("print-config-binary", false,
-		"with -print-config, always emit this binary's own path")
-
 	doctorLaunch := flag.Bool("doctor-launch", false,
 		"with -doctor, also start the Simulator to see whether it stays up. "+
 			"Off by default because it puts a window on your desktop.")
@@ -76,7 +69,7 @@ func main() {
 	}
 
 	if *printConfig != "" {
-		if err := emitClientConfig(*printConfig, *configLauncher, *configBinary); err != nil {
+		if err := emitClientConfig(*printConfig); err != nil {
 			fmt.Fprintf(os.Stderr, "open-crank-mcp: %v\n", err)
 			os.Exit(1)
 		}
@@ -130,15 +123,20 @@ func main() {
 
 // emitClientConfig writes one client's MCP config block to stdout.
 //
-// The shell around internal/clientconfig, which holds the rendering and the
-// detection so both can be tested. os.Executable is resolved through
-// EvalSymlinks because a cached binary may be reached through a link, and a
-// config naming the link would break the moment it was replaced.
-func emitClientConfig(client string, forceLauncher, forceBinary bool) error {
-	if forceLauncher && forceBinary {
-		return fmt.Errorf("-print-config-launcher and -print-config-binary contradict each other")
-	}
-
+// The shell around internal/clientconfig, which holds the rendering so it can be
+// tested. The command emitted is this binary's own resolved path: whoever is
+// running -print-config already has the server, and naming it absolutely is one
+// less thing for the user to get on their PATH.
+//
+// EvalSymlinks because the binary may be reached through a link - the
+// install-server skill puts it under the plugin's data directory - and a config
+// naming the link breaks the moment it is replaced.
+//
+// An earlier version detected whether it was running from a checkout and emitted
+// a plugin launcher's path instead, with flags to force either. There is no
+// launcher now, so that branch could never be taken and the flags could never do
+// anything.
+func emitClientConfig(client string) error {
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locating this binary: %w", err)
@@ -147,16 +145,7 @@ func emitClientConfig(client string, forceLauncher, forceBinary bool) error {
 		exe = resolved
 	}
 
-	inv := clientconfig.Detect(sdk.OSEnv(), exe)
-	switch {
-	case forceBinary:
-		inv = clientconfig.Invocation{Argv: []string{exe}}
-	case forceLauncher && !inv.Resolves:
-		return fmt.Errorf("-print-config-launcher was given, but no plugin launcher was "+
-			"found above %s", exe)
-	}
-
-	out, err := clientconfig.Render(client, inv)
+	out, err := clientconfig.Render(client, []string{exe})
 	if err != nil {
 		return err
 	}
