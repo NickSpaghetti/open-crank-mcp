@@ -13,7 +13,7 @@ import (
 	opencrank "github.com/NickSpaghetti/open-crank-mcp"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/clientconfig"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/doctor"
-	"github.com/NickSpaghetti/open-crank-mcp/internal/httpserve"
+	"github.com/NickSpaghetti/open-crank-mcp/internal/httpserver"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,7 +45,7 @@ func main() {
 
 	// -http is for contract testing. Specmatic's MCP auto-test only speaks
 	// STREAMABLE_HTTP; real clients use stdio. Loopback addresses only, enforced in
-	// internal/httpserve, since this server builds code and runs processes with no
+	// internal/httpserver, since this server builds code and runs processes with no
 	// authentication.
 	httpAddr := flag.String("http", "", "serve over Streamable HTTP on this loopback address "+
 		"(e.g. 127.0.0.1:8237) instead of stdio. For contract testing; MCP clients use stdio.")
@@ -101,14 +101,14 @@ func main() {
 	if *httpAddr != "" {
 		// Serve checks this too, but checking first avoids announcing an address we
 		// are about to refuse.
-		if err := httpserve.CheckLoopback(*httpAddr); err != nil {
+		if err := httpserver.CheckLoopback(*httpAddr); err != nil {
 			fmt.Fprintf(os.Stderr, "open-crank-mcp: -http %v\n", err)
 			os.Exit(1)
 		}
 		// Unlike stdio, nothing else tells you the server came up. stderr to match the
 		// stdio path, where stdout carries the protocol.
 		fmt.Fprintf(os.Stderr, "open-crank-mcp: serving MCP over Streamable HTTP on http://%s\n", *httpAddr)
-		if err := httpserve.Serve(context.Background(), server, *httpAddr); err != nil {
+		if err := httpserver.Serve(context.Background(), server, *httpAddr); err != nil {
 			log.Printf("http server failed: %v", err)
 			os.Exit(1)
 		}

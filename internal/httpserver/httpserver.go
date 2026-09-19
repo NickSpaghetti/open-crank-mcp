@@ -1,4 +1,4 @@
-// Package httpserve exposes an MCP server over Streamable HTTP instead of stdio.
+// Package httpserver exposes an MCP server over Streamable HTTP instead of stdio.
 //
 // stdio is what MCP clients use and stays the default. This exists because contract
 // testing tools speak HTTP and not stdio - Specmatic's MCP auto-test names
@@ -6,7 +6,7 @@
 // tool surface cannot be driven by anything but a client. The same server registration
 // backs both transports, which is what makes the HTTP endpoint a faithful stand-in
 // rather than a second surface that can drift from the real one.
-package httpserve
+package httpserver
 
 import (
 	"context"
