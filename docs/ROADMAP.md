@@ -1302,7 +1302,7 @@ asking "yet?" instead of being told.
   generates inputs from the declared schemas and validates responses against them - so
   the second-source-of-truth objection to it simply does not apply. What it does need is
   Streamable HTTP, hence an off-by-default `-http` flag serving the same `RegisterAll`
-  (loopback only, enforced in `internal/httpserve`: this server builds code and launches
+  (loopback only, enforced in `internal/httpserver`: this server builds code and launches
   processes and has no authentication).
 
   It earned its place twice over on the first run, which is the argument for the whole
