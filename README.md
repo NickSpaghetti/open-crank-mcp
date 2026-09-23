@@ -215,9 +215,12 @@ one fact drift.
 
 - The game directory is fixed when the container starts, so switching games means
   `make down` and a new `GAME_DIR`. See
-  [Two constraints that come with the container](guides/container-mode.md#two-constraints-that-come-with-the-container).
+  [Three constraints that come with the container](guides/container-mode.md#three-constraints-that-come-with-the-container).
 - Build output is written as root, because the container runs as root. Same section as
   above.
+- The image is always `linux/amd64`, since Panic ships no ARM64 Linux SDK, so an Apple
+  Silicon Mac or arm64 Linux host runs it under emulation and needs Rosetta or qemu
+  binfmt enabled. Same section as above.
 - Audio starts only when you click the Playdate's volume slider, because nothing in the
   SDK can set it and nothing can read it. See
   [Volume](guides/container-mode.md#volume).
