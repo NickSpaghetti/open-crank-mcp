@@ -118,7 +118,7 @@ func TestPortableMCPConfigIsSpecShaped(t *testing.T) {
 
 	// A bare executable name, resolved on PATH. The spec allows that or a
 	// plugin-relative "./" path; there is no file inside the plugin to point at
-	// since the server is downloaded by /open-crank-mcp:install-server, so the
+	// since the server is downloaded by /open-crank-mcp:ocm-install-server, so the
 	// bare form is the only one that can work here.
 	command, _ := entry["command"].(string)
 	if strings.ContainsAny(command, "/\\") {
@@ -145,7 +145,7 @@ func TestClaudeMCPConfigUsesAnAbsoluteInterpolatedCommand(t *testing.T) {
 	command, _ := mcpCommand(t, "plugin/.claude-plugin/mcp.json")["command"].(string)
 	if !strings.HasPrefix(command, "${CLAUDE_PLUGIN_DATA}/") {
 		t.Errorf("Claude Code's command is %q; it must be rooted at ${CLAUDE_PLUGIN_DATA}, "+
-			"which is where /open-crank-mcp:install-server writes the binary and which "+
+			"which is where /open-crank-mcp:ocm-install-server writes the binary and which "+
 			"survives plugin updates", command)
 	}
 }

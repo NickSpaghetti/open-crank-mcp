@@ -1603,7 +1603,7 @@ asking "yet?" instead of being told.
   no launcher.** This entry was written against a design where
   `plugin/bin/open-crank-mcp-launcher`, a bash script, was the command the client
   spawned - it resolved a binary, downloaded and verified one if needed, and
-  `exec`ed it. Before merge that was replaced by `plugin/skills/install-server`,
+  `exec`ed it. Before merge that was replaced by `plugin/skills/ocm-install-server`,
   an explicitly user-invoked skill that performs the same fetch once, and MCP
   configs that name the installed binary directly:
   `${CLAUDE_PLUGIN_DATA}/bin/open-crank-mcp` for Claude Code, a bare
@@ -1636,14 +1636,26 @@ asking "yet?" instead of being told.
   describe how the launcher did those things and why; the reasoning is the part
   worth keeping.
 
-  **Four manifests, two MCP configs.** The portable pair (`plugin/plugin.json`,
+  **Four manifests, three MCP configs.** The portable pair (`plugin/plugin.json`,
   `plugin/mcp.json`) is agent-plugins.org 1.0.0; `plugin/.claude-plugin/` and
-  `plugin/.cursor-plugin/` carry each client's own. The two MCP configs cannot be
-  one file, and an earlier draft of the plan claimed they could: the 1.0.0 spec
-  makes `type` required, does **not** interpolate `command`, and resolves a
-  `./`-relative command against the plugin root, none of which matches Claude
-  Code. Cursor expands `${CLAUDE_PLUGIN_ROOT}` and will follow a path into
-  `.claude-plugin/`, so it shares Claude Code's file rather than needing a third.
+  `plugin/.cursor-plugin/` carry each client's own. They cannot be one file, and an
+  earlier draft of the plan claimed they could: the 1.0.0 spec makes `type`
+  required, does **not** interpolate `command`, and resolves a `./`-relative
+  command against the plugin root, none of which matches Claude Code.
+
+  Cursor needs the third rather than sharing Claude Code's, which an earlier draft
+  of this paragraph got wrong. Deleting `plugin/.cursor-plugin/` makes Cursor fall
+  through to `.claude-plugin/mcp.json`, whose command is
+  `${CLAUDE_PLUGIN_DATA}/bin/open-crank-mcp`, and Cursor does not expand that
+  variable. Measured on cursor-agent 2026.09.10: as shipped, 19 tools and no
+  skills. With `.cursor-plugin/` deleted, one skill and no tools at all.
+
+  `plugin/.cursor-plugin/plugin.json` declares `"skills": "./skills"` because a
+  Cursor Plugin has no default skills location, and without that line Cursor finds
+  none of them. Claude Code is the opposite case, and
+  `TestClaudeManifestDeclaresNoDefaultComponentPaths` forbids the same key in its
+  manifest: a component declared at a path Claude Code already discovers makes the
+  plugin install cleanly and then fail to load.
 
   `plugin/mcp.json` deliberately has **no `cwd`**. Cursor's own documented Agent
   Plugin example sets `"cwd": "${CURSOR_PLUGIN_ROOT}"`, which fails the 1.0.0
@@ -1723,6 +1735,19 @@ asking "yet?" instead of being told.
   both plugin formats. There is no `commands/` directory: Claude Code's reference
   says to use `skills/` for new plugins and the portable spec has no command
   component at all, so one would be a file one client reads and the others ignore.
+  Their frontmatter carries only the six fields the Agent Skills spec allows. A
+  conforming client skips a skill carrying anything else rather than ignoring the
+  field, so `disable-model-invocation` on four of the five once cost every client
+  but Claude Code four skills. `ocm-install-server` was one of them, which left the
+  documented Cursor install with no way to fetch the binary and no way to diagnose
+  it. Claude Code reads that key only at the top level and ignores it under
+  `metadata`, so no layout satisfies both clients: the two skills that wanted it
+  were made portable instead, with the restraint moved into their descriptions.
+  `internal/plugincontract` asserts the six-field rule and the absence of
+  `$ARGUMENTS`, a Claude Code substitution with no portable equivalent.
+  `claude plugin validate --strict` reads the manifest and not the skills, so
+  nothing else catches either.
+
   They name tools **bare** (`press_button`, not
   `mcp__plugin_open-crank-mcp_open-crank-mcp__press_button`) because the spike
   measured Claude Code namespacing plugin tools and Cursor exposing them bare -
@@ -1746,7 +1771,7 @@ asking "yet?" instead of being told.
   without reinstating its reason fails.
 
   **Schema validation is offline and pinned.** The 1.0.0 schemas are vendored at
-  `plugin/schemas/1.0.0/`; `make plugin-schema-check` fetches the live ones and
+  `plugin/schemas/1.0.0/`; `make plugin-upstream-check` fetches the live ones and
   diffs them, weekly rather than per-PR, because an upstream revision is news
   about someone else's release schedule and a PR should not go red for it - the
   same reasoning `scripts/check-doc-links.sh` already applies to external URLs.

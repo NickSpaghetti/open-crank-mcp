@@ -9,10 +9,11 @@ same reasoning `scripts/check-doc-links.sh` already applies to external URLs —
 and a validation failure that means "the network was unavailable" trains people
 to ignore validation failures.
 
-The live copies are fetched and diffed against these by `make plugin-schema-check`
+The live copies are fetched and diffed against these by `make plugin-upstream-check`
 in the weekly sweep, which is where an upstream revision belongs: it is a signal
 about somebody else's schedule rather than about the pull request in front of
-you.
+you. The same job notices a newer spec version being published beside 1.0.0,
+which the diff alone cannot see.
 
 Do not edit them. If a diff shows upstream changed, take the new copy and fix
 whatever it now rejects.

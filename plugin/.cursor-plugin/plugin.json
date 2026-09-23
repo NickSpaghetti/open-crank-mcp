@@ -27,5 +27,6 @@
     "mcp",
     "playtesting"
   ],
-  "mcpServers": "./.cursor-plugin/mcp.json"
+  "mcpServers": "./.cursor-plugin/mcp.json",
+  "skills": "./skills"
 }

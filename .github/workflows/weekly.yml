@@ -44,15 +44,16 @@ jobs:
       - uses: actions/checkout@v7
       - run: make sdk-pin-check
 
-  # Upstream schema drift. The Agent Plugins 1.0.0 schemas are vendored at
-  # plugin/schemas/1.0.0 so per-PR validation is offline and deterministic; this
-  # is what notices when the published versions move away from them.
+  # Upstream drift, both kinds: the Agent Plugins schemas are vendored at
+  # plugin/schemas/ so per-PR validation is offline and deterministic, and this
+  # notices both the published copies moving away from them and a newer spec
+  # version being published beside them.
   #
   # Here rather than in ci.yml for the same reason the SDK sweep is: it reports
   # on somebody else's release schedule, and a pull request should not go red
   # because of one - or because a third-party site was briefly down.
-  plugin-schema-check:
+  plugin-upstream-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - run: make plugin-schema-check
+      - run: make plugin-upstream-check

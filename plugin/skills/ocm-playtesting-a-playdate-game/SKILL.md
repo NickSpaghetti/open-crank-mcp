@@ -1,5 +1,5 @@
 ---
-name: playtesting-a-playdate-game
+name: ocm-playtesting-a-playdate-game
 description: How to drive a Playdate game through the open-crank-mcp tools - the look/read/act/check loop, which input verb matches which intention, and how to tell that an input actually reached the game rather than merely reaching the harness. Use when playtesting, debugging or exploring a Playdate game in the Simulator.
 ---
 
