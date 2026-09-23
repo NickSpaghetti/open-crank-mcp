@@ -12,6 +12,11 @@
 #
 # When this fails, take the new copy and fix whatever it now rejects. Do not edit
 # the vendored files to make the diff go away.
+#
+# Needs jq and `sort -V`. macOS ships both in the base system from 15 on.
+# /usr/bin/jq is Apple's own build. The BSD sort macOS ships documents -V, which
+# is widely assumed to be GNU only. Earlier macOS has no system jq. Those
+# releases are not supported. 14 is EOL.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -799,3 +799,30 @@ before launching anything, rather than waiting only for the container to accept
 execs. And `launch_simulator` checks the process is still alive shortly after
 starting it, returning the captured output if it isn't, so the message that
 explains the failure reaches whoever asked.
+
+## Publishing a release from the UI skips the workflow's `--prerelease`
+
+`release.yml`'s publish step already knows a release can exist before it runs:
+creating one in the UI creates the tag, the tag push triggers the workflow, and
+the step uploads into the release rather than creating it. That path works, and
+it is the documented way to cut a release here.
+
+What does not carry over is the prerelease flag. `--prerelease` is an argument to
+`gh release create`, so it only applies on the branch that creates the release.
+On the upload branch nothing touches that setting, and the version string is
+never consulted. A hyphenated version published from the UI is therefore a full
+release unless the person clicking remembers to tick **Set as a pre-release**.
+
+It presents as a success, which is the problem. The run goes green, the binaries,
+`checksums.txt`, `LICENSE` and the attestation all land, and the release page
+looks right. The only visible symptom is the repository front page offering an
+`-rc` as Latest, and `gh release list` marking it so.
+
+The install path is unaffected, which is worth knowing before anyone panics:
+`plugin/skills/ocm-install-server` reads the version out of `plugin.json` and is
+told in as many words not to use `latest`, so it fetches the release the manifest
+names either way. The damage is to what a human browsing the repo is shown.
+
+Two ways to avoid it. Tick the box, or push the tag from the CLI and let the
+workflow create the release, where the `case` on `${GITHUB_REF_NAME#v}` sets the
+flag from the version and cannot forget.

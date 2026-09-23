@@ -25,7 +25,13 @@ set -uo pipefail
 # Files come from git rather than a bare find, so an uncommitted new guide is checked
 # while an ignored working copy (a worktree, a vendored tree) is not. Same reasoning as
 # the no-regex target.
-mapfile -t files < <(git ls-files --cached --others --exclude-standard '*.md')
+#
+# A read loop rather than `mapfile -t`: mapfile is bash 4.0+, and macOS ships bash 3.2.
+# NUL-delimited, so a path with a space in it survives.
+files=()
+while IFS= read -r -d '' file; do
+  files+=("$file")
+done < <(git ls-files -z --cached --others --exclude-standard '*.md')
 
 if [ "${#files[@]}" -eq 0 ]; then
   echo "check-doc-links: no Markdown files found; this should not happen" >&2

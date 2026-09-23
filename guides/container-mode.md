@@ -16,10 +16,10 @@ headless/automated use. Screenshots come from the Playdate API's real
 framebuffer, not a window capture. Headless mode covers every tool this
 server exposes.
 
-## Two constraints that come with the container
+## Three constraints that come with the container
 
-Neither has a fix; both are worth knowing before they surprise you. Native mode has
-neither.
+None has a fix; all are worth knowing before they surprise you. Native mode has
+none of them.
 
 **The game directory is fixed when the container starts.** It is a bind mount, chosen
 by `GAME_DIR` at `make up` time, so switching to a different game means `make down` and
@@ -30,6 +30,33 @@ root-owned `build/` and `.pdx` output inside your game directory, and `.shared-d
 root-owned too. Both are readable without `sudo`; deleting them needs `sudo`, or a
 `docker compose run --rm` doing the `rm` from inside a container. Natively everything is
 written as you.
+
+**The image is always `linux/amd64`, so an arm64 host emulates.** The SDK baked into
+these images is Panic's **Linux** SDK, and Panic ships that one for x86_64 only. There
+is no ARM64 Linux build, so there is nothing for an arm64 image to drive. Every service
+in `docker-compose.yml` pins the platform for that reason. On an amd64 host the pin
+costs nothing. On an Apple Silicon Mac or an arm64 Linux box, the whole container runs
+under emulation. That works but is slower. Expect the first `make build` to take
+several minutes, most of it fetching the SDK and the Go toolchain.
+
+This is a fact about the Linux SDK in the container, not about macOS. Panic ships the
+**macOS** SDK as a universal binary. `lipo -archs` on its `pdc` and its Simulator
+reports `x86_64 arm64`, so [native mode](native-mode.md) on an Apple Silicon Mac runs
+the Simulator natively and never touches Rosetta. On one Mac, container mode emulates
+and native mode does not. If the emulation overhead is what bothers you, native mode is
+the way around it.
+
+Emulation has to be available, or the container build fails outright:
+
+- **macOS (Apple Silicon):** turn on "Use Rosetta for x86_64/amd64 emulation on Apple
+  Silicon" in Docker Desktop's settings, General tab.
+- **Linux (arm64):** install qemu-user binfmt support, e.g.
+  `docker run --privileged --rm tonistiigi/binfmt --install amd64`.
+
+Without the pin, Docker builds an arm64 image while the Dockerfile installs the amd64 Go
+toolchain regardless, and the mismatch surfaces at the cgo step as
+`gcc: error: unrecognized command-line option '-m64'`. If you see that, you are on a
+compose file that predates the pin.
 
 ## Seeing and hearing it
 

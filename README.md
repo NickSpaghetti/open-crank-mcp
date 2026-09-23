@@ -77,16 +77,24 @@ the other.
 ## Status
 
 Checkpoints 1-11 done. Both modes work: the harnesses, the Go server, all the MCP
-tools, the container profiles, and native SDK detection with per-OS paths. Native
-mode is verified on Linux. macOS path values come from a probe on a real install
-rather than from running there; Windows-native is not supported, see below.
+tools, the container profiles, and native SDK detection with per-OS paths.
 
-The project has a version as of `0.1.0`, held in `plugin/plugin.json`, and a
-release workflow that publishes digest-pinned binaries for `linux/amd64`,
-`darwin/amd64` and `darwin/arm64` when a `v*` tag is pushed. Until a tag exists
-there is nothing to download and building from source is the only route, which is
-what the rest of this README describes. Packaging the server as an editor plugin
-is the work that builds on it, and is not landed yet.
+Native mode is verified by running on Linux. On macOS the toolchain and this
+repo's own checks are verified on 26.5.1, Apple Silicon, and the SDK path values
+come from a probe on a real install. A full native playtest there is not claimed.
+Windows-native is not supported, see below.
+
+The project is at `0.1.2-rc`, held in `plugin/plugin.json`. Pushing a `v*` tag
+publishes digest-pinned binaries for `linux/amd64`, `darwin/amd64` and
+`darwin/arm64`, so the
+[releases page](https://github.com/NickSpaghetti/open-crank-mcp/releases) is now
+the ordinary route and building from source is a choice.
+
+Editor-plugin packaging has landed. The plugin follows
+[Agent Plugins](https://agent-plugins.org) 1.0.0 and carries five skills, so
+Claude Code and Cursor both install the server and the guidance for driving it.
+See [installing as a plugin](guides/plugin.md). OpenCode gets a generated config
+instead, because its v1 plugin API cannot register a server.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for exactly what is built, what is
 verified and how, and what is left.
@@ -109,13 +117,73 @@ verified and how, and what is left.
   the `apt` line in the `native` job of
   [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which is kept correct
   because that job would fail otherwise. On Arch that is one package,
-  `webkit2gtk-4.1` from `extra`.
+  `webkit2gtk-4.1` from `extra`. macOS needs none of this.
+
+Which of those your machine already has differs by OS. See
+[Native requirements](#native-requirements).
 
 Windows-native is not supported yet: WSL2 covers Windows through container mode,
 so verifying the native path has not been a priority. Its layout values in
 `internal/sdk` are correct and covered by tests, so the code compiles and the
 logic is exercised on every platform. It is simply not verified by running, and
 promoting it is additive when someone gets to it.
+
+## Native requirements
+
+What a stock machine already has, and what you install. Only macOS is written up
+so far.
+
+### macOS
+
+Verified on macOS 26.5.1, Apple Silicon.
+
+| Need | On a stock Mac | For what |
+|---|---|---|
+| Playdate SDK | install it | everything |
+| Go 1.26.5 or newer | install it | `make go-build` |
+| `cmake` | install it | C games only |
+| Xcode Command Line Tools | `xcode-select --install` | C games only |
+| `jq` | already there, from macOS 15 | `make plugin-upstream-check` |
+| `bash`, `sort`, `curl`, `git`, `make` | already there | the scripts and checks |
+
+The SDK needs no environment variable. Detection checks three places in order:
+
+1. `SDKRoot` in `~/.Playdate/config`, the file the SDK's own installer writes
+2. `~/Developer/PlaydateSDK`, where that installer puts the SDK
+3. `~/PlaydateSDK`
+
+The config file comes first, ahead of both default paths, so an SDK moved after
+installation is still found through the key its installer maintains.
+
+Set `PLAYDATE_SDK_PATH` if yours is somewhere else. `make sdk-path` prints what
+resolved and which source found it.
+
+Nothing here uses Rosetta. Panic ships the macOS SDK as a universal binary.
+`lipo -archs` on its `pdc` and its Simulator both report `x86_64 arm64`, so the
+Simulator runs native on Apple Silicon. Only
+[container mode](guides/container-mode.md) emulates, and that is the Linux SDK
+inside the image, not this one.
+
+No extra shared libraries. The Simulator is a self-contained `.app` bundle. The
+`webkit2gtk-4.1` and `apt` list in the requirements above is a Linux concern with
+no macOS equivalent.
+
+The system `bash` is 3.2 and Apple is not going to move it. Scripts in `scripts/`
+have to stay 3.2 compatible. No `mapfile`, no associative arrays. Nothing to
+install, just a constraint when editing them.
+
+Docker is not needed for native mode. It is only for
+[container mode](guides/container-mode.md).
+
+### Linux
+
+Not written up yet. The cross-platform list under [Requirements](#requirements)
+covers it. The authoritative package list is the `apt` line in the `native` job of
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+### Windows
+
+Not supported natively yet. See the note under [Requirements](#requirements).
 
 ## Building
 
@@ -188,7 +256,7 @@ The two log tools are not interchangeable. See
 [guides/reading-the-logs.md](guides/reading-the-logs.md).
 
 Three verbs for buttons rather than one flag, because they are three different
-intentions. `press_button` taps — omit `duration_ms` and you get a press the game is
+intentions. `press_button` taps. Omit `duration_ms` and you get a press the game is
 guaranteed to see, then a release. `hold_button` takes no duration at all and stays
 down. `release_button` lets go.
 
@@ -215,9 +283,12 @@ one fact drift.
 
 - The game directory is fixed when the container starts, so switching games means
   `make down` and a new `GAME_DIR`. See
-  [Two constraints that come with the container](guides/container-mode.md#two-constraints-that-come-with-the-container).
+  [Three constraints that come with the container](guides/container-mode.md#three-constraints-that-come-with-the-container).
 - Build output is written as root, because the container runs as root. Same section as
   above.
+- The image is always `linux/amd64`, since Panic ships no ARM64 Linux SDK, so an Apple
+  Silicon Mac or arm64 Linux host runs it under emulation and needs Rosetta or qemu
+  binfmt enabled. Same section as above.
 - Audio starts only when you click the Playdate's volume slider, because nothing in the
   SDK can set it and nothing can read it. See
   [Volume](guides/container-mode.md#volume).
@@ -293,7 +364,7 @@ needs Docker. It skips `shared-check` and `test-shared-types` only because
 | `make mutation-test-diff` | Go, git | Mutates only the lines that changed against `MUTATION_DIFF_REF`. Seconds instead of minutes, which is what the pre-commit hook runs. Not a substitute for the full run: a change can weaken a test for code it does not touch. |
 | `make hooks` | git | Points `core.hooksPath` at `.githooks`, enabling the pre-commit hook. Bypass one commit with `--no-verify`. |
 | `make check-doc-links` | bash, grep | Every relative Markdown link and heading anchor in the docs resolves. No network: external URLs are not fetched, so a dead third-party link never blocks a commit. The pre-commit hook runs it on every commit, including Markdown-only ones, which used to run nothing at all. |
-| `make mcp-schema` | Go | Regenerates `docs/mcp-schema.json` from the running server. Run it after changing a tool's name, description or input/output types, and commit the result — the diff is how a change to what every client is served gets reviewed. |
+| `make mcp-schema` | Go | Regenerates `docs/mcp-schema.json` from the running server. Run it after changing a tool's name, description or input/output types, and commit the result. The diff is how a change to what every client is served gets reviewed. |
 | `make mcp-schema-check` | Go | Fails if that file no longer matches what the server serves, and if any schema is one a client would reject (a bare `true`, a nullable input union, a closed set with no `enum`). `go test ./...` already runs it, in CI and in the pre-commit hook. |
 | `make mcp-auto-test` | Docker | Specmatic's MCP auto-test against the real tool surface over HTTP: it generates inputs from each tool's own declared schema, mutates them, and checks the server rejects what it should. No spec file, so nothing to keep in sync. See the script for what it covers and what it cannot. |
 | `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |
@@ -313,11 +384,11 @@ wrong; `-http` you almost certainly do not want.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `-doctor` | off | Checks the environment and prints a report, then exits: the resolved SDK and every candidate considered, whether the Simulator's shared libraries resolve, what `pdc --version` says, where a game's data directory would be looked for, and on macOS whether the Simulator appears never to have run. The same checks `make smoke-check-native` runs, reachable from the binary alone — which is what someone who installed this as an editor plugin has. **Exits 0 even when it finds problems**, because "no SDK found" is the ordinary state on a fresh install rather than a failure; severity is in the text. |
+| `-doctor` | off | Checks the environment and prints a report, then exits: the resolved SDK and every candidate considered, whether the Simulator's shared libraries resolve, what `pdc --version` says, where a game's data directory would be looked for, and on macOS whether the Simulator appears never to have run. The same checks `make smoke-check-native` runs, reachable from the binary alone. That is all someone who installed this as an editor plugin has. **Exits 0 even when it finds problems**, because "no SDK found" is the ordinary state on a fresh install rather than a failure; severity is in the text. |
 | `-doctor-launch` | off | With `-doctor`, also start the Simulator and see whether it stays up. Off by default because it puts a window on your desktop, and nothing supervises a Simulator once started. |
-| `-print-config <client>` | off | Prints the MCP config block for `opencode`, `claude` or `cursor` and exits. For clients that cannot install this themselves — OpenCode has plugins, but its v1 plugin API has no config or MCP hook, so its config is written by hand. The command it emits is this binary's own resolved path, so the block works wherever the binary already is. |
-| `-version` | off | Prints the version and exits. A binary built by `make go-build` reports `dev`, which is true of it — only a release build is stamped, from the version in `plugin/plugin.json`. Worth asking first when a release binary behaves unexpectedly, since a cached one can outlive the version that fetched it. |
-| `-http <addr>` | unset (stdio) | Serves MCP over Streamable HTTP on a loopback address instead of stdio. It exists because contract-testing tools speak HTTP and not stdio — Specmatic's MCP auto-test accepts only `STREAMABLE_HTTP`. MCP clients use stdio; leave this alone unless you are running `make mcp-auto-test` or something like it. Loopback addresses only, and that is enforced rather than advised: this server builds code and launches processes on request and has no authentication, so `0.0.0.0` is refused with a message saying why. |
+| `-print-config <client>` | off | Prints the MCP config block for `opencode`, `claude` or `cursor` and exits. For clients that cannot install this themselves. OpenCode has plugins, but its v1 plugin API has no config or MCP hook, so its config is written by hand. The command it emits is this binary's own resolved path, so the block works wherever the binary already is. |
+| `-version` | off | Prints the version and exits. A binary built by `make go-build` reports `dev`, which is true of it. Only a release build is stamped, from the version in `plugin/plugin.json`. Worth asking first when a release binary behaves unexpectedly, since a cached one can outlive the version that fetched it. |
+| `-http <addr>` | unset (stdio) | Serves MCP over Streamable HTTP on a loopback address instead of stdio. It exists because contract-testing tools speak HTTP and not stdio. Specmatic's MCP auto-test accepts only `STREAMABLE_HTTP`. MCP clients use stdio; leave this alone unless you are running `make mcp-auto-test` or something like it. Loopback addresses only, and that is enforced rather than advised: this server builds code and launches processes on request and has no authentication, so `0.0.0.0` is refused with a message saying why. |
 
 ### Environment variables
 

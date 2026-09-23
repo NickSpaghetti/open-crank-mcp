@@ -43,7 +43,7 @@ just a call:
    bit. `AButtonHeld`/`BButtonHeld` (fired after a continuous 1-second
    hold) are a separate mechanism and aren't synthesized.
 5. `hold_button` holds a button down with no expiry, and `release_button` ends
-   it — the same synthesized edges as above, so a held button fires
+   it. Those are the same synthesized edges as above, so a held button fires
    `AButtonDown` once when it goes down and `AButtonUp` once when it is let
    go, not once per frame. `reset_input` drops every override at once and
    produces those release edges too, so a reset looks to your game like the
@@ -124,7 +124,7 @@ teardown. In practice this means:
   `getCrankAngle`/`getCrankChange`/`isCrankDocked` calls in place to
   their `mcp_get_*` equivalents (`pd->system` is write-protected in the
   real Simulator, so overrides can only take effect through those
-  wrapper functions — see point 3 under **C games** above). That rewrite can't be marked or
+  wrapper functions, see point 3 under **C games** above). That rewrite can't be marked or
   reversed the way a whole-line insertion can, so once `setup` has
   touched a C project's input calls, `teardown` for it is permanent from
   then on. It becomes a no-op rather than leaving input calls pointing

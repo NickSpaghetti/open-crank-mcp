@@ -5,9 +5,9 @@ Schemas, fetched from `https://agent-plugins.org/schemas/1.0.0/`.
 
 They are here so `make plugin-check` validates offline and deterministically. A
 check that fetched them would fail when someone else's site is down, which is the
-same reasoning `scripts/check-doc-links.sh` already applies to external URLs —
-and a validation failure that means "the network was unavailable" trains people
-to ignore validation failures.
+same reasoning `scripts/check-doc-links.sh` already applies to external URLs. A
+validation failure that means "the network was unavailable" trains people to
+ignore validation failures.
 
 The live copies are fetched and diffed against these by `make plugin-upstream-check`
 in the weekly sweep, which is where an upstream revision belongs: it is a signal

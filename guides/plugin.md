@@ -3,7 +3,7 @@
 The short path: your editor installs the server, and there is no clone, no
 `make`, and no absolute path to write down.
 
-It does **not** install the Playdate SDK, and cannot — Panic's licence forbids
+It does **not** install the Playdate SDK, and cannot. Panic's licence forbids
 redistributing it. See [Requirements](../README.md#requirements). Everything
 below assumes you have an SDK, or are about to install one.
 
@@ -50,8 +50,8 @@ Then run the `ocm-doctor` skill to check the Playdate SDK.
 
 ## OpenCode
 
-OpenCode has plugins, but its v1 plugin API has no config or MCP hook — a plugin
-cannot register a server — so its config is written by hand. The server prints
+OpenCode has plugins, but its v1 plugin API has no config or MCP hook, so a plugin
+cannot register a server. Its config is written by hand. The server prints
 the exact block:
 
 ```
@@ -70,8 +70,8 @@ npx skills add -g -a '*' -s '*' NickSpaghetti/open-crank-mcp
 
 Three parts of that are load-bearing. `-a '*'` is what makes the install use
 **symlinks**: with a single target directory the CLI falls back to copying, and a
-copy goes stale the next time the skills change. `-g` installs at user level —
-without it, a run from inside an agent session is silently project-scoped. And
+copy goes stale the next time the skills change. `-g` installs at user level.
+Without it, a run from inside an agent session is silently project-scoped. And
 `--copy` is deliberately not passed.
 
 That CLI has telemetry on by default; `DISABLE_TELEMETRY` or `DO_NOT_TRACK`
@@ -91,7 +91,7 @@ open-crank-mcp -doctor
 It reports the resolved SDK and every path it considered, whether the
 Simulator's shared libraries resolve, what `pdc` says, and on macOS whether the
 Simulator appears never to have run. It **exits 0 even when it finds problems**,
-because "no SDK found" is the ordinary state on a fresh install — read the text,
+because "no SDK found" is the ordinary state on a fresh install. Read the text,
 not the status. `-doctor -doctor-launch` additionally starts the Simulator, which
 puts a window on your desktop.
 

@@ -34,8 +34,8 @@ Pick the verb that matches what a player would do.
 
 `press_button` with a `duration_ms` holds for that long and then releases on its own,
 which covers most short holds. Reach for `hold_button` when the hold has to outlast the
-call — steering while you take a screenshot, reading state, and steering some more. It
-stays down until `release_button` or `reset_input`, so pair it with one.
+call. That is steering while you take a screenshot, reading state, and steering some
+more. It stays down until `release_button` or `reset_input`, so pair it with one.
 
 `set_crank` with no duration stays put until the next `set_crank`. Pass a
 duration when you want it to lapse back to what the game would really read, or
