@@ -648,7 +648,7 @@ are the record of it.
 
 While answering a question about whether the IPC wait (above) should be
 blocking or async, tracing through the MCP go-sdk itself
-(`go-sdk@v1.6.1/mcp/server.go:1445`) turned up something more important
+(`go-sdk@v1.8.0/mcp/server.go:2004`) turned up something more important
 than that question: every tool call except `initialize` is dispatched
 **concurrently** by the SDK's own request handler (`jsonrpc2.Async(ctx)`,
 confirmed against `internal/jsonrpc2/conn.go`'s `handleAsync`) - it does
