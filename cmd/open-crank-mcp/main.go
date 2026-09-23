@@ -129,7 +129,7 @@ func main() {
 // less thing for the user to get on their PATH.
 //
 // EvalSymlinks because the binary may be reached through a link - the
-// install-server skill puts it under the plugin's data directory - and a config
+// ocm-install-server skill puts it under the plugin's data directory - and a config
 // naming the link breaks the moment it is replaced.
 //
 // An earlier version detected whether it was running from a checkout and emitted

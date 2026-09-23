@@ -20,7 +20,7 @@ and [connect by hand](connecting.md).
 Then install the server:
 
 ```
-/open-crank-mcp:install-server
+/open-crank-mcp:ocm-install-server
 ```
 
 The plugin does not carry the server binary - it is about 10 MB per platform and
@@ -29,7 +29,7 @@ per version. Until that has run, **the server will show as failing to connect**,
 which is expected rather than a bug. Run `/reload-plugins` afterwards, because the
 client already tried to start the server before the binary existed.
 
-Then `/open-crank-mcp:doctor` to check the Playdate SDK, which is a separate thing
+Then `/open-crank-mcp:ocm-doctor` to check the Playdate SDK, which is a separate thing
 the plugin cannot install for you.
 
 ## Cursor
@@ -40,6 +40,13 @@ cursor-agent plugin marketplace add https://github.com/NickSpaghetti/open-crank-
 
 Any git URL works, self-hosted included. Cursor's public marketplace is about
 discoverability, not about being able to install.
+
+Then run the `ocm-install-server` skill, the same as on Claude Code. Cursor has no
+plugin data directory, so the binary goes somewhere on your `PATH` and the skill
+reports which directory it used. Until that has run the server shows as failing to
+connect, which is expected rather than a bug. Restart Cursor afterwards.
+
+Then run the `ocm-doctor` skill to check the Playdate SDK.
 
 ## OpenCode
 
@@ -71,8 +78,8 @@ That CLI has telemetry on by default; `DISABLE_TELEMETRY` or `DO_NOT_TRACK`
 turns it off.
 
 **Use one channel per client.** A skill installed by `npx skills` is a personal
-skill (`/playtesting-a-playdate-game`); the same file inside the plugin is a
-plugin skill (`/open-crank-mcp:playtesting-a-playdate-game`). Installing both
+skill (`/ocm-playtesting-a-playdate-game`); the same file inside the plugin is a
+plugin skill (`/open-crank-mcp:ocm-playtesting-a-playdate-game`). Installing both
 gives you one skill under two names.
 
 ## When it does not work
@@ -102,7 +109,7 @@ Two cases worth knowing before you hit them:
 
 ## How the binary gets there
 
-`/open-crank-mcp:install-server` does it, and it is worth knowing the steps because
+`/open-crank-mcp:ocm-install-server` does it, and it is worth knowing the steps because
 every failure above is one of them.
 
 1. Reads the version from the plugin's own `plugin.json`. That version, not

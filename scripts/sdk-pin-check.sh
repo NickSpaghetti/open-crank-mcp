@@ -11,7 +11,7 @@
 # Weekly rather than per-PR. A new SDK is news about Panic's release schedule, not
 # about the pull request in front of you, and a PR should not go red for either
 # that or a briefly unreachable download server. Same placement and same reasoning
-# as scripts/plugin-schema-check.sh.
+# as scripts/plugin-upstream-check.sh.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

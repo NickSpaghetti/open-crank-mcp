@@ -19,7 +19,7 @@ import (
 // the file.
 //
 // Against vendored copies rather than a live fetch - see plugin/schemas/README.md
-// for why, and `make plugin-schema-check` for the job that notices upstream
+// for why, and `make plugin-upstream-check` for the job that notices upstream
 // moving. No new dependency: jsonschema-go already drives the tool schemas in
 // internal/tools.
 func validateAgainstSchema(t *testing.T, schemaPath, docPath string) {

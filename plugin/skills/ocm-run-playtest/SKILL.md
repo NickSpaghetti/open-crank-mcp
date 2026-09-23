@@ -1,13 +1,12 @@
 ---
-name: run-playtest
-description: Play a Playdate game in the Simulator toward a goal, checking after each input that the game actually changed, and report what happened.
-disable-model-invocation: true
+name: ocm-run-playtest
+description: Play a Playdate game in the Simulator toward a goal, checking after each input that the game actually changed, and report what happened. Run it when the user asks for a playtest, not to answer a question about the game - it drives the game for as long as the goal takes.
 ---
 
-# Run a playtest
+# Run a play test
 
-`$ARGUMENTS` is the goal and the stopping condition. If it contains no stopping
-condition, pick one and say what you picked — turn count, a level reached, a
+The goal and the stopping condition are whatever the user asked for. If they gave
+no stopping condition, pick one and say what you picked — turn count, a level reached, a
 state value — because without one this runs until it runs out of budget.
 
 First `get_status`. If the Simulator is not running or the harness is not

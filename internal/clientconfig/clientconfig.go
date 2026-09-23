@@ -68,7 +68,7 @@ func encode(v any) (string, error) {
 // right-looking and wrong.
 func renderOpenCode(argv []string) (string, error) {
 	// No `timeout`. OpenCode defaults it to 5000ms, and the command here is a
-	// server binary that starts immediately - the install-server skill has already
+	// server binary that starts immediately - the ocm-install-server skill has already
 	// put it in place. An earlier design had the MCP command resolve and download
 	// a binary on first use, which did not fit in that default and so needed the
 	// timeout raised; nothing resolves at start-up now, and emitting a number whose

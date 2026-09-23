@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.2
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit plugin-check plugin-schema-check sdk-pin-check shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mcp-schema mcp-schema-check mcp-auto-test check-doc-links no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit plugin-check plugin-upstream-check sdk-pin-check shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mcp-schema mcp-schema-check mcp-auto-test check-doc-links no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -74,10 +74,10 @@ test-shared-unit:
 plugin-check:
 	go test ./internal/plugincontract
 
-# Fetches the live 1.0.0 schemas and diffs them against the vendored copies.
-# Weekly, not per-PR - see the script for why.
-plugin-schema-check:
-	bash scripts/plugin-schema-check.sh
+# Notices upstream moving: the vendored schemas being edited, or a newer spec
+# version being published. Weekly, not per-PR - see the script for why.
+plugin-upstream-check:
+	bash scripts/plugin-upstream-check.sh
 
 # Notices when PLAYDATE_SDK_VERSION falls behind what Panic ships. Weekly, not
 # per-PR: see the header of the script.

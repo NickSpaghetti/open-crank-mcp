@@ -1,7 +1,6 @@
 ---
-name: doctor
+name: ocm-doctor
 description: Diagnose an open-crank-mcp installation that is not working - no SDK, a Simulator that will not start, tools that time out - and say which fix applies.
-disable-model-invocation: true
 ---
 
 # Diagnose the setup
@@ -14,7 +13,7 @@ open-crank-mcp -doctor
 ```
 
 If `open-crank-mcp` is not on your `PATH`, the binary is wherever
-`/open-crank-mcp:install-server` put it — under the plugin's data directory on
+`/open-crank-mcp:ocm-install-server` put it — under the plugin's data directory on
 Claude Code. Run it from there with the same flag.
 
 It exits 0 whether or not it finds problems, so read the text rather than the

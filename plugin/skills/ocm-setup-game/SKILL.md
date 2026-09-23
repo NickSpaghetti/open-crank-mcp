@@ -1,12 +1,11 @@
 ---
-name: setup-game
-description: Wire the MCP harness into a Playdate game, build it, and launch it in the Simulator, stopping at the first step that did not actually work.
-disable-model-invocation: true
+name: ocm-setup-game
+description: Wire the MCP harness into a Playdate game, build it, and launch it in the Simulator, stopping at the first step that did not actually work. Run it when the user asks to set a game up - it writes into their source tree, so it is not something to do speculatively.
 ---
 
 # Set up a game
 
-Take the game directory from `$ARGUMENTS`. If it is empty, ask for one rather
+Take the game directory the user named. If they did not name one, ask rather
 than guessing — `setup` writes into a source tree, so the wrong path is not a
 harmless mistake.
 

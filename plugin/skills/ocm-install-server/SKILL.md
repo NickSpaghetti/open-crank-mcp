@@ -1,7 +1,6 @@
 ---
-name: install-server
+name: ocm-install-server
 description: Download and verify the open-crank-mcp server binary for this machine, so the plugin's MCP server can start. Run this once after installing the plugin, and again after the plugin updates to a new version.
-disable-model-invocation: true
 ---
 
 # Install the open-crank-mcp server
@@ -124,5 +123,5 @@ verified or only the checksum. Then tell the user to run `/reload-plugins`, or
 restart their editor, because the MCP server was already spawned — and failed —
 before this skill ran.
 
-Finish by suggesting `/open-crank-mcp:doctor`, which checks the Playdate SDK. This
+Finish by suggesting `/open-crank-mcp:ocm-doctor`, which checks the Playdate SDK. This
 skill installs the server; it does not install the SDK, and it cannot.
