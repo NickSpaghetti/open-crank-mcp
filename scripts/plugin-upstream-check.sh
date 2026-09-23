@@ -26,10 +26,15 @@ readonly PUBLISHED='**Status: Published**'
 
 # The pinned version is read out of the $schema URL rather than written down here,
 # so there is one copy of it and bumping the manifest moves every check with it.
-schema=$(jq -er '."$schema"' "$MANIFEST") || {
+#
+# sed rather than jq, and no jq anywhere below: no other script in this repo needs
+# it, and a developer running `make plugin-upstream-check` on a Mac should not have
+# to install one to find out the spec has not moved.
+schema=$(sed -n 's/.*"\$schema"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST" | head -1)
+if [ -z "$schema" ]; then
   echo "plugin-upstream-check: no \$schema in plugin/plugin.json" >&2
   exit 1
-}
+fi
 pinned=$(echo "$schema" | cut -d/ -f5)
 case $pinned in
   [0-9]*.[0-9]*.[0-9]*) ;;
@@ -77,7 +82,10 @@ if ! listing=$(curl -fsSL --max-time 30 "$SPEC_API"); then
   echo "plugin-upstream-check: could not list $SPEC_API" >&2
   exit 1
 fi
-versions=$(echo "$listing" | jq -r '.[] | select(.type == "file") | .name | sub("\\.md$"; "")')
+# One "name" per line, keeping only the ones shaped like a version document. The
+# pattern is the filter, so a non-spec file in the directory is ignored by name.
+versions=$(printf '%s' "$listing" | tr ',' '\n' \
+  | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([0-9][0-9.]*\)\.md".*/\1/p')
 if [ -z "$versions" ]; then
   echo "plugin-upstream-check: $SPEC_API listed no spec documents" >&2
   exit 1
@@ -85,7 +93,10 @@ fi
 
 for version in $versions; do
   [ "$version" = "$pinned" ] && continue
-  [ "$(printf '%s\n%s\n' "$pinned" "$version" | sort -V | tail -1)" = "$pinned" ] && continue
+  # Field-wise numeric sort rather than `sort -V`, which is GNU-only and absent
+  # from the BSD sort macOS ships.
+  newest=$(printf '%s\n%s\n' "$pinned" "$version" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
+  [ "$newest" = "$pinned" ] && continue
 
   if ! doc=$(curl -fsSL --max-time 30 "$SPEC_RAW/$version.md"); then
     echo "plugin-upstream-check: could not fetch $SPEC_RAW/$version.md" >&2
