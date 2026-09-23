@@ -666,7 +666,7 @@ asking "yet?" instead of being told.
   `internal/build.Build` instead of its own bespoke cmake/pdc calls.
 - [x] **Checkpoint 4**: MCP tool registrations (`internal/tools`) wiring
   everything together via `github.com/modelcontextprotocol/go-sdk/mcp` (the
-  project's first external dependency, pinned to v1.6.1). All nine tools
+  project's first external dependency, pinned to v1.8.0). All nine tools
   from the design above are live: `build_game`, `launch_simulator`,
   `stop_simulator`, `restart_simulator`, `get_status`, `get_logs`,
   `press_button`, `set_crank`, `get_screenshot`, `get_game_state`,
