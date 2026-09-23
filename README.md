@@ -77,16 +77,24 @@ the other.
 ## Status
 
 Checkpoints 1-11 done. Both modes work: the harnesses, the Go server, all the MCP
-tools, the container profiles, and native SDK detection with per-OS paths. Native
-mode is verified on Linux. macOS path values come from a probe on a real install
-rather than from running there; Windows-native is not supported, see below.
+tools, the container profiles, and native SDK detection with per-OS paths.
 
-The project has a version as of `0.1.0`, held in `plugin/plugin.json`, and a
-release workflow that publishes digest-pinned binaries for `linux/amd64`,
-`darwin/amd64` and `darwin/arm64` when a `v*` tag is pushed. Until a tag exists
-there is nothing to download and building from source is the only route, which is
-what the rest of this README describes. Packaging the server as an editor plugin
-is the work that builds on it, and is not landed yet.
+Native mode is verified by running on Linux. On macOS the toolchain and this
+repo's own checks are verified on 26.5.1, Apple Silicon, and the SDK path values
+come from a probe on a real install. A full native playtest there is not claimed.
+Windows-native is not supported, see below.
+
+The project is at `0.1.2-rc`, held in `plugin/plugin.json`. Pushing a `v*` tag
+publishes digest-pinned binaries for `linux/amd64`, `darwin/amd64` and
+`darwin/arm64`, so the
+[releases page](https://github.com/NickSpaghetti/open-crank-mcp/releases) is now
+the ordinary route and building from source is a choice.
+
+Editor-plugin packaging has landed. The plugin follows
+[Agent Plugins](https://agent-plugins.org) 1.0.0 and carries five skills, so
+Claude Code and Cursor both install the server and the guidance for driving it.
+See [installing as a plugin](guides/plugin.md). OpenCode gets a generated config
+instead, because its v1 plugin API cannot register a server.
 
 See [`docs/ROADMAP.md`](docs/ROADMAP.md) for exactly what is built, what is
 verified and how, and what is left.
@@ -140,9 +148,12 @@ Verified on macOS 26.5.1, Apple Silicon.
 
 The SDK needs no environment variable. Detection checks three places in order:
 
-1. `~/Developer/PlaydateSDK`, where the installer puts it
-2. `~/PlaydateSDK`
-3. `SDKRoot` in `~/.Playdate/config`
+1. `SDKRoot` in `~/.Playdate/config`, the file the SDK's own installer writes
+2. `~/Developer/PlaydateSDK`, where that installer puts the SDK
+3. `~/PlaydateSDK`
+
+The config file comes first, ahead of both default paths, so an SDK moved after
+installation is still found through the key its installer maintains.
 
 Set `PLAYDATE_SDK_PATH` if yours is somewhere else. `make sdk-path` prints what
 resolved and which source found it.

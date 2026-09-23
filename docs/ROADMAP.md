@@ -1384,7 +1384,7 @@ asking "yet?" instead of being told.
   moves, so a commit that renames a heading need not touch a `.md` at all. The hook
   previously ran nothing whatsoever for a Markdown-only commit, on the reasonable
   grounds that no suite read a `.md`. That gap is where this all landed.
-- [ ] **Branch protection**: `main`'s required checks were `docker-build`, `go-test` and
+- [x] **Branch protection**: `main`'s required checks were `docker-build`, `go-test` and
   `mutation-test`, and had been since Checkpoint 1. Everything added after that ran on
   every PR and gated nothing: `go-build-cross`, `test-c-harness`, `smoke-check`,
   `sdk-contract-check`, `shared`, `native`, `mutation-test-scan`. This document asserted
@@ -1401,9 +1401,17 @@ asking "yet?" instead of being told.
   job that is knowingly incomplete. `mcp-auto-test` starts advisory too, until it has
   been seen green on enough PRs to trust.
 
-  Left unchecked until the setting is actually applied, which needs a green run on this
-  branch first. Reading `[x]` here while the API still says three checks is exactly the
-  drift being fixed.
+  Applied. `main` now requires twelve: `docker-build`, `go-test`, `mutation-test`,
+  `mutation-test-scan`, `go-build-cross`, `test-c-harness`, `smoke-check`,
+  `sdk-contract-check`, `shared`, `native`, `plugin` and `docs`. `native-macos` and
+  `mcp-auto-test` stay advisory for the reasons above.
+
+  Note which mechanism this is. Rulesets on `main` separately enforce linear history,
+  signed commits, and no force-push or deletion; those are a different setting and say
+  nothing about which jobs gate a merge. Reading one for the other is an easy mistake.
+  Nothing in the tree can assert either, so check the API:
+
+      gh api repos/NickSpaghetti/open-crank-mcp/branches/main/protection/required_status_checks --jq .contexts
 - [x] **A version, and published release binaries**: the first half of packaging this
   server as an editor plugin, landed on its own because it is useful without the plugin
   and because the plugin cannot exist without it. Three months of this repo had no
