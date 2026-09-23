@@ -1,8 +1,8 @@
 # Guides
 
 An index, in reading order. What each one covers is described once, in the
-[project README](../README.md#guides) — kept there rather than repeated here, because two
-copies of the same list drift, and these two already had.
+[project README](../README.md#guides). It is kept there rather than repeated here, because
+two copies of the same list drift, and these two already had.
 
 Why things work the way they do is in [`../docs/`](../docs/), starting with
 [GOTCHAS.md](../docs/GOTCHAS.md).

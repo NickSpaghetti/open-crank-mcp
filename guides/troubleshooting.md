@@ -83,7 +83,7 @@ started by hand.
 
 ## The Simulator will not start at all
 
-Not "starts and quits" — never starts, usually with exit status 127 before any of
+Not "starts and quits". It never starts, usually with exit status 127 before any of
 Panic's own code runs. That is a missing shared library rather than anything about
 the Simulator.
 
@@ -96,7 +96,7 @@ one package, `webkit2gtk-4.1`; elsewhere the authoritative list is the `apt` lin
 in the `native` job of `.github/workflows/ci.yml`, which stays correct because
 that job would fail otherwise.
 
-On macOS the check can only confirm the binary exists — the dynamic loader there
+On macOS the check can only confirm the binary exists. The dynamic loader there
 resolves lazily and reports at launch, so use `-doctor -doctor-launch` to actually
 start it and read what it says.
 
@@ -133,7 +133,7 @@ open-crank-mcp -doctor # from the binary alone
 Either prints the SDK it resolved, which of the three sources found it, and every
 candidate it considered. Detection is silent when it succeeds, so this is the
 first thing to reach for. `-doctor` is the one to use if you installed this as an
-editor plugin, since there is no Makefile there — it adds the shared-library and
+editor plugin, since there is no Makefile there. It adds the shared-library and
 `pdc` checks, and exits 0 either way, so read the text rather than the status.
 
 Resolution order is `PLAYDATE_SDK_PATH`, then `SDKRoot` in `~/.Playdate/config`,
@@ -148,8 +148,8 @@ launch looks fine.
 `open-crank-mcp -doctor` warns about this before you hit it, on any Mac where the
 Simulator appears never to have run. That is an inference, not a measurement: the
 Simulator rewrites `~/Library/Preferences/date.play.simulator.plist` on every
-launch, so an absent plist means it has almost certainly never started — but a
-deleted one would read the same way.
+launch, so an absent plist means it has almost certainly never started. A
+deleted one would read the same way, though.
 
 Dismiss it once by hand. The documented setting does not suppress it, and the
 symptoms differ between C and Lua games, which makes it easy to misdiagnose.

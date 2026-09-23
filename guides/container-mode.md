@@ -32,16 +32,16 @@ root-owned too. Both are readable without `sudo`; deleting them needs `sudo`, or
 written as you.
 
 **The image is always `linux/amd64`, so an arm64 host emulates.** The SDK baked into
-these images is Panic's **Linux** SDK, and Panic ships that one for x86_64 only — there
+these images is Panic's **Linux** SDK, and Panic ships that one for x86_64 only. There
 is no ARM64 Linux build, so there is nothing for an arm64 image to drive. Every service
 in `docker-compose.yml` pins the platform for that reason. On an amd64 host the pin
 costs nothing. On an Apple Silicon Mac or an arm64 Linux box, the whole container runs
-under emulation, which works but is slower — expect the first `make build` to take
+under emulation. That works but is slower. Expect the first `make build` to take
 several minutes, most of it fetching the SDK and the Go toolchain.
 
 This is a fact about the Linux SDK in the container, not about macOS. Panic ships the
-**macOS** SDK as a universal binary — `lipo -archs` on its `pdc` and its Simulator
-reports `x86_64 arm64` — so [native mode](native-mode.md) on an Apple Silicon Mac runs
+**macOS** SDK as a universal binary. `lipo -archs` on its `pdc` and its Simulator
+reports `x86_64 arm64`, so [native mode](native-mode.md) on an Apple Silicon Mac runs
 the Simulator natively and never touches Rosetta. On one Mac, container mode emulates
 and native mode does not. If the emulation overhead is what bothers you, native mode is
 the way around it.

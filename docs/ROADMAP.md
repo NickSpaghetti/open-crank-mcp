@@ -57,7 +57,7 @@ that was a real, live bug, not a design choice made up front. `pd->system`
 is typed as `const struct playdate_sys*`, and the original plan was to cast
 that const away and overwrite `pd->system->getButtonState` etc. directly,
 mirroring what Lua does. That compiles fine, but segfaults immediately in
-the real Simulator — verified directly, not theorized: Panic's function
+the real Simulator. That is verified directly, not theorized. Panic's function
 table isn't just nominally read-only, it lives in memory that's actually
 write-protected there. Casting away const only avoids undefined behavior
 when the underlying object wasn't truly declared const at its point of
