@@ -2,7 +2,7 @@
   "name": "open-crank-mcp",
   "displayName": "Open Crank MCP",
   "description": "Drive the Playdate Simulator from an agent: see the screen, press buttons, turn the crank, read game state and logs.",
-  "version": "0.1.2-rc",
+  "version": "0.1.3-rc",
   "author": {
     "name": "Nick Spaghetti",
     "url": "https://github.com/NickSpaghetti"
