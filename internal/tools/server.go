@@ -97,6 +97,9 @@ var errNotRunning = errors.New("simulator not running - call launch_simulator fi
 // error.
 var errHarness = errors.New("harness reported an error")
 
+// Only reachable as a bug: every path that sets s.sim also sets s.scratchDir.
+var errNoScratch = errors.New("simulator is running with no screenshot scratch directory")
+
 // Server holds everything a tool handler might need across separate tool
 // calls - which simulator (if any) is running, its data directory, and a
 // counter for correlating harness command IDs. Guarded by mu since it

@@ -62,13 +62,9 @@ func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in L
 	// a path on the dev machine rather than a sandbox-relative one. So the guess
 	// was load-bearing for no reason. A scratch directory removes it entirely.
 	//
-	// mcp/ is created here because writeToFile will not create directories.
-	scratch, err := os.MkdirTemp("", "open-crank-"+bundleID+"-")
+	scratch, err := newScratchDir(bundleID)
 	if err != nil {
-		return nil, LaunchSimulatorOutput{}, fmt.Errorf("creating screenshot scratch directory: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Join(scratch, luaScreenshotRelDir), 0o755); err != nil {
-		return nil, LaunchSimulatorOutput{}, fmt.Errorf("creating %s in scratch directory: %w", luaScreenshotRelDir, err)
+		return nil, LaunchSimulatorOutput{}, err
 	}
 
 	// ToSlash because the Lua harness joins this with a hardcoded "/". Windows
@@ -144,4 +140,22 @@ func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in L
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: sdk.DataDirDiagnostic(bundleID, tried)}},
 	}, out, nil
+}
+
+// newScratchDir creates the directory handed to the game as playdate.argv[2].
+//
+// Shared by launch and restart because they drifted once: restart passed the
+// data directory here long after launch stopped doing so, so a restarted Lua
+// game wrote its screenshots somewhere the server never looked.
+func newScratchDir(bundleID string) (string, error) {
+	scratch, err := os.MkdirTemp("", "open-crank-"+bundleID+"-")
+	if err != nil {
+		return "", fmt.Errorf("creating screenshot scratch directory: %w", err)
+	}
+	// mcp/ is created here because writeToFile will not create directories.
+	if err := os.MkdirAll(filepath.Join(scratch, luaScreenshotRelDir), 0o755); err != nil {
+		os.RemoveAll(scratch)
+		return "", fmt.Errorf("creating %s in scratch directory: %w", luaScreenshotRelDir, err)
+	}
+	return scratch, nil
 }

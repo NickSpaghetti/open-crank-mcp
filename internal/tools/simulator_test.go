@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -236,5 +238,33 @@ func TestRoundTripRecordsTheHarnessVersionOnFailure(t *testing.T) {
 	}
 	if s.harnessVersion != "abc123abc123" {
 		t.Fatalf("harnessVersion = %q, want it recorded even though the harness reported an error", s.harnessVersion)
+	}
+}
+
+// Restart must mint its own scratch directory. It used to clear the old one and
+// pass the data directory to the game in its place.
+func TestRestartSimulatorCreatesAUsableScratchDir(t *testing.T) {
+	s := newTestServer(t)
+	s.scratchDir = t.TempDir()
+	old := s.scratchDir
+
+	if _, _, err := s.restartSimulator(context.Background(), nil, RestartSimulatorInput{}); err != nil {
+		t.Fatalf("restartSimulator: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(s.scratchDir) })
+
+	switch {
+	case s.scratchDir == "":
+		t.Fatal("scratchDir is empty; get_screenshot would join it into a relative path")
+	case s.scratchDir == old:
+		t.Fatal("scratchDir still points at the directory restart removes")
+	case s.scratchDir == s.dataDir:
+		t.Fatal("scratchDir is the data directory, which is what the bug did")
+	}
+
+	// writeToFile will not create directories, so mcp/ has to exist already.
+	fi, err := os.Stat(filepath.Join(s.scratchDir, luaScreenshotRelDir))
+	if err != nil || !fi.IsDir() {
+		t.Fatalf("scratch dir has no %s/ subdirectory: %v", luaScreenshotRelDir, err)
 	}
 }
