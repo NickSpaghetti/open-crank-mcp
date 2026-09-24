@@ -14,6 +14,7 @@
 package mcpcontract
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"flag"
@@ -121,6 +122,10 @@ func TestToolSchemasMatchGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading %s: %v\n\nrun `make mcp-schema` to create it", goldenPath, err)
 	}
+	// Git can check the text golden out as CRLF on Windows. Its JSON content is
+	// identical either way, so compare normalized newlines rather than making the
+	// schema contract depend on the checkout's line-ending setting.
+	want = bytes.ReplaceAll(want, []byte("\r\n"), []byte("\n"))
 	if string(got) != string(want) {
 		t.Errorf("the tool surface a client sees no longer matches %s.\n\n"+
 			"If the change is intended, run `make mcp-schema` and commit the result - the diff is "+

@@ -23,22 +23,20 @@ missing or unreadable, stop and say so; everything below depends on it.
 
 ### 2. Work out this machine's platform
 
-Map `uname -s` and `uname -m` onto Go's names, because that is what the release
-assets are named with:
+Map the OS and architecture onto Go's names, because that is what release assets
+use:
 
-| `uname -s` | use |
-| --- | --- |
-| `Linux` | `linux` |
-| `Darwin` | `darwin` |
+| Machine | `goos` | `goarch` |
+| --- | --- | --- |
+| Linux x64 | `linux` | `amd64` |
+| macOS Intel | `darwin` | `amd64` |
+| macOS Apple Silicon | `darwin` | `arm64` |
+| Windows x64 | `windows` | `amd64` |
 
-| `uname -m` | use |
-| --- | --- |
-| `x86_64`, `amd64` | `amd64` |
-| `arm64`, `aarch64` | `arm64` |
-
-On Windows, stop. Tell the user that native Windows is not published yet and that
-WSL2 through container mode is the supported route, pointing at
-`guides/connecting.md`.
+On Linux and macOS, use `uname -s` and `uname -m`. On Windows, use PowerShell:
+`$env:OS` is `Windows_NT`; use `$env:PROCESSOR_ARCHITEW6432` when set, otherwise
+`$env:PROCESSOR_ARCHITECTURE`. `AMD64` maps to `amd64`. If it reports ARM64,
+stop: there is no Windows ARM64 asset yet.
 
 ### 3. Fetch the checksums file
 
@@ -46,7 +44,8 @@ WSL2 through container mode is the supported route, pointing at
 https://github.com/NickSpaghetti/open-crank-mcp/releases/download/v<version>/checksums.txt
 ```
 
-Use `gh release download` if the GitHub CLI is available, otherwise `curl -fsSL`.
+Use `gh release download` if the GitHub CLI is available, otherwise `curl -fsSL`
+on Linux/macOS or `curl.exe -fL` in PowerShell.
 **`-f` matters**: without it curl exits 0 on a 404 and writes GitHub's error page
 into the file, which then looks like a release with no matching assets rather than a
 release that does not exist.
@@ -57,7 +56,8 @@ rather than reporting a platform problem.
 ### 4. Pick the asset from that file, do not construct its name
 
 `checksums.txt` holds one `<digest>  <name>` line per published asset. Find the
-line whose **name ends with** `_<goos>_<goarch>`.
+line whose name ends in `_<goos>_<goarch>`; the Windows asset has an additional
+`.exe` suffix, so match `_windows_amd64.exe`.
 
 The name comes from that file so the release stays the only place asset names are
 defined. Building the name yourself and requesting it is how you get a 404 that
@@ -72,8 +72,8 @@ explains nothing.
 ### 5. Download it and verify the digest — this step is not optional
 
 Download that asset from the same release, then compare its SHA-256 against the
-digest on its line in `checksums.txt`. Use `sha256sum` on Linux or
-`shasum -a 256` on macOS.
+digest on its line in `checksums.txt`. Use `sha256sum` on Linux,
+`shasum -a 256` on macOS, or `Get-FileHash -Algorithm SHA256` on Windows.
 
 If it does not match, delete the download and stop. Do not install it, and do not
 retry silently.
@@ -103,18 +103,27 @@ repository, so it is the only check that speaks to origin rather than integrity.
 
 ### 7. Install it
 
-Make it executable, then move it into place. Move it only after every check above
-has passed, so an interrupted run never leaves a binary a later session would trust
-and run.
+Move it into place only after every check above has passed, so an interrupted run
+never leaves a binary a later session would trust and run. On Unix, also make the
+file executable with `chmod +x`.
 
-- **Claude Code**: `$CLAUDE_PLUGIN_DATA/bin/open-crank-mcp`. Create the directory if
-  needed. This path is what `.claude-plugin/mcp.json` names, and it survives plugin
-  updates.
-- **Cursor, or anything else**: somewhere on the user's `PATH`, named exactly
-  `open-crank-mcp`, because those configurations name it as a bare command.
-  `~/.local/bin` is the usual choice on Linux and macOS. Confirm the directory is
-  actually on `PATH` before using it, and if it is not, say which directory you used
-  and what the user needs to add.
+- **Claude Code**: `$CLAUDE_PLUGIN_DATA/bin/open-crank-mcp`, with `.exe` appended on
+  Windows. Create the directory if needed.
+
+  `.claude-plugin/mcp.json` names the extensionless path on every platform, and that
+  is deliberate rather than an oversight to fix. Windows process launch appends an
+  extension when the named file has none, trying `.com`, `.exe`, `.cmd` and `.bat`,
+  so one token resolves `open-crank-mcp` on Unix and `open-crank-mcp.exe` on Windows.
+  That is what makes a single `command` work on both, which the config format
+  otherwise has no way to express.
+
+  Installing it extensionless on Windows is the mistake: the search then has nothing
+  to find, and the server never connects.
+- **Cursor or another bare-command client**: put the binary on the user's `PATH`.
+  Name it `open-crank-mcp` on Linux/macOS and `open-crank-mcp.exe` on Windows;
+  Windows command lookup adds `.exe` through `PATHEXT`. Confirm the directory is
+  actually on `PATH` before using it, and if it is not, say what the user needs to
+  add.
 
 ### 8. Report what happened
 

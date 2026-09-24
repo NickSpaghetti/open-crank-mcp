@@ -10,6 +10,9 @@
 /open-crank-mcp
 *.pdx
 
+# Playdate Simulator's native crash reporter writes this in its working directory.
+.sentry-native/
+
 # Test binary, built with `go test -c`
 *.test
 

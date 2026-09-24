@@ -18,10 +18,8 @@ jobs:
   #
   # Two exclusions that look alike and are not:
   #   - No linux/arm64, because Panic ships no ARM64 Linux SDK. Not our choice.
-  #   - No windows/amd64, even though Panic does ship a Windows SDK. That one is ours:
-  #     the native Windows path is not verified yet (docs/ROADMAP.md Checkpoint 8) and
-  #     WSL2 serves those users through container mode in the meantime.
-  #     `make go-build-cross` keeps it compiling; it just does not get an asset yet.
+  #   - Windows is published: its native SDK and MCP contract run on windows-latest.
+  #     ARM64 Windows remains out until there is a Playdate ARM64 Simulator SDK.
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -33,6 +31,8 @@ jobs:
             goarch: amd64
           - goos: darwin
             goarch: arm64
+          - goos: windows
+            goarch: amd64
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -68,6 +68,10 @@ jobs:
         run: |
           set -uo pipefail
           name="open-crank-mcp_${VERSION}_${GOOS}_${GOARCH}"
+          if [ "$GOOS" = windows ]; then
+            name="${name}.exe"
+          fi
+          mkdir -p dist
           go build -trimpath -buildvcs=false \
             -ldflags "-s -w -X main.version=${VERSION}" \
             -o "dist/${name}" ./cmd/open-crank-mcp || exit 1

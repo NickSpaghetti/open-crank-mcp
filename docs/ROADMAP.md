@@ -889,9 +889,12 @@ asking "yet?" instead of being told.
   and make a failed probe a loud non-fatal warning listing every path tried.
   That turns the ugliest failure mode into a first-call diagnosis.
 
-  Platform scope is linux and darwin. Windows compiles and its path logic is
-  covered by the `fstest` suite, but the runtime is unsupported and says so:
-  WSL2 already serves those users through the existing profile.
+  Native source support targets Linux, macOS and Windows. Linux and Windows are
+  verified end-to-end; macOS has passed the SDK/Simulator smoke checks but its
+  game-running contract remains blocked by the Simulator's first-run modal.
+  Windows was first kept out of scope because WSL2 already serves it, but that
+  decision changed after its installer and native runtime were verified on a
+  real host.
 
   That is a scoping choice, and the reasoning behind it needs a correction.
 
@@ -933,34 +936,29 @@ asking "yet?" instead of being told.
   (`download.panic.com/playdate_sdk/Windows/PlaydateSDK-<version>.exe`), which the
   macOS `.zip` does not.
 
-  What this does **not** establish is that a silent install works, only that the
-  flags are there and nothing in the installer obviously blocks them. It has not
-  been run yet. That is the same gap as before, just a narrower one.
+  The silent install has since been run successfully, and Windows native has been
+  exercised end-to-end against SDK 3.1.2. The `windows-native` CI job installs the
+  same official SDK using `/S` and `/D`, then runs the C/Lua MCP contract test.
+  Windows is supported for source-built native use; prebuilt plugin distribution
+  remains a separate release task below.
 
-  So the honest position is narrower again. Windows-native is unsupported because
-  it has not been verified yet and WSL2 already serves those users through
-  container mode - a prioritisation, and a revisitable one. Provisioning is not an
-  obstacle: the one mechanism that was supposed to make Windows hard to verify
-  turns out to be available. Its layout
-  values are still correct (see `docs/NATIVE-PROBE.md`) because keeping them right
-  costs nothing and makes promoting Windows additive if that ever changes.
-
-  Two things a future promotion should start from rather than rediscover. The
-  installer writes a `Software\PlaydateSDK` registry key, and the probe found
-  Windows has **no `~/.Playdate/config` at all**, so resolution there falls
-  straight through to guessed directories - that key is the natural Windows
-  equivalent of the config file and a better second source than guessing. And
-  promoting Windows is not one line in the release workflow's build matrix.
+  Windows has **no `~/.Playdate/config` at all**. The resolver uses the
+  installer's confirmed `Documents\PlaydateSDK` default and an explicit
+  `PLAYDATE_SDK_PATH` override. The installer also writes a
+  `Software\PlaydateSDK` registry key, which could be a future discovery fallback
+  for non-default installs. Prebuilt distribution is separate from this
+  source-built runtime support.
 
   **The order matters, and the launcher is the third step rather than the first.**
   It is tempting to look at `plugin/bin/open-crank-mcp-launcher` being bash and
-  conclude that is what excludes Windows. It is not. The binding constraint today
-  is that the release matrix publishes `linux/amd64` and both darwin arches and
-  nothing else, so there is no Windows asset for any launcher to fetch. Rewriting
-  the launcher in something portable before that changes would buy nothing.
+  conclude that is what excludes Windows. It does not exclude source-built native
+  mode, but the release matrix still publishes `linux/amd64` and both darwin arches
+  only, so there is no Windows asset for a plugin launcher to fetch. Rewriting
+  the launcher before adding such an asset would buy nothing.
 
-  So: verify the native Windows path by running it, then add `windows/amd64` to
-  the matrix, and only then does the launcher need solving.
+  So: native Windows is verified for local source builds. If Windows plugin
+  distribution is added, first add `windows/amd64` to the release matrix, then
+  solve the launcher format for that platform.
 
   **And the launcher step is the hard one, for a reason worth knowing in advance.**
   An MCP server's `command` is a single token, in both Claude Code's schema and
@@ -978,8 +976,8 @@ asking "yet?" instead of being told.
   writing any code, because it determines whether there is a launcher on Windows at
   all.
 
-  Note also that container mode already serves these users through WSL2, which is
-  why none of this is urgent.
+  Container mode through WSL2 remains available as an alternative, but is no
+  longer the only Windows runtime path.
 
   Done when the `fstest` suite passes under `go-build-cross`, `make sdk-path`
   names both the resolved SDK and which source found it, `make
@@ -1029,20 +1027,18 @@ asking "yet?" instead of being told.
   `press_button`, which reads as a tap, but surprising for the crank, which reads
   as a position. Fixed under **Input duration defaults** below.
 
-  Still unverified, and deliberately: no macOS or Windows *run*. Every path value
-  for those platforms comes from a probe on a real install
-  (`docs/NATIVE-PROBE.md`) plus `fstest` coverage of the logic, not from this
-  project executing there. Checkpoint 11 is where that changes for macOS. Windows
-  never will - see the note under this checkpoint's platform scope.
+  Windows has since been run end-to-end, including real C and Lua fixtures through
+  MCP. macOS paths still have a real-install probe, but the Simulator has not yet
+  been shown to execute a game in native macOS CI; that remains the macOS-specific
+  gap.
 - [x] **Checkpoint 9**: CI for native mode. One `native` job installing the
   Simulator's shared libraries and the SDK directly on the runner, then building
   and running the native targets. CI already fetches the SDK from Panic for
   `docker-build`, so this is not a new licence posture. The job doubles as the
   authoritative install line for the README's native requirements, so the two
   can't drift. A macOS leg is advisory (`continue-on-error`) because it is the
-  platform with a real user story and the one worth pushing to green first;
-  there is no Windows leg, since the cross-compile gate plus the `fstest` suite
-  is the agreed coverage and a permanently red advisory leg is only noise. Don't
+  platform with a real user story and the one worth pushing to green first.
+  Windows now has its own SDK-backed integration job on `windows-latest`. Don't
   matrix the existing jobs - `mode: [container, native]` would rename
   `smoke-check` to `smoke-check (container)` and break branch protection a
   second time for no signal.
@@ -1477,32 +1473,18 @@ asking "yet?" instead of being told.
   read the **effective** one back from the built artifact rather than asking the
   toolchain its version.
 
-  **The asset name has one definition, in the build matrix's `build` step**, which is
-  also the only thing that writes it. A launcher asking for a name the release never
-  uploaded breaks every install silently on the first run, so when the launcher lands it
-  will need its own copy of the format in bash - it runs before any binary exists and
-  cannot call Go. That copy, and a check that it agrees with what the workflow produces,
-  belong with the launcher rather than here: while there is no launcher, a second
-  definition has no reader and a test guarding it proves nothing.
-
-  The launcher cannot call Go - it runs before any binary exists - so it will need its
-  own copy of the name format in bash. That copy, and the check that it agrees with
-  `pin.AssetName`, belong with the launcher in the plugin PR rather than here: while
-  there is no launcher, a second definition has no reader and the test guarding it
-  proves nothing. Checkpoint note for whoever writes it: the shared definition is the
-  point, and a bash library's locals need prefixing, because a caller that declares
-  `manifest` readonly makes an unprefixed `local manifest` fail - and with `set -e` off
-  as these scripts have it, that error prints and the function carries on.
+  **Asset names are produced by the release matrix's build step.** The installer skill
+  selects the asset by matching the platform suffix in `checksums.txt`, rather than
+  independently constructing a name. That keeps the release manifest authoritative for
+  what was actually published.
 
   **Published targets follow the SDKs Panic ships, not what Go can cross-compile**: a
   server binary is useless on a platform with no Simulator to drive. Panic offers
   macOS (a universal `.zip`), Windows (`.exe`) and Linux (`.tar.gz`, x86-64 only), so
-  the list is `linux/amd64`, `darwin/amd64`, `darwin/arm64`. The two exclusions look
-  alike and are not, and the distinction is worth keeping: there is no `linux/arm64`
-  because Panic ships no ARM64 Linux SDK, which is not our choice, and no
-  `windows/amd64` even though Panic does ship a Windows SDK, which is entirely our
-  choice - Checkpoint 8's scoping, WSL2 through container mode instead.
-  `make go-build-cross` keeps Windows compiling; it just does not get an asset.
+  the list is `linux/amd64`, `darwin/amd64`, `darwin/arm64`, and `windows/amd64`.
+  There is no `linux/arm64` because Panic ships no ARM64 Linux SDK, nor a Windows
+  ARM64 asset until there is a Playdate ARM64 Simulator SDK. The Windows x64 release
+  binary is built on Linux with `CGO_ENABLED=0` and exercised on `windows-latest`.
 
   **The licence guard is two halves, because there are two ways SDK bytes could reach a
   published artifact.** Inside the binary: `embed_test.go` already asserted the

@@ -63,7 +63,8 @@ lives.
 
 **Container mode** builds an image that carries its own SDK and runs the
 Simulator headlessly inside it. Nothing is installed on your machine but Docker.
-This is the default, and the only mode CI exercises end to end on every change.
+This is the default. CI exercises it alongside native Linux, macOS, and Windows
+checks.
 
 **Native mode** runs the server directly against a Playdate SDK you installed
 yourself, with no container at all. The Simulator is an ordinary window on your
@@ -79,16 +80,18 @@ the other.
 Checkpoints 1-11 done. Both modes work: the harnesses, the Go server, all the MCP
 tools, the container profiles, and native SDK detection with per-OS paths.
 
-Native mode is verified by running on Linux. On macOS the toolchain and this
-repo's own checks are verified on 26.5.1, Apple Silicon, and the SDK path values
-come from a probe on a real install. A full native playtest there is not claimed.
-Windows-native is not supported, see below.
+Native mode is verified by running on Linux and Windows. On macOS the toolchain
+and this repo's own checks are verified on 26.5.1, Apple Silicon, and the SDK path
+values come from a probe on a real install. A full native playtest there is not
+claimed.
 
 The project is at `0.1.2-rc`, held in `plugin/plugin.json`. Pushing a `v*` tag
-publishes digest-pinned binaries for `linux/amd64`, `darwin/amd64` and
-`darwin/arm64`, so the
+publishes digest-pinned binaries for `linux/amd64`, `darwin/amd64`,
+`darwin/arm64` and `windows/amd64`, so the
 [releases page](https://github.com/NickSpaghetti/open-crank-mcp/releases) is now
-the ordinary route and building from source is a choice.
+the ordinary route and building from source is a choice. Releases created before
+Windows support was added do not include a Windows asset; a new tag is needed to
+publish one.
 
 Editor-plugin packaging has landed. The plugin follows
 [Agent Plugins](https://agent-plugins.org) 1.0.0 and carries five skills, so
@@ -122,16 +125,25 @@ verified and how, and what is left.
 Which of those your machine already has differs by OS. See
 [Native requirements](#native-requirements).
 
-Windows-native is not supported yet: WSL2 covers Windows through container mode,
-so verifying the native path has not been a priority. Its layout values in
-`internal/sdk` are correct and covered by tests, so the code compiles and the
-logic is exercised on every platform. It is simply not verified by running, and
-promoting it is additive when someone gets to it.
+**Windows native mode**
+
+- Go and the Windows Playdate SDK (the SDK installer’s default
+  `%USERPROFILE%\Documents\PlaydateSDK` location is detected automatically).
+- For C games, Visual Studio Build Tools with the **Desktop development with C++**
+  workload. CMake 3.19 or newer is required; the server uses it from `PATH` or
+  finds the Visual Studio-bundled copy through `vswhere`.
+- Run the same SDK-backed tests as CI locally with
+  `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-windows-native.ps1`.
+
+Windows native mode is experimental, verified against SDK 3.1.2. New plugin
+releases include Windows x64; existing releases predate that asset, so use the
+PowerShell build/test instructions above until a new release is published.
 
 ## Native requirements
 
-What a stock machine already has, and what you install. Only macOS is written up
-so far.
+What a stock machine already has, and what you install. The Windows native test
+script above runs the Windows-specific checks; the following details cover the
+Mac and Linux requirements.
 
 ### macOS
 
@@ -183,7 +195,9 @@ covers it. The authoritative package list is the `apt` line in the `native` job 
 
 ### Windows
 
-Not supported natively yet. See the note under [Requirements](#requirements).
+Verified on Windows 11 with SDK 3.1.2 and Visual Studio Build Tools 2026. For C
+games, the native test uses MSVC and CMake; the server finds Visual Studio's
+bundled CMake through `vswhere` if it is not on `PATH`.
 
 ## Building
 
@@ -357,6 +371,7 @@ needs Docker. It skips `shared-check` and `test-shared-types` only because
 |---|---|---|
 | `make go-build` / `go-test` | Go | The server, tools and harness IPC. `go-build` also emits `./open-crank-mcp`, which is what a native client runs. |
 | `make go-build-cross` | Go | Builds and vets for linux, darwin and windows, so a platform-specific construct outside a build-tag file fails here rather than on someone else's machine. |
+| `scripts/test-windows-native.ps1` | Windows, Go, Playdate SDK | Runs Windows Go tests and vet, then builds and drives C/Lua fixtures through MCP and the Windows Simulator. Also run by `windows-native` CI. |
 | `make no-regex` | git, grep | Fails if any Go file imports `regexp`. There is no allowlist. Patterns are replaced by `internal/scan`, which reads source a byte at a time and knows a comment from code; see the note above the target for why. Grep on the command line is fine. |
 | `make test-shared-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. No container. |
 | `make mutation-test` | Go | Mutates the code and checks the tests notice, so a line that runs without being asserted on doesn't pass for covered. Thresholds in `.gremlins.yaml`. |

@@ -70,6 +70,16 @@ func TestHandshakeSucceedsWithNoSDK(t *testing.T) {
 		"USERPROFILE=" + emptyHome, // windows' equivalent, for the cross-compiled case
 		"PATH=" + os.Getenv("PATH"),
 	}
+	if runtime.GOOS == "windows" {
+		// Windows child processes need their system and temp roots even when the
+		// user environment is intentionally stripped. These do not reveal an SDK,
+		// but omitting them can make process startup depend on the runner image.
+		for _, key := range []string{"SYSTEMROOT", "WINDIR", "TEMP", "TMP", "COMSPEC"} {
+			if value := os.Getenv(key); value != "" {
+				cmd.Env = append(cmd.Env, key+"="+value)
+			}
+		}
+	}
 	// Not silenced: main writes the resolution failure to stderr, and a test that
 	// discarded it would hide a crash loop behind a timeout.
 	cmd.Stderr = os.Stderr

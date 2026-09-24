@@ -2,8 +2,9 @@
 
 ## Run this, and nothing else
 
-**Two things outstanding, both macOS.** Every *path value* is confirmed and
-`internal/sdk` matches; parts 1 and 3 are the evidence and need no re-running.
+**The remaining native probe work is macOS-specific.** Windows SDK discovery,
+build, Simulator launch, harness calls, screenshots, and shutdown have been
+verified against SDK 3.1.2; the Windows-native integration is now in CI.
 
 [Part 4](#macos-part-4-does-a-game-actually-run-or-only-load) is the one worth
 doing, and the only thing blocking the macOS CI leg: does the Simulator actually
@@ -16,26 +17,10 @@ buffered one, and its own empty capture is better explained by buffering. See th
 Status section. It blocks nothing, because the answer either way leaves
 `get_game_logs` in place.
 
-Windows is done too, and its values are corrected in `internal/sdk`.
-
-One of its answers was read as settling the scope question permanently, and that
-reading was wrong. This used to say: the SDK ships as an interactive installer
-`.exe` with no archive, CI provisions Linux by extracting a `.tar.gz`, so a
-Windows runner cannot provision itself, so Windows-native could never get per-PR
-verification - which turned "unsupported for now" into "unsupported".
-
-The premise is right and the conclusion does not follow. The download is an
-installer, and it is an NSIS one (`Nullsoft Install System v3.09`, from its own PE
-manifest), which means `/S` and `/D=<dir>`. The bundled VC++ redistributable that
-could still have blocked a silent run is invoked `/q` by the script. Checked
-2026-09-15 by inspecting the installer; see `docs/ROADMAP.md`, Checkpoint 8, for
-what that does and does not prove. "Installer, not archive" does not imply
-"cannot be automated" - the same category error this page made about macOS, whose
-`.pkg` installs fine via `installer -pkg`.
-
-Windows-native is still unsupported, for the reason that actually holds: it has
-not been verified by running yet, and WSL2 serves those users through container
-mode in the meantime.
+The Windows installer was verified as NSIS (`Nullsoft Install System v3.09`):
+`/S` installs silently and `/D=<dir>` selects the SDK location. The bundled VC++
+redistributable is invoked with `/q`. The CI job exercises that exact installer
+path, then runs the Windows MCP integration test.
 
 One thing on this page is outstanding: the Lua-stdout row for macOS, described
 under Status. Everything else is settled.
@@ -62,9 +47,9 @@ picking an executable out of that directory by listing it gets the crash reporte
 
 Native mode runs the server directly against an SDK the developer installed, with
 no container. Where the SDK lives, and where things sit inside it, differs per
-platform. Linux is the only layout verified by running it. The macOS and Windows
-values in `internal/sdk` were written from Panic's documentation and platform
-convention.
+platform. Linux and Windows layouts have been verified by running against real
+SDKs; the macOS data-directory and Simulator startup behavior remain the open
+platform-specific questions.
 
 This is the checklist for checking one against a real install. Everything is
 read-only except part 3, which builds a copy of the test fixture into `/tmp` and
@@ -543,12 +528,11 @@ PROBE
 headless runner. `NO` means something more fundamental is wrong with the macOS
 path and the CI environment is not the variable.
 
-## Windows, optional
+## Windows (verified)
 
-Windows-native is deliberately unsupported: WSL2 already serves Windows users
-through the container, and supporting it natively would roughly double the
-untested surface. See `docs/ROADMAP.md`. So these answers do not change current
-behaviour. They only say whether promoting Windows later would be cheap.
+The observations below are the basis for Windows SDK discovery in
+`internal/sdk/windows_layout.go`. The native MCP path is also exercised against
+the installed SDK by `scripts/test-windows-native.ps1` and the Windows CI job.
 
 PowerShell, read-only:
 
@@ -628,15 +612,9 @@ d-----         7/29/2026   5:55 PM                Playdate Simulator
 
 the installer is an .exe
 
-**Answered, and the follow-up question it was really asking is answered too.** The
-Windows SDK is an installer `.exe`, not an archive - so the literal question this
-asked is settled. But it was asked in order to conclude that a Windows CI job
-could never set itself up, and that conclusion is wrong: the installer is NSIS and
-takes `/S`, with its bundled VC++ redistributable already invoked `/q`. Checked by
-inspection on 2026-09-15, not by running it. See `docs/ROADMAP.md`, Checkpoint 8.
-
-So this is no longer an argument for leaving Windows unsupported permanently. What
-remains is simply that the native Windows path has not been verified yet.
+The SDK is an installer `.exe`, not an archive. Its `/S` silent install and `/D`
+destination flags are used by CI, which validates the installer and native run
+end-to-end.
 
 ## Sending results back
 
@@ -652,7 +630,7 @@ as useful as a success.
 | macOS 1 | done | Install location, config format, bundle name, inner executable, `pdc`. All five matched what the code guessed. |
 | macOS 2 | superseded | Nothing. Three bugs, replaced by part 3. |
 | **macOS 3** | data directory **done**, Lua-stdout **outstanding** | Part 3 confirmed the data directory at `<sdk>/Disk/Data/<bundleID>`. It did not answer the Lua-stdout question, and the probe shape it used cannot: see Status. |
-| Windows | optional | Whether promoting Windows-native later would be cheap. Nothing is blocked on it. |
+| Windows | verified | SDK 3.1.2 install, C/Lua builds, Simulator, harness tools and cleanup are covered locally and in Windows CI. |
 
 ## What is already verified, and what is not
 
@@ -662,9 +640,10 @@ The Go side of this is not a draft. On a Linux machine:
 |---|---|
 | `go build ./...`, `go vet` | Clean |
 | `go test ./internal/sdk/` | Passing |
-| macOS and Windows path logic | Exercised, on Linux, against a synthetic filesystem |
+| macOS and Windows path logic | Exercised against synthetic filesystems; Windows values also verified on a real host |
 | `make go-build-cross` | Builds for linux, darwin and windows |
-| Real macOS and Windows path *values* | **Unverified. That is what this document is for.** |
+| Real Windows MCP run | **Verified** by the local Windows suite and `windows-native` CI job |
+| Real macOS Simulator startup/gameplay | **Still outstanding**; see macOS part 4 above |
 
 The layouts are ordinary values selected at runtime rather than build-tagged
 files, specifically so all three can be tested from one machine. Two traps found

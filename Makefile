@@ -158,9 +158,9 @@ no-regex:
 	fi; \
 	echo "no-regex: ok"
 
-# Builds and vets every supported platform from one machine - the only
-# cross-platform claim provable here. windows is included though unsupported, to
-# keep it compiling. Catches a missing construct, not one that behaves differently.
+# Builds and vets linux, darwin and windows from one machine. The Windows native
+# CI job tests runtime behavior; this cross-build catches platform-specific
+# constructs outside build-tagged files.
 CROSS_PLATFORMS = linux darwin windows
 
 go-build-cross:

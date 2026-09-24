@@ -2,17 +2,15 @@ package sdk
 
 import (
 	"io/fs"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
 )
 
-// These tests are the reason this package takes its filesystem and its platform
-// layout as parameters. The darwin and windows layouts cannot be verified by
-// running them on the machine this was written on, so instead every one of them
-// is exercised here against a synthetic filesystem, on whatever OS the tests
-// happen to run on. What stays unverified is the path *values* against a real
-// install, not the code that consumes them.
+// These tests exercise each platform layout against a synthetic filesystem on
+// every OS. Windows also has a native integration test; macOS runtime behavior
+// remains unverified against a real Simulator.
 
 // testEnv builds an Env over a MapFS. Keys are absolute-looking paths with the
 // leading slash stripped, matching fsKey.
@@ -68,7 +66,7 @@ func TestResolveOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveWith: %v", err)
 			}
-			if p.Root != "/opt/from-env" {
+			if filepath.ToSlash(p.Root) != "/opt/from-env" {
 				t.Errorf("Root = %q, want /opt/from-env", p.Root)
 			}
 			if p.RootSource != SourceEnv {
@@ -84,7 +82,7 @@ func TestResolveOrder(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveWith: %v", err)
 			}
-			if p.Root != "/opt/from-config" {
+			if filepath.ToSlash(p.Root) != "/opt/from-config" {
 				t.Errorf("Root = %q, want /opt/from-config", p.Root)
 			}
 			if p.RootSource != SourceConfig {
@@ -113,7 +111,7 @@ func TestResolveFallsBackToDefaultLocation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolveWith: %v", err)
 			}
-			if p.Root != tc.root {
+			if filepath.ToSlash(p.Root) != tc.root {
 				t.Errorf("Root = %q, want %q", p.Root, tc.root)
 			}
 			if p.RootSource != SourceDefault {
@@ -151,7 +149,7 @@ func TestResolveFailureIsDiagnosable(t *testing.T) {
 		t.Errorf("error does not mention %s: %v", EnvVarSDKPath, err)
 	}
 	for _, want := range []string{".Playdate/config", "PlaydateSDK"} {
-		if !strings.Contains(err.Error(), want) {
+		if !strings.Contains(filepath.ToSlash(err.Error()), want) {
 			t.Errorf("error does not mention %q, so the user cannot tell where it looked: %v", want, err)
 		}
 	}
@@ -197,7 +195,7 @@ func TestConfigParsing(t *testing.T) {
 				}
 				return
 			}
-			if p.Root != tc.wantRoot {
+			if filepath.ToSlash(p.Root) != tc.wantRoot {
 				t.Errorf("Root = %q, want %q", p.Root, tc.wantRoot)
 			}
 		})
@@ -226,7 +224,7 @@ func TestDarwinResolvesInnerExecutable(t *testing.T) {
 		t.Fatalf("resolveWith: %v", err)
 	}
 	want := root + "/bin/Playdate Simulator.app/Contents/MacOS/Playdate Simulator"
-	if p.SimulatorBin != want {
+	if filepath.ToSlash(p.SimulatorBin) != want {
 		t.Errorf("SimulatorBin = %q, want the inner Mach-O %q", p.SimulatorBin, want)
 	}
 	if strings.HasSuffix(p.SimulatorBin, ".app") {

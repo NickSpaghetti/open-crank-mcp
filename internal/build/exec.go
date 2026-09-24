@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
@@ -51,6 +52,31 @@ func Build(sourceDir string, paths sdk.Paths) (BuildResult, error) {
 	}
 }
 
+// cmakeCommand prefers CMake on PATH. Visual Studio Build Tools also ships
+// CMake without adding it to PATH, so Windows looks for that copy through
+// vswhere before reporting the missing toolchain.
+func cmakeCommand() (string, error) {
+	if path, err := exec.LookPath("cmake"); err == nil {
+		return path, nil
+	}
+	if runtime.GOOS == "windows" {
+		programFilesX86 := os.Getenv("ProgramFiles(x86)")
+		if programFilesX86 != "" {
+			vswhere := filepath.Join(programFilesX86, "Microsoft Visual Studio", "Installer", "vswhere.exe")
+			output, err := exec.Command(vswhere, "-all", "-products", "*", "-property", "installationPath").Output()
+			if err == nil {
+				for _, installation := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+					candidate := filepath.Join(strings.TrimSpace(installation), "Common7", "IDE", "CommonExtensions", "Microsoft", "CMake", "CMake", "bin", "cmake.exe")
+					if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+						return candidate, nil
+					}
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("cmake is not on PATH; install CMake or Visual Studio's CMake component and restart your MCP client")
+}
+
 // buildC runs the SDK's CMake support, which invokes pdc itself as a
 // POST_BUILD step and names the resulting .pdx after the game's own
 // CMakeLists.txt (PLAYDATE_GAME_NAME), so the path has to be discovered
@@ -63,15 +89,14 @@ func buildC(sourceDir string, paths sdk.Paths) (BuildResult, error) {
 	// Deliberately not checking arm-none-eabi-gcc: the Simulator build produces a
 	// shared library with the host compiler, and the ARM toolchain only matters
 	// for device builds, which this server never does.
-	if _, err := exec.LookPath("cmake"); err != nil {
-		return BuildResult{}, fmt.Errorf(
-			"cmake is not on PATH, and a C game needs it to build. Install it and restart " +
-				"your MCP client, so the server inherits the updated PATH")
+	cmake, err := cmakeCommand()
+	if err != nil {
+		return BuildResult{}, err
 	}
 
 	var output bytes.Buffer
 	runCMake := func(args []string) error {
-		cmd := exec.Command("cmake", args...)
+		cmd := exec.Command(cmake, args...)
 		cmd.Dir = sourceDir
 		// The game's own CMakeLists.txt reads $ENV{PLAYDATE_SDK_PATH}. Without
 		// this it would be unset whenever the SDK came from anywhere but the

@@ -269,3 +269,21 @@ func TestDeclaredLogoExistsUnderThePluginRoot(t *testing.T) {
 		}
 	}
 }
+
+// The command must carry no file extension. That is what lets one token work on
+// both platforms: Windows appends .com/.exe/.cmd/.bat when the named file has
+// none, so this resolves open-crank-mcp on Unix and open-crank-mcp.exe on
+// Windows, which the config format cannot otherwise express.
+//
+// Writing ".exe" here to "fix" Windows is the plausible edit and it breaks Unix
+// outright, so the failure says where the extension belongs instead.
+func TestClaudeMCPCommandStaysExtensionless(t *testing.T) {
+	command, _ := mcpCommand(t, "plugin/.claude-plugin/mcp.json")["command"].(string)
+	if ext := filepath.Ext(command); ext != "" {
+		t.Errorf("Claude Code's command is %q, which ends in %q. It must have no "+
+			"extension: Windows appends one when the named file has none, and that is "+
+			"what makes a single command work on both platforms. The extension belongs "+
+			"on the installed file (open-crank-mcp.exe), not in this config.",
+			command, ext)
+	}
+}

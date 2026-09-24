@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
@@ -176,5 +177,64 @@ func TestScreenshotBaseRejectsAnEmptyScratchDir(t *testing.T) {
 
 	if _, err := s.screenshotBase(harness.FormatPNG); !errors.Is(err, errNoScratch) {
 		t.Fatalf("screenshotBase(png) err = %v, want errNoScratch", err)
+	}
+}
+
+// The three states that separate "never got the command" from "could not write
+// the file", which is the distinction a bare round-trip timeout cannot make.
+func TestScratchReportDescribesWhatTheGameWasGiven(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		setup   func(t *testing.T, s *Server)
+		wantAny []string
+	}{
+		{
+			name:    "no scratch directory",
+			setup:   func(t *testing.T, s *Server) { s.scratchDir = "" },
+			wantAny: []string{"no scratch directory recorded"},
+		},
+		{
+			name: "scratch exists but the game wrote nothing",
+			setup: func(t *testing.T, s *Server) {
+				s.scratchDir = t.TempDir()
+				if err := os.MkdirAll(filepath.Join(s.scratchDir, luaScreenshotRelDir), 0o755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+			},
+			wantAny: []string{"exists and is empty"},
+		},
+		{
+			name: "the game wrote a screenshot",
+			setup: func(t *testing.T, s *Server) {
+				s.scratchDir = t.TempDir()
+				dir := filepath.Join(s.scratchDir, luaScreenshotRelDir)
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "screenshot.png"), []byte("x"), 0o644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			},
+			wantAny: []string{"screenshot.png"},
+		},
+		{
+			name:    "scratch recorded but missing on disk",
+			setup:   func(t *testing.T, s *Server) { s.scratchDir = filepath.Join(t.TempDir(), "gone") },
+			wantAny: []string{"unreadable"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &Server{}
+			tc.setup(t, s)
+			got := s.scratchReport()
+			for _, want := range tc.wantAny {
+				if !strings.Contains(got, want) {
+					t.Errorf("scratchReport() = %q, want it to mention %q", got, want)
+				}
+			}
+			if s.scratchDir != "" && !strings.Contains(got, s.scratchDir) {
+				t.Errorf("scratchReport() = %q, want it to name the scratch path %q", got, s.scratchDir)
+			}
+		})
 	}
 }

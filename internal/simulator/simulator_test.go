@@ -2,6 +2,8 @@ package simulator
 
 import (
 	"errors"
+	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -12,8 +14,20 @@ import (
 // PlaydateSimulator binary. Only the generic launch/stop/wait/output
 // lifecycle is under test here.
 
+func testShell(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-backed process fixtures run only on Unix; Windows is covered by the native contract test")
+	}
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("these lifecycle fixtures use sh, which is unavailable on Windows")
+	}
+	return shell
+}
+
 func TestLaunchCapturesOutput(t *testing.T) {
-	sim, err := Launch("sh", "-c", "echo hello; echo world")
+	sim, err := Launch(testShell(t), "-c", "echo hello; echo world")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -31,7 +45,7 @@ func TestLaunchForwardsExtraArgsAsPlaydateArgv(t *testing.T) {
 	// plus extraArgs as positional args to the child process, mirroring
 	// how PlaydateSimulator forwards argv[1]=pdx path, argv[2:]=extras
 	// into playdate.argv.
-	sim, err := Launch("sh", "-c", `echo "$0:$1"`, "argA", "argB")
+	sim, err := Launch(testShell(t), "-c", `echo "$0:$1"`, "argA", "argB")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -47,7 +61,7 @@ func TestLaunchForwardsExtraArgsAsPlaydateArgv(t *testing.T) {
 func TestLaunchWithEmptyPdxPathOmitsIt(t *testing.T) {
 	// An empty pdxPath means "launch with no game". extraArgs should be
 	// passed as-is, not preceded by an empty positional argument.
-	sim, err := Launch("sh", "", "-c", `echo "$0:$1"`, "onlyArg")
+	sim, err := Launch(testShell(t), "", "-c", `echo "$0:$1"`, "onlyArg")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -61,7 +75,7 @@ func TestLaunchWithEmptyPdxPathOmitsIt(t *testing.T) {
 }
 
 func TestStopKillsRunningProcess(t *testing.T) {
-	sim, err := Launch("sh", "-c", "sleep 5")
+	sim, err := Launch(testShell(t), "-c", "sleep 5")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -83,7 +97,7 @@ func TestStopKillsRunningProcess(t *testing.T) {
 }
 
 func TestOutputIsSafeToReadWhileProcessIsRunning(t *testing.T) {
-	sim, err := Launch("sh", "-c", "while true; do echo tick; done")
+	sim, err := Launch(testShell(t), "-c", "while true; do echo tick; done")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -108,7 +122,7 @@ func TestOutputIsSafeToReadWhileProcessIsRunning(t *testing.T) {
 }
 
 func TestStopAfterProcessAlreadyExitedDoesNotError(t *testing.T) {
-	sim, err := Launch("sh", "-c", "true")
+	sim, err := Launch(testShell(t), "-c", "true")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -164,7 +178,7 @@ func TestLaunchSucceedsWithoutStdbuf(t *testing.T) {
 	t.Cleanup(func() { lookPath = original })
 	lookPath = func(string) (string, error) { return "", errors.New("not found") }
 
-	sim, err := Launch("sh", "", "-c", "sleep 30")
+	sim, err := Launch(testShell(t), "", "-c", "sleep 30")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}

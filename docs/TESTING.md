@@ -6,6 +6,12 @@ What each command does is in the readme's
 [Tests and checks](../README.md#tests-and-checks) table. This is the reasoning
 behind them.
 
+Windows-native integration is opt-in because it needs the installed Windows SDK,
+Visual Studio CMake toolchain, and a real Simulator. Run
+`scripts/test-windows-native.ps1` locally; CI runs the same script after silently
+installing the pinned Windows SDK. The script includes ordinary Windows tests and
+vet as well as the tagged C/Lua MCP contract test.
+
 The container tests run in their own compose project, on ports 6180 and 8100,
 with their own data directory. That isolation matters more than it sounds: the
 suite needs a known game mounted, so without it a test run unmounts the game you

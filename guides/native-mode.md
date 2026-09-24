@@ -27,3 +27,10 @@ before involving an agent:
 make smoke-check-native        # libraries resolve, pdc runs, the Simulator starts
 make sdk-contract-check-native # the MCP tools driving a real Simulator
 ```
+
+On Windows, the same native integration checks are available with the SDK-backed
+PowerShell script used by CI:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-windows-native.ps1
+```

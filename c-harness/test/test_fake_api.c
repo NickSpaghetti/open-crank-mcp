@@ -219,7 +219,7 @@ static void test_crank_override(void)
 
 /* The same command without a dock mode, end to end through the harness: angle and
    delta are overridden, the dock reading is not.
-   
+
    The fake is set to report *docked* first, deliberately. The old bool-shaped
    protocol would have resolved a missing dock to false and forced undocked, so
    asserting against a real value of 1 is what distinguishes "passed the real

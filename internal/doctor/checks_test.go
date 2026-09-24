@@ -18,7 +18,7 @@ import (
 func fakePDC(t *testing.T, prints string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
-		t.Skip("no shebang scripts on windows, and windows-native is unsupported")
+		t.Skip("this fake pdc depends on a Unix shebang script")
 	}
 	path := filepath.Join(t.TempDir(), "pdc")
 	script := "#!/bin/sh\necho '" + prints + "'\n"
@@ -61,8 +61,13 @@ func TestPDCVersionReportsAMissingBinary(t *testing.T) {
 func dynamicBinary(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS != "linux" {
-		// Off Linux SharedLibraries only stats the path, so any real file does.
-		return "/bin/sh"
+		// Off Linux SharedLibraries only stats the path, so the test executable
+		// itself is a portable stand-in.
+		path, err := os.Executable()
+		if err != nil {
+			t.Fatalf("locating the test executable: %v", err)
+		}
+		return path
 	}
 	for _, candidate := range []string{"/bin/sh", "/bin/ls", "/usr/bin/env"} {
 		out, err := exec.Command("ldd", candidate).CombinedOutput()
