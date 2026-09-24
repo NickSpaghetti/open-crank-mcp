@@ -7,8 +7,10 @@ It does **not** install the Playdate SDK, and cannot. Panic's licence forbids
 redistributing it. See [Requirements](../README.md#requirements). Everything
 below assumes you have an SDK, or are about to install one.
 
-Native mode only, so Linux and macOS. On Windows use container mode under WSL2
-and [connect by hand](connecting.md).
+The plugin's native server is available for Linux and macOS, and Windows x64
+starting with releases made after Windows support was added. Windows native mode
+is experimental and requires the Windows Playdate SDK; Windows on ARM64 is not
+published yet.
 
 ## Claude Code
 
@@ -25,7 +27,9 @@ Then install the server:
 
 The plugin does not carry the server binary - it is about 10 MB per platform and
 the plugin is a git repository - so it is downloaded from a GitHub release once
-per version. Until that has run, **the server will show as failing to connect**,
+per version. Windows x64 binaries are included in releases created with the
+current release workflow; earlier releases do not contain them. Until the skill
+has run, **the server will show as failing to connect**,
 which is expected rather than a bug. Run `/reload-plugins` afterwards, because the
 client already tried to start the server before the binary existed.
 

@@ -72,7 +72,7 @@ func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in L
 	// the only place it can be done: `setup` vendors a *copy* of the harness into
 	// each game, so a fix on the Lua side would never reach a project that was set
 	// up before it.
-	sim, err := simulator.Launch(s.simulatorBin(), in.PdxPath, filepath.ToSlash(scratch))
+	sim, err := simulator.Launch(s.simulatorBin(), filepath.ToSlash(in.PdxPath), filepath.ToSlash(scratch))
 	if err != nil {
 		os.RemoveAll(scratch)
 		return nil, LaunchSimulatorOutput{}, fmt.Errorf("launching simulator: %w", err)
@@ -87,7 +87,11 @@ func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in L
 	// exposes.
 	time.Sleep(startupGrace)
 	if sim.Exited() {
-		os.RemoveAll(scratch)
+		_ = sim.Wait()
+		err := os.RemoveAll(scratch)
+		if err != nil {
+			return nil, LaunchSimulatorOutput{}, err
+		}
 		return nil, LaunchSimulatorOutput{}, fmt.Errorf(
 			"the simulator quit during startup:\n%s", strings.TrimSpace(sim.Output()))
 	}
@@ -154,7 +158,7 @@ func newScratchDir(bundleID string) (string, error) {
 	}
 	// mcp/ is created here because writeToFile will not create directories.
 	if err := os.MkdirAll(filepath.Join(scratch, luaScreenshotRelDir), 0o755); err != nil {
-		os.RemoveAll(scratch)
+		_ = os.RemoveAll(scratch)
 		return "", fmt.Errorf("creating %s in scratch directory: %w", luaScreenshotRelDir, err)
 	}
 	return scratch, nil

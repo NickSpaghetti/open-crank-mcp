@@ -114,7 +114,7 @@ func searchForBundle(env Env, root, bundleID string) (string, bool) {
 		}
 		if d.Name() == bundleID {
 			if _, err := fs.Stat(env.FS, p+"/"+harnessDir); err == nil {
-				hit = "/" + p
+				hit = filepath.Join(root, filepath.FromSlash(rel))
 				return fs.SkipAll
 			}
 		}
@@ -123,7 +123,7 @@ func searchForBundle(env Env, root, bundleID string) (string, bool) {
 	if hit == "" {
 		return "", false
 	}
-	return filepath.FromSlash(hit), true
+	return hit, true
 }
 
 // DataDirDiagnostic is the message to hand back when the data directory could

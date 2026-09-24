@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 	"github.com/NickSpaghetti/open-crank-mcp/internal/screenshot"
@@ -23,7 +24,10 @@ func (s *Server) getScreenshot(_ context.Context, _ *mcp.CallToolRequest, _ GetS
 
 	resp, err := s.roundTripLocked(harness.Command{Type: harness.CmdScreenshot})
 	if err != nil {
-		result, wrapErr := handleRoundTripErr(err)
+		// The round-trip error names response.json in the data directory, which
+		// says nothing about the scratch directory the PNG is written to. A
+		// screenshot that never comes back is usually about the latter.
+		result, wrapErr := handleRoundTripErr(fmt.Errorf("%w%s", err, s.scratchReport()))
 		return result, nil, wrapErr
 	}
 
@@ -88,4 +92,34 @@ func (s *Server) screenshotBase(format string) (string, error) {
 		return s.scratchDir, nil
 	}
 	return s.dataDir, nil
+}
+
+// scratchReport describes the directory handed to the game as playdate.argv[2]
+// and what is currently in it.
+//
+// Written for the case where get_screenshot times out after a restart: the
+// scratch directory is the only thing restart changes, and whether the game
+// wrote anything into it separates "never got the command" from "could not
+// write the file".
+func (s *Server) scratchReport() string {
+	s.mu.Lock()
+	scratch := s.scratchDir
+	s.mu.Unlock()
+
+	if scratch == "" {
+		return " (no scratch directory recorded, so the PNG had nowhere to go)"
+	}
+	dir := filepath.Join(scratch, luaScreenshotRelDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Sprintf(" (scratch %s: %s is unreadable: %v)", scratch, luaScreenshotRelDir, err)
+	}
+	if len(entries) == 0 {
+		return fmt.Sprintf(" (scratch %s: %s exists and is empty)", scratch, luaScreenshotRelDir)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return fmt.Sprintf(" (scratch %s: %s holds %s)", scratch, luaScreenshotRelDir, strings.Join(names, ", "))
 }

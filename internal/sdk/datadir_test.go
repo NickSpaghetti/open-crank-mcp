@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -58,7 +59,7 @@ func TestFindDataDirPicksTheCandidateWithHarnessDir(t *testing.T) {
 			if !found {
 				t.Fatalf("FindDataDir did not find %s; tried:\n  %s", tc.harnessed, strings.Join(tried, "\n  "))
 			}
-			if dir != tc.harnessed {
+			if filepath.ToSlash(dir) != tc.harnessed {
 				t.Errorf("dir = %q, want %q", dir, tc.harnessed)
 			}
 		})
@@ -90,7 +91,7 @@ func TestFindDataDirSkipsCandidatesWithoutHarnessDir(t *testing.T) {
 	if !found {
 		t.Fatal("FindDataDir found nothing, though a harnessed directory exists")
 	}
-	if want := support + "/Data/" + bundle; dir != want {
+	if want := support + "/Data/" + bundle; filepath.ToSlash(dir) != want {
 		t.Errorf("dir = %q, want %q (the harnessed one, not the empty first candidate)", dir, want)
 	}
 }
@@ -119,7 +120,7 @@ func TestFindDataDirHonoursDataRootOverride(t *testing.T) {
 	if !found {
 		t.Fatal("FindDataDir ignored the override")
 	}
-	if want := override + "/" + bundle; dir != want {
+	if want := override + "/" + bundle; filepath.ToSlash(dir) != want {
 		t.Errorf("dir = %q, want %q", dir, want)
 	}
 }
@@ -146,7 +147,7 @@ func TestFindDataDirFallsBackToBoundedSearch(t *testing.T) {
 	if !found {
 		t.Fatalf("bounded search missed %s; tried:\n  %s", unexpected, strings.Join(tried, "\n  "))
 	}
-	if dir != unexpected {
+	if filepath.ToSlash(dir) != unexpected {
 		t.Errorf("dir = %q, want %q", dir, unexpected)
 	}
 }
@@ -329,7 +330,7 @@ func TestWindowsLayoutUsesEachEnvironmentVariable(t *testing.T) {
 	}
 
 	// The confirmed install location goes first.
-	if want := "/c/users/u/Documents/PlaydateSDK"; roots[0] != want {
+	if want := "/c/users/u/Documents/PlaydateSDK"; filepath.ToSlash(roots[0]) != want {
 		t.Errorf("first default root = %q, want %q (where the installer puts it)", roots[0], want)
 	}
 
@@ -371,7 +372,7 @@ func TestMacOSLayoutWithoutHomeKeepsInSDKCandidate(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("without a home directory: %d candidates, want just the in-SDK one: %v", len(got), got)
 	}
-	if !strings.HasPrefix(got[0], "/opt/sdk") {
+	if !strings.HasPrefix(filepath.ToSlash(got[0]), "/opt/sdk") {
 		t.Errorf("remaining candidate %q is not the in-SDK path", got[0])
 	}
 }
@@ -400,7 +401,7 @@ func TestFindDataDirSearchIncludesExactDepthLimit(t *testing.T) {
 	if !found {
 		t.Fatalf("a bundle at exactly the depth limit was not found; tried:\n  %s", strings.Join(tried, "\n  "))
 	}
-	if dir != atLimit {
+	if filepath.ToSlash(dir) != atLimit {
 		t.Errorf("dir = %q, want %q", dir, atLimit)
 	}
 }
@@ -427,7 +428,7 @@ func TestMacOSSearchRootsDependOnHome(t *testing.T) {
 	}
 
 	for _, name := range append(withHome, got...) {
-		if !strings.HasPrefix(name, "/") {
+		if !strings.HasPrefix(filepath.ToSlash(name), "/") {
 			t.Errorf("search root %q is not absolute, so it would resolve against the process cwd", name)
 		}
 	}
@@ -452,12 +453,36 @@ func TestMacOSPrefersInSDKDataDir(t *testing.T) {
 	if len(cands) == 0 {
 		t.Fatal("no candidates")
 	}
-	if want := root + "/Disk/Data/" + bundle; cands[0] != want {
+	if want := root + "/Disk/Data/" + bundle; filepath.ToSlash(cands[0]) != want {
 		t.Errorf("first candidate = %q, want %q (confirmed against a real install)", cands[0], want)
 	}
 	// The Application Support paths stay as later candidates: the evidence is one
 	// machine and one SDK version, and they cost a stat each only on a miss.
 	if len(cands) < 2 {
 		t.Error("the Application Support fallbacks were dropped; keep them behind the confirmed path")
+	}
+}
+
+// A Windows root is "C:/..." and never had a leading separator for fsKey to
+// strip, so re-adding one returned "/C:/..." - a path nothing can open, handed
+// back with found=true, which suppresses DataDirDiagnostic.
+//
+// searchForBundle is called directly: a drive-letter root cannot travel through
+// the layout fixtures on a Unix test host, and this is about path arithmetic
+// rather than about layouts.
+func TestSearchForBundleKeepsAWindowsStyleRoot(t *testing.T) {
+	const bundle = "dev.example.game"
+	const root = "C:/Users/u/Documents/PlaydateSDK/Disk/Data"
+
+	env := testEnv("C:/Users/u", map[string]string{
+		root + "/" + bundle + "/" + harnessDir + "/keep": "",
+	}, nil)
+
+	got, found := searchForBundle(env, root, bundle)
+	if !found {
+		t.Fatalf("searchForBundle did not find %s under %s", bundle, root)
+	}
+	if want := root + "/" + bundle; filepath.ToSlash(got) != want {
+		t.Errorf("searchForBundle = %q, want %q", filepath.ToSlash(got), want)
 	}
 }

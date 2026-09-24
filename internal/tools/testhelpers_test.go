@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,18 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
+func testShell(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-backed tool fixtures run only on Unix; Windows is covered by the native contract test")
+	}
+	shell, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("these tool tests use sh as a fake Simulator, which is not available on Windows")
+	}
+	return shell
+}
+
 // newTestServer builds a Server backed by a trivial stand-in process (not a
 // real PlaydateSimulator), the same approach internal/simulator's own tests
 // use. sdkPath points at a scratch directory whose bin/PlaydateSimulator is
@@ -24,7 +37,8 @@ import (
 // of just an error path.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	sim, err := simulator.Launch("sh", "-c", "sleep 30")
+	shPath := testShell(t)
+	sim, err := simulator.Launch(shPath, "-c", "sleep 30")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -36,10 +50,6 @@ func newTestServer(t *testing.T) *Server {
 	sdkPath := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(sdkPath, "bin"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
-	}
-	shPath, err := exec.LookPath("sh")
-	if err != nil {
-		t.Fatalf("LookPath(sh): %v", err)
 	}
 	if err := os.Symlink(shPath, filepath.Join(sdkPath, "bin", "PlaydateSimulator")); err != nil {
 		t.Fatalf("Symlink: %v", err)

@@ -18,6 +18,10 @@ func setProcAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
+func attachProcess(cmd *exec.Cmd) (*processControl, error) {
+	return &processControl{stopFunc: func() error { return killProcess(cmd) }}, nil
+}
+
 // killProcess SIGKILLs the child's entire process group.
 //
 // The group, not just the process: a shell invoked as `sh -c "... simulator"`

@@ -10,8 +10,48 @@ import (
 
 // Simulator is a running PlaydateSimulator child process.
 type Simulator struct {
-	cmd    *exec.Cmd
-	output *syncBuffer
+	cmd     *exec.Cmd
+	output  *syncBuffer
+	control *processControl
+}
+
+// processControl owns platform-specific cleanup for the Simulator process and
+// any children it starts.
+type processControl struct {
+	mu          sync.Mutex
+	stopFunc    func() error
+	releaseFunc func() error
+	stopped     bool
+	released    bool
+}
+
+func (p *processControl) stop() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released || p.stopped || p.stopFunc == nil {
+		return nil
+	}
+	if err := p.stopFunc(); err != nil {
+		return err
+	}
+	p.stopped = true
+	return nil
+}
+
+func (p *processControl) release() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.released {
+		return nil
+	}
+	p.released = true
+	p.stopFunc = nil
+	if p.releaseFunc == nil {
+		return nil
+	}
+	err := p.releaseFunc()
+	p.releaseFunc = nil
+	return err
 }
 
 // syncBuffer guards a bytes.Buffer with a mutex so Output() can be read
@@ -96,8 +136,14 @@ func Launch(binPath, pdxPath string, extraArgs ...string) (*Simulator, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("launching simulator: %w", err)
 	}
+	control, err := attachProcess(cmd)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return nil, fmt.Errorf("setting up simulator process control: %w", err)
+	}
 
-	return &Simulator{cmd: cmd, output: output}, nil
+	return &Simulator{cmd: cmd, output: output, control: control}, nil
 }
 
 // Stop kills the Simulator. PlaydateSimulator ignores SIGTERM, so this is
@@ -109,7 +155,13 @@ func (s *Simulator) Stop() error {
 	if s.cmd.Process == nil {
 		return nil
 	}
-	if err := killProcess(s.cmd); err != nil {
+	var err error
+	if s.control != nil {
+		err = s.control.stop()
+	} else {
+		err = killProcess(s.cmd)
+	}
+	if err != nil {
 		return fmt.Errorf("killing simulator: %w", err)
 	}
 	return nil
@@ -118,7 +170,13 @@ func (s *Simulator) Stop() error {
 // Wait blocks until the process exits. Call after Stop() to reap it, or on
 // its own if the process is expected to exit by itself.
 func (s *Simulator) Wait() error {
-	return s.cmd.Wait()
+	err := s.cmd.Wait()
+	if s.control != nil {
+		if releaseErr := s.control.release(); err == nil {
+			err = releaseErr
+		}
+	}
+	return err
 }
 
 // Exited reports whether the process has already finished, without blocking.

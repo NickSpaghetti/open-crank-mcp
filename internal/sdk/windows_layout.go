@@ -2,12 +2,7 @@ package sdk
 
 import "path/filepath"
 
-// The Windows layout. Windows-native is NOT a supported runtime - WSL2 serves
-// Windows users through the container instead. See docs/ROADMAP.md.
-//
-// The values below are nonetheless real, taken from an SDK 3.1.1 install on
-// Windows (see docs/NATIVE-PROBE.md), because getting them right costs nothing
-// and keeps promoting Windows later additive rather than a rewrite.
+// The Windows layout, verified against SDK 3.1.2 and a native Simulator run.
 //
 // Three things that probe established, each of which contradicted the first
 // guess here:
@@ -51,10 +46,8 @@ func windowsLayout() layout {
 			return filepath.Join(root, "bin", "pdc.exe")
 		},
 
-		// In-SDK first, matching the two platforms where a running game has
-		// actually been observed writing there. No game was run on Windows, so
-		// this is inference rather than measurement, but it is inference from two
-		// confirmed data points about one codebase rather than from convention.
+		// In-SDK first. A native Windows run confirmed that the Simulator writes
+		// per-game data under this directory.
 		//
 		// %LOCALAPPDATA%\Playdate Simulator does exist on Windows and is kept as
 		// a fallback. What is in it is unknown: it may be settings rather than

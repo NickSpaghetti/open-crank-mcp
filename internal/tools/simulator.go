@@ -69,9 +69,9 @@ func (s *Server) restartSimulator(_ context.Context, _ *mcp.CallToolRequest, _ R
 	if err != nil {
 		return nil, RestartSimulatorOutput{}, err
 	}
-	newSim, err := simulator.Launch(s.simulatorBin(), s.pdxPath, filepath.ToSlash(scratch))
+	newSim, err := simulator.Launch(s.simulatorBin(), filepath.ToSlash(s.pdxPath), filepath.ToSlash(scratch))
 	if err != nil {
-		os.RemoveAll(scratch)
+		_ = os.RemoveAll(scratch)
 		return nil, RestartSimulatorOutput{}, fmt.Errorf("relaunching simulator: %w", err)
 	}
 	s.sim = newSim

@@ -10,10 +10,8 @@
 //
 // Everything here takes its filesystem and environment as parameters rather than
 // reaching for the real ones, and the per-platform layouts are values rather than
-// build-tagged files. That combination is what lets the darwin and windows path
-// logic be tested on any machine, which matters more than usual here: those
-// layouts could not be verified by running them, so exercising them against a
-// synthetic filesystem in CI is the next best thing. See sdk_test.go.
+// build-tagged files. That lets tests exercise every layout on every OS; the
+// Windows layout is also covered by the native integration test. See sdk_test.go.
 package sdk
 
 import (
@@ -26,8 +24,8 @@ import (
 
 // Env is the outside world, injected. Production callers use OSEnv.
 type Env struct {
-	// FS is rooted at the filesystem root, so an absolute OS path maps to a key
-	// in it via fsKey. os.DirFS("/") in production, fstest.MapFS in tests.
+	// FS reads the absolute OS paths passed through fsKey. osPathFS in
+	// production, fstest.MapFS in tests.
 	FS fs.FS
 	// Getenv looks up an environment variable. os.Getenv in production.
 	Getenv func(string) string
@@ -39,10 +37,23 @@ type Env struct {
 // OSEnv is the real environment.
 func OSEnv() Env {
 	return Env{
-		FS:      os.DirFS("/"),
+		FS:      osPathFS{},
 		Getenv:  os.Getenv,
 		HomeDir: os.UserHomeDir,
 	}
+}
+
+// osPathFS adapts absolute OS paths to fs.FS. Unlike os.DirFS("/"), it also
+// handles Windows drive-letter paths, which is needed for native Windows SDK
+// discovery and Simulator data-directory probing.
+type osPathFS struct{}
+
+func (osPathFS) Open(name string) (fs.File, error) {
+	path := filepath.FromSlash(name)
+	if !filepath.IsAbs(path) {
+		path = string(os.PathSeparator) + path
+	}
+	return os.Open(path)
 }
 
 // Paths is a resolved SDK: where it is, how that was decided, and the absolute
@@ -248,10 +259,10 @@ func (p Paths) BuildEnv() []string {
 // fsKey converts an absolute OS path into a key for an fs.FS rooted at the
 // filesystem root.
 //
-// fs.FS paths are always slash-separated and never rooted, so a leading
-// separator has to go. A Windows drive letter survives as a "C:/..." prefix,
-// which is not a meaningful fs.FS path but is a consistent key, and is only ever
-// used against a synthetic filesystem: Windows-native is unsupported at runtime.
+// fs.FS paths are slash-separated and cannot start with a separator, so Unix
+// paths lose their leading slash. Windows drive letters remain as "C:/...";
+// osPathFS understands those as absolute paths, while synthetic filesystems use
+// the same key consistently in tests.
 func fsKey(path string) string {
 	return strings.TrimPrefix(filepath.ToSlash(path), "/")
 }

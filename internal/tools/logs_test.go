@@ -20,7 +20,7 @@ func TestGetLogsWhenNotRunning(t *testing.T) {
 }
 
 func TestGetLogsReturnsAllLinesByDefault(t *testing.T) {
-	sim, err := simulator.Launch("sh", "-c", "echo one; echo two; echo three")
+	sim, err := simulator.Launch(testShell(t), "-c", "echo one; echo two; echo three")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestGetLogsReturnsAllLinesByDefault(t *testing.T) {
 }
 
 func TestGetLogsTailN(t *testing.T) {
-	sim, err := simulator.Launch("sh", "-c", "echo one; echo two; echo three")
+	sim, err := simulator.Launch(testShell(t), "-c", "echo one; echo two; echo three")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestGetLogsTailN(t *testing.T) {
 }
 
 func TestGetLogsTailNLargerThanAvailableReturnsEverything(t *testing.T) {
-	sim, err := simulator.Launch("sh", "-c", "echo one")
+	sim, err := simulator.Launch(testShell(t), "-c", "echo one")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestGetLogsTailNLargerThanAvailableReturnsEverything(t *testing.T) {
 }
 
 func TestGetLogsWithNoOutputReturnsEmptyLines(t *testing.T) {
-	sim, err := simulator.Launch("sh", "-c", "true")
+	sim, err := simulator.Launch(testShell(t), "-c", "true")
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
 	}

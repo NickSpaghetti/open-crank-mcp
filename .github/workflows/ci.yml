@@ -226,6 +226,39 @@ jobs:
         env:
           SDL_AUDIODRIVER: dummy
 
+  # Windows native mode uses the official SDK installer and the Visual Studio
+  # toolchain already present on windows-latest. The shared PowerShell script is
+  # also the local command for developers working on a Windows host.
+  windows-native:
+    runs-on: windows-latest
+    env:
+      PLAYDATE_SDK_VERSION: 3.1.2
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Install Playdate SDK
+        shell: pwsh
+        run: |
+          $sdkPath = Join-Path $env:RUNNER_TEMP "PlaydateSDK"
+          $installer = Join-Path $env:RUNNER_TEMP "PlaydateSDK-$env:PLAYDATE_SDK_VERSION.exe"
+          $url = "https://download.panic.com/playdate_sdk/Windows/PlaydateSDK-$env:PLAYDATE_SDK_VERSION.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $process = Start-Process -FilePath $installer -ArgumentList @("/S", "/D=$sdkPath") -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Playdate SDK installer failed with exit code $($process.ExitCode)"
+          }
+          foreach ($binary in @("pdc.exe", "PlaydateSimulator.exe")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $sdkPath "bin\$binary"))) {
+              throw "Playdate SDK install is missing bin\$binary"
+            }
+          }
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "PLAYDATE_SDK_PATH=$sdkPath`n")
+          Remove-Item $installer -Force
+      - name: Test Windows native server and MCP fixtures
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-windows-native.ps1
 
   # What only this job can cover, whether or not the SDK steps work:
   #
