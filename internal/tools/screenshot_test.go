@@ -3,11 +3,14 @@ package tools
 import (
 	"bytes"
 	"context"
+	"errors"
 	"image"
 	"image/png"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 
 	screenshotpkg "github.com/NickSpaghetti/open-crank-mcp/internal/screenshot"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -128,5 +131,50 @@ func TestGetScreenshotPNGIgnoresDataDir(t *testing.T) {
 
 	if _, _, err := s.getScreenshot(context.Background(), nil, GetScreenshotInput{}); err == nil {
 		t.Fatal("getScreenshot read a PNG out of the data directory; the two bases have collapsed into one")
+	}
+}
+
+// The regression this pins: restart cleared the scratch directory, never made a
+// new one, and handed the data directory to the game instead. The harness then
+// reported writing the PNG successfully while the server joined an empty base
+// into the bare relative path "mcp/screenshot.png" and failed to open it.
+func TestGetScreenshotAfterRestart(t *testing.T) {
+	s := newTestServer(t)
+	s.scratchDir = t.TempDir()
+
+	if _, _, err := s.restartSimulator(context.Background(), nil, RestartSimulatorInput{}); err != nil {
+		t.Fatalf("restartSimulator: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(s.scratchDir) })
+
+	// Written where the restarted game was told to write, not where the first
+	// launch was: that difference is the whole bug.
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 4, 4))); err != nil {
+		t.Fatalf("png.Encode: %v", err)
+	}
+	shot := filepath.Join(s.scratchDir, "mcp", "screenshot.png")
+	if err := os.WriteFile(shot, buf.Bytes(), 0o644); err != nil {
+		t.Fatalf("WriteFile %s: %v", shot, err)
+	}
+	startFakeHarness(t, s.dataDir, map[string]any{
+		"status": "ok", "format": "png", "path": "mcp/screenshot.png",
+	})
+
+	result, _, err := s.getScreenshot(context.Background(), nil, GetScreenshotInput{})
+	if err != nil {
+		t.Fatalf("getScreenshot after restart: %v", err)
+	}
+	assertPNGImageContent(t, result)
+}
+
+// An empty scratch directory used to join into a relative path, so the failure
+// read as a missing file rather than as missing state.
+func TestScreenshotBaseRejectsAnEmptyScratchDir(t *testing.T) {
+	s := newTestServer(t)
+	s.scratchDir = ""
+
+	if _, err := s.screenshotBase(harness.FormatPNG); !errors.Is(err, errNoScratch) {
+		t.Fatalf("screenshotBase(png) err = %v, want errNoScratch", err)
 	}
 }

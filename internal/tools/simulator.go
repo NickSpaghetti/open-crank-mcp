@@ -65,11 +65,17 @@ func (s *Server) restartSimulator(_ context.Context, _ *mcp.CallToolRequest, _ R
 	s.sim = nil
 	s.clearScratchLocked()
 
-	newSim, err := simulator.Launch(s.simulatorBin(), s.pdxPath, s.dataDir)
+	scratch, err := newScratchDir(s.bundleID)
 	if err != nil {
+		return nil, RestartSimulatorOutput{}, err
+	}
+	newSim, err := simulator.Launch(s.simulatorBin(), s.pdxPath, filepath.ToSlash(scratch))
+	if err != nil {
+		os.RemoveAll(scratch)
 		return nil, RestartSimulatorOutput{}, fmt.Errorf("relaunching simulator: %w", err)
 	}
 	s.sim = newSim
+	s.scratchDir = scratch
 
 	return nil, RestartSimulatorOutput{BundleID: s.bundleID, DataDir: s.dataDir}, nil
 }

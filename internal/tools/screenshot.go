@@ -80,6 +80,11 @@ func (s *Server) screenshotBase(format string) (string, error) {
 		return "", errNotRunning
 	}
 	if format == harness.FormatPNG {
+		// Without this an empty scratchDir joins into a bare relative path, and the
+		// failure reads as a missing file rather than as missing state.
+		if s.scratchDir == "" {
+			return "", errNoScratch
+		}
 		return s.scratchDir, nil
 	}
 	return s.dataDir, nil
