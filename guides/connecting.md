@@ -2,28 +2,28 @@
 
 How to point Claude Code, OpenCode, or Cursor at the server, by hand.
 
-If you want the short path, [install it as a plugin](plugin.md) instead: the
-editor fetches the server and there is no path to write down. This guide is for
-hand-configuration: a container-mode setup, a build of your own, or OpenCode,
-whose v1 plugin API cannot register an MCP server.
+The shorter path is to [install it as a plugin](plugin.md). This guide is for
+a container-mode setup, a build of your own, or OpenCode, whose v1 plugin API
+cannot register an MCP server.
 
 Do this after you can build and run in one of the two modes. See
 [getting-started.md](getting-started.md) if you have not got that far.
 
-All three speak the same MCP transport over stdio. What differs between them is
-the config file's shape; what differs between modes is the command. Those are two
-separate axes, so they are listed separately rather than as one block per
-combination.
+All three speak MCP over stdio. The client decides the config file's shape.
+The mode decides the command.
 
 ### The command
 
 **Native.** Nothing but the binary.
 
 ```
-/absolute/path/to/open-crank-mcp/open-crank-mcp
+/absolute/path/to/open-crank-mcp
 ```
 
-No arguments. Your game's path is passed to the tools at call time rather than
+On Windows it is `open-crank-mcp.exe`. No arguments.
+
+`open-crank-mcp -print-config claude`, `cursor` or `opencode` prints the
+complete config block with this binary's path already filled in. Your game's path is passed to the tools at call time rather than
 mounted, so there is nothing per-project to configure. If your SDK is somewhere
 `make sdk-path` does not find, add `PLAYDATE_SDK_PATH` to the client's `env`.
 
@@ -95,7 +95,7 @@ globally. Identical to Claude Code's shape.
 
 Or `opencode mcp add open-crank-mcp` interactively.
 
-Worth knowing for native mode specifically: a client launches its server with a
-minimal `PATH` and an arbitrary working directory. That is why `build_game`
-preflights `cmake` rather than assuming it, and why the harness sources are
-embedded in the binary rather than read from this repo.
+In native mode a client launches the server with a minimal `PATH` and an
+arbitrary working directory. That is why `build_game` checks for `cmake` before
+using it, and why the harness sources are embedded in the binary rather than
+read from this repo.

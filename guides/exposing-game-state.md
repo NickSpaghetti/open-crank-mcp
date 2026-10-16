@@ -61,20 +61,18 @@ contain a quote or a backslash.
 A complete example lives at
 [`c-harness/test/fixture-game/src/main.c`](../c-harness/test/fixture-game/src/main.c).
 
-## Two ways this fails silently
+## Two ways this fails
 
-Both are worth knowing before you spend an afternoon on them.
+**Lua: return a string, not a table.** The harness runs `json.decode` on what
+you return. If that fails, or your function throws, `get_game_state` succeeds
+and returns nothing, with no error anywhere. Returning a table instead of
+`json.encode(table)` fails exactly this way.
 
-**Return a string, not a table or a struct.** Both harnesses expect JSON text.
-In Lua the harness runs `json.decode` on what you return, and a decode failure
-leaves the state field unset with no error anywhere. `get_game_state` succeeds
-and reports nothing. Returning a table instead of `json.encode(table)` fails
-exactly this way.
-
-**C truncates at 4096 bytes.** The response struct holds `char state[4096]`, and
-the harness `strncpy`s your string into it. Anything longer is cut off mid
-string, which produces invalid JSON, which decodes to nothing on the far side.
-No error is raised. Keep the state small, which you want anyway.
+**C: invalid JSON, or more than 4095 bytes.** The harness copies your string
+into a 4096-byte buffer and embeds it in the response as-is. Anything longer is
+cut off mid string. Invalid JSON from either cause makes the whole response
+unreadable, so `get_game_state` waits out its 5 second timeout and then fails
+with a `parsing response` error. Keep the state small, which you want anyway.
 
 ## What to put in it
 
@@ -102,8 +100,7 @@ display list with position, bounds, tag, z-index and visibility.
 The two are complementary. `list_entities` tells an agent where things are.
 Your state function tells it what they mean.
 
-One asymmetry to know about. The response carries an `entities_complete` field,
-and it is not always true.
+The response carries a `complete` field, and it is not always true.
 
 | Game | Backed by | Complete |
 |---|---|---|
@@ -112,8 +109,8 @@ and it is not always true.
 
 The C API has no true "list every sprite" call. The harness approximates it by
 querying a screen-sized rect, which only finds sprites with a collide rect set.
-A purely decorative C sprite is missed. Check `entities_complete` before treating
-the list as the whole picture.
+A purely decorative C sprite is missed. Check `complete` before treating the list
+as the whole picture.
 
 ## Checking your work
 
@@ -123,13 +120,13 @@ Launch the game and ask for the state directly.
 get_game_state
 ```
 
-If it comes back empty, work through these in order:
+If it comes back empty or errors, work through these in order:
 
 1. Is `setup` run and the harness imported or included?
 2. Does `get_status` report `harness_reachable: true`?
 3. Is your function registered before the first frame? In C that means on
    `kEventInit`.
 4. Does it return a string? In Lua, `json.encode(...)`, not the table.
-5. In C, is the result under 4096 bytes?
+5. In C, is the result valid JSON and under 4096 bytes?
 
 See [troubleshooting.md](troubleshooting.md) for the rest.

@@ -6,15 +6,12 @@ This is the `shared` compose profile. It is optional. Container mode and native
 mode both work without it. See [container-mode.md](container-mode.md) for the
 modes themselves.
 
-Every profile above and the "Connecting" command above it are two
-independent things. `docker compose run` (what an MCP client uses) always
-creates a brand new container per connection. So even if you separately
-had `make up-vnc` running, you'd never be looking at the same Simulator
-process an agent is driving through MCP tool calls. Two unrelated
-containers, two unrelated displays.
+The usual container setup runs `docker compose run`, which creates a new
+container per connection. Even with `make up-vnc` running, you would be watching
+a different Simulator from the one the agent drives.
 
-`make up-shared` fixes that. One persistent container, shared by both. Start
-it once, pointed at your game's directory:
+`make up-shared` runs one persistent container for both. Start it once, pointed
+at your game's directory:
 
 ```
 GAME_DIR=/absolute/path/to/your-game make up-shared
@@ -23,8 +20,7 @@ GAME_DIR=/absolute/path/to/your-game make up-shared
 `GAME_DIR` is required and must be absolute. The target refuses to start
 without it, rather than silently mounting this repo as your game.
 
-Unlike every other `up*` target, this one runs detached. It keeps running
-in the background instead of occupying your terminal. Open
+Unlike every other `up*` target, this one runs detached. Open
 `http://localhost:6080/` for video and audio in one tab, with the same
 [Simulator defaults](container-mode.md#simulator-defaults) and the same
 `127.0.0.1` port binding as
@@ -32,11 +28,8 @@ in the background instead of occupying your terminal. Open
 The binding matters more here. This container is detached, so anything published
 stays reachable in the background.
 
-Then point your MCP client at the *same* container instead of spinning up
-a new one. That means `docker compose exec` instead of `docker compose
-run`, with no inline `Xvfb ... && DISPLAY=...` dance, since the persistent
-container already has Xvfb running and `DISPLAY`/`PLAYDATE_SDK_PATH`
-already set:
+Then point your MCP client at the same container with `docker compose exec`.
+It already has Xvfb running and `DISPLAY` and `PLAYDATE_SDK_PATH` set:
 
 ```json
 {
@@ -52,10 +45,8 @@ already set:
 }
 ```
 
-(The same `args` shape works for OpenCode's `command` list and
-`claude mcp add`/`opencode mcp add`, matching the "Connecting" section
-above. Only `run --rm -v ... simulator bash -c "..."` changes to
-`exec -T simulator-shared open-crank-mcp`.)
+The same `args` work for OpenCode's `command` list and for
+`claude mcp add`. See [connecting.md](connecting.md).
 
 Once both are connected, an agent calling `launch_simulator` makes the
 game appear in the browser tab you already have open. Click or type into
@@ -89,29 +80,23 @@ every reload, because Reset is the only reload the Simulator has. And a failed
 build leaves the previous `.pdx` in place, so the running game keeps working
 rather than being replaced by nothing.
 
-One surprise worth knowing if you write your own tooling against the MCP tools:
-**a Simulator dies if the session that launched it exits too quickly.** It needs
-its launching session to stay alive a few seconds; exit immediately after
-`launch_simulator` returns and the game disappears about a second later. Also,
-`get_status` can report the harness reachable straight away, because that check
-reads a file in the data directory and a previous run's response may still be
-sitting there, so it isn't a reliable readiness signal on its own. `shared-load`
-holds on for five seconds for exactly this reason.
+If you write your own tooling against the MCP tools: **a Simulator dies if the
+session that launched it exits too quickly.** Exit right after
+`launch_simulator` returns and the game disappears about a second later. Keep
+the session alive a few seconds. `get_status` is not a reliable readiness signal
+on its own either, because a previous run's response file can make the harness
+look reachable straight away. `shared-load` waits at least five seconds for both
+reasons.
 
 ## Audio: why the stream restarts per listener
 
 The MP3 stream is served by `socat`, which starts a fresh encoder per listener.
-That is not an implementation detail.
 
-A single long-lived `ffmpeg -listen 1` opens its pulse input before it opens its
-output. It captures into a queue while waiting for someone to connect, then
-hands over the backlog when they do. Measured with a beep played at a known
-moment, that was **22 seconds** of lag after a few idle minutes, held for the
-whole session. The symptom is late audio that keeps playing after you pause the
-game.
-
-Starting the encoder at connect time keeps it under a second. As a side effect,
-several listeners can share the stream.
+A single long-lived `ffmpeg -listen 1` opens its pulse input before its output.
+It queues audio while nobody is connected, then hands over the backlog, so a few
+idle minutes become tens of seconds of lag for the whole session. Starting the
+encoder at connect time keeps it under a second, and several listeners can share
+the stream.
 
 Pointing a browser straight at the raw stream gives you a media viewer that
 reports it as 0:00 long and often will not start. That is why the served pages
@@ -131,11 +116,9 @@ mute icon, and each reads as either dark or light against the yellow frame. The
 knob's position along the track is the volume, published to `pd-volume.json` for
 the page to poll.
 
-Geometry is re-read on every scan, so dragging the Simulator window or changing
-its zoom cannot leave it reading the wrong pixels. A scan that cannot find the
-slider publishes `-1`, and the page leaves the audio exactly as it is. Acting on
-a failed read would silence working audio, which looks identical to a broken
-pipeline.
+Geometry is re-read on every scan, so moving the Simulator window or changing
+its zoom does not break it. A scan that cannot find the slider publishes `-1`,
+and the page leaves the audio as it is rather than silencing working audio.
 
 The stack is self-contained. The container runs its own PulseAudio daemon with a
 null sink, `x11vnc` bridges the Xvfb display, and `ffmpeg` re-streams the null

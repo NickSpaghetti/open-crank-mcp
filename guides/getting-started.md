@@ -6,8 +6,6 @@ This uses native mode, which needs a Playdate SDK you installed yourself. It is
 the shorter path and the Simulator is a real window you can watch. See
 [container-mode.md](container-mode.md) if you would rather run in Docker.
 
-Every step below has been run start to finish on Linux.
-
 ## 1. Build the server
 
 ```
@@ -15,7 +13,9 @@ make go-build
 ```
 
 That produces `./open-crank-mcp` in the repo root. That path is what your MCP
-client runs.
+client runs. A binary from the
+[releases page](https://github.com/NickSpaghetti/open-crank-mcp/releases) works
+the same way.
 
 ## 2. Check the SDK is found
 
@@ -29,13 +29,12 @@ when it succeeds, so this is worth running once up front.
 
 ## 3. Make a copy of the example game
 
-The repo ships a small Lua fixture. Copy it somewhere writable and remove its
-vendored harness, so `setup` has real work to do.
+The repo ships a small Lua fixture. Copy its `Source` somewhere writable. It
+has no harness yet, so `setup` has real work to do.
 
 ```
-cp -r lua/test-fixture /tmp/first-playtest
-rm /tmp/first-playtest/Source/mcp_harness.lua
-rm -rf /tmp/first-playtest/test-fixture.pdx
+mkdir -p /tmp/first-playtest
+cp -r lua/test-fixture/Source /tmp/first-playtest/
 ```
 
 ## 4. Connect a client
@@ -74,8 +73,8 @@ build_game        source_dir=/tmp/first-playtest
 launch_simulator  pdx_path=/tmp/first-playtest/first-playtest.pdx
 ```
 
-`build_game` returns the `.pdx` path it produced. Pass that to
-`launch_simulator`. A Simulator window opens.
+`build_game` returns the `.pdx` path it produced, named after the directory.
+Pass that to `launch_simulator`. A Simulator window opens.
 
 Check the harness is answering before going further:
 
@@ -104,8 +103,7 @@ get_game_state
 
 The fixture registers a state function that reports button state and two
 counters, `a_down_count` and `a_up_count`. The counters go up after the press.
-That is the check that an input actually reached the game rather than just
-being accepted by the server.
+That shows the input reached the game, not just the server.
 
 `press_button` with no `duration_ms` is a tap. It presses and releases. For a press that
 stays down across several calls, use `hold_button` and then `release_button`:
