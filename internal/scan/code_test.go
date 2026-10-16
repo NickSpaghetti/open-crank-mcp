@@ -2,10 +2,8 @@ package scan
 
 import "testing"
 
-// codeString renders a classification as the source with every non-code byte
-// replaced by ".", so a failure shows which bytes were misjudged rather than a
-// bare index. Whitespace is left alone: turning a newline into a dot would make
-// the diff unreadable, and no test here turns on whether a line break is code.
+// codeString renders the source with every non-code byte replaced by ".",
+// leaving whitespace alone so diffs stay readable.
 func codeString(content string, c Code) string {
 	out := []byte(content)
 	for i := range out {
@@ -44,16 +42,11 @@ func TestCCode(t *testing.T) {
 			want: `puts(....);`,
 		},
 		{
-			// The escaped quote must not end the literal early, or the rest of
-			// the line reads as code and a later quote reopens a string that
-			// swallows everything after it.
 			name: "escaped quote does not end the string",
 			src:  `puts("say \"hi\"") ; int x;`,
 			want: `puts(............) ; int x;`,
 		},
 		{
-			// A character literal holding a quote is the mirror image: read as
-			// a string opener, it would swallow the rest of the file.
 			name: "character literal holding a quote",
 			src:  `char q = '"'; int x;`,
 			want: `char q = ...; int x;`,
@@ -64,7 +57,6 @@ func TestCCode(t *testing.T) {
 			want: `puts(....); int x;`,
 		},
 		{
-			// Both directions of the same confusion, in one line each.
 			name: "a // inside a string is not a comment",
 			src:  `char *u = "http://x"; int y;`,
 			want: `char *u = ..........; int y;`,
@@ -85,17 +77,11 @@ func TestCCode(t *testing.T) {
 			want: "................\n.. int x;",
 		},
 		{
-			// Block comments do not nest: the first */ ends it, and the
-			// trailing one is code (a syntax error in the user's file, but not
-			// ours to reinterpret).
 			name: "block comments do not nest",
 			src:  "/* a /* b */ int x;",
 			want: "............ int x;",
 		},
 		{
-			// Legal C, and it does happen at the end of a commented-out macro.
-			// Treating the spliced line as code is how a live statement ends up
-			// being patched inside a comment.
 			name: "backslash splices the next line into a line comment",
 			src:  "// first \\\nstill comment\nint x;",
 			want: "..........\n.............\nint x;",
@@ -106,9 +92,6 @@ func TestCCode(t *testing.T) {
 			want: "..........\r\n.............\r\nint x;",
 		},
 		{
-			// A stray quote is a broken file. Ending the literal at the line
-			// break keeps the damage to that line; running to EOF would mark a
-			// whole working file as non-code and silently patch nothing.
 			name: "unterminated string ends at the line break",
 			src:  "puts(\"oops);\nint x = 1;",
 			want: "puts(.......\nint x = 1;",
@@ -119,9 +102,7 @@ func TestCCode(t *testing.T) {
 			want: "int x;\n..........\n......",
 		},
 		{
-			// The case the whole exercise exists for, in the shape it appears
-			// in: the directive is code, the header name is a literal, and a
-			// guard testing the first byte therefore still finds it.
+			// A first-byte guard must still find the directive.
 			name: "include directive is code holding a literal",
 			src:  "#include \"mcp_harness.h\"\n",
 			want: "#include ...............\n",
@@ -149,9 +130,6 @@ func TestCMakeCode(t *testing.T) {
 			want: "add_library(a) ......\nset(X 1)",
 		},
 		{
-			// Unlike C, a quoted CMake argument stays code: it is a value the
-			// build uses, and "src/mcp_harness.c" is exactly the argument
-			// teardown has to be able to remove.
 			name: "quoted argument stays code",
 			src:  `add_library(a "src/main.c")`,
 			want: `add_library(a "src/main.c")`,
@@ -187,9 +165,7 @@ func TestCMakeCode(t *testing.T) {
 	}
 }
 
-// A nil Code means unclassified, which is what lets the plain search helpers
-// share one implementation with the code-aware ones. If this ever stopped being
-// true, every free function in this package would start returning -1.
+// The package's free search functions rely on a nil Code treating all bytes as code.
 func TestNilCodeTreatsEverythingAsCode(t *testing.T) {
 	var c Code
 	if !c.IsCode(0) || !c.IsCode(1<<20) {
@@ -201,8 +177,6 @@ func TestNilCodeTreatsEverythingAsCode(t *testing.T) {
 }
 
 func TestCodeSearches(t *testing.T) {
-	// One commented occurrence, then a live one, then another comment - so
-	// first-match, last-match and contains each have a way to be wrong.
 	src := "// kEventInit here\nkEventInit;\n/* kEventInit */\n"
 	c := CCode(src)
 
@@ -220,18 +194,14 @@ func TestCodeSearches(t *testing.T) {
 		t.Error("Contains() = true for a word that only appears in a comment")
 	}
 
-	// A whole-token search must not match inside a longer identifier, in code
-	// or out of it.
 	only := "kEventInitDone;\n"
 	if got := CCode(only).TokenIndex(only, "kEventInit", 0); got != -1 {
 		t.Errorf("TokenIndex() = %d, want -1: kEventInitDone is not kEventInit", got)
 	}
 }
 
-// The search helpers get their own boundary tests because every one of them is
-// reached with offsets a caller computed - patchInputCallsInContent rewrites the
-// file underneath itself and feeds the result back in - so "just past the end"
-// and "nothing left to find" are ordinary inputs here, not defensive padding.
+// Callers feed back offsets computed from rewritten content, so out-of-range
+// offsets are ordinary inputs here.
 func TestCodeSearchBoundaries(t *testing.T) {
 	src := "kEventInit;\n"
 	c := CCode(src)
@@ -265,8 +235,7 @@ func TestCodeSearchBoundaries(t *testing.T) {
 		if got := c.Index(src, "kEventInit", -5); got != 0 {
 			t.Errorf("Index() = %d, want 0", got)
 		}
-		// TokenIndex refuses instead, because a negative offset there means a
-		// caller's arithmetic went wrong rather than "search everything".
+		// TokenIndex treats a negative from as a caller bug and refuses.
 		if got := c.TokenIndex(src, "kEventInit", -5); got != -1 {
 			t.Errorf("TokenIndex() = %d, want -1 for a negative from", got)
 		}
@@ -306,9 +275,7 @@ func TestCodeSearchBoundaries(t *testing.T) {
 	})
 }
 
-// Truncated input, one byte at a time. A file that ends mid-construct is what a
-// half-written save or a truncated copy looks like, and the classifier has to
-// terminate on every one of them rather than index past the end.
+// Every prefix of each input must classify without panicking or overrunning.
 func TestCodeHandlesTruncatedInput(t *testing.T) {
 	for _, full := range []string{
 		`x = "abc\";`,
@@ -321,8 +288,6 @@ func TestCodeHandlesTruncatedInput(t *testing.T) {
 	} {
 		for i := 0; i <= len(full); i++ {
 			prefix := full[:i]
-			// Both classifiers must return a map the same length as the input
-			// and must not panic on any prefix.
 			if got := len(CCode(prefix)); got != len(prefix) {
 				t.Fatalf("CCode(%q) length = %d, want %d", prefix, got, len(prefix))
 			}
@@ -333,9 +298,7 @@ func TestCodeHandlesTruncatedInput(t *testing.T) {
 	}
 }
 
-// A backslash as the final byte of a literal or a comment must not send the
-// scanner past the end. Both are one-byte-from-the-end cases that a length check
-// written with the wrong comparison would walk straight off.
+// A trailing backslash in a literal or comment must not walk past the end.
 func TestCodeTrailingBackslash(t *testing.T) {
 	for _, src := range []string{`x = "a\`, "// c \\", `c = '\`} {
 		got := codeString(src, CCode(src))
@@ -345,9 +308,6 @@ func TestCodeTrailingBackslash(t *testing.T) {
 	}
 }
 
-// An unterminated bracket comment runs to the end of the file, and one whose
-// closer has a different number of "=" does not close it. Both are what CMake
-// itself does, and the second is the entire reason the form exists.
 func TestCMakeBracketCommentTermination(t *testing.T) {
 	tests := []struct {
 		name string

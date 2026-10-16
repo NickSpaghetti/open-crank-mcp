@@ -48,10 +48,8 @@ func TestGetScreenshotRawFormat(t *testing.T) {
 	assertPNGImageContent(t, result)
 }
 
-// The Lua harness writes PNGs into the scratch directory, not the sandboxed data
-// directory, because playdate.simulator.writeToFile takes a host path. This
-// fixture therefore puts the file where Lua would, which on Linux is a different
-// directory from the raw case for the first time.
+// Lua writes PNGs into the scratch directory, since playdate.simulator.writeToFile
+// takes a host path.
 func TestGetScreenshotPNGFormat(t *testing.T) {
 	s := newTestServer(t)
 	s.scratchDir = t.TempDir()
@@ -107,10 +105,7 @@ func assertPNGImageContent(t *testing.T, result *mcp.CallToolResult) {
 	}
 }
 
-// A PNG in the data directory must NOT be found, because that is where the C
-// harness writes and Lua does not. Without this, the two bases could quietly
-// collapse back into one - which is exactly what they were on Linux before, and
-// why the difference went unnoticed.
+// A PNG in the data directory (where C writes) must not be found for Lua.
 func TestGetScreenshotPNGIgnoresDataDir(t *testing.T) {
 	s := newTestServer(t)
 	s.scratchDir = t.TempDir()
@@ -119,7 +114,6 @@ func TestGetScreenshotPNGIgnoresDataDir(t *testing.T) {
 	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 4, 4))); err != nil {
 		t.Fatalf("png.Encode: %v", err)
 	}
-	// Written to the data directory, where a PNG never belongs.
 	if err := os.MkdirAll(filepath.Join(s.dataDir, "mcp"), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
@@ -135,10 +129,8 @@ func TestGetScreenshotPNGIgnoresDataDir(t *testing.T) {
 	}
 }
 
-// The regression this pins: restart cleared the scratch directory, never made a
-// new one, and handed the data directory to the game instead. The harness then
-// reported writing the PNG successfully while the server joined an empty base
-// into the bare relative path "mcp/screenshot.png" and failed to open it.
+// Restart must hand the game a fresh scratch directory, and the server must
+// read the PNG from it.
 func TestGetScreenshotAfterRestart(t *testing.T) {
 	s := newTestServer(t)
 	s.scratchDir = t.TempDir()
@@ -148,8 +140,6 @@ func TestGetScreenshotAfterRestart(t *testing.T) {
 	}
 	t.Cleanup(func() { os.RemoveAll(s.scratchDir) })
 
-	// Written where the restarted game was told to write, not where the first
-	// launch was: that difference is the whole bug.
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 4, 4))); err != nil {
 		t.Fatalf("png.Encode: %v", err)
@@ -169,8 +159,6 @@ func TestGetScreenshotAfterRestart(t *testing.T) {
 	assertPNGImageContent(t, result)
 }
 
-// An empty scratch directory used to join into a relative path, so the failure
-// read as a missing file rather than as missing state.
 func TestScreenshotBaseRejectsAnEmptyScratchDir(t *testing.T) {
 	s := newTestServer(t)
 	s.scratchDir = ""
@@ -180,8 +168,8 @@ func TestScreenshotBaseRejectsAnEmptyScratchDir(t *testing.T) {
 	}
 }
 
-// The three states that separate "never got the command" from "could not write
-// the file", which is the distinction a bare round-trip timeout cannot make.
+// The three states that separate "never got the command" from "could not
+// write the file".
 func TestScratchReportDescribesWhatTheGameWasGiven(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

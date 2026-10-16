@@ -1,31 +1,18 @@
 #!/usr/bin/env bash
-# Integration checks for the shared profile. Boots the container against the
-# in-repo Lua fixture, launches the Simulator inside it, and asserts the
-# invariants that have actually broken in practice.
-#
-# It launches the Simulator directly rather than through an MCP session. The
-# MCP path is already covered by sdk-contract-check, and what's under test here
-# is the VNC workspace: the window manager's configuration, the pages
-# websockify serves, and the framebuffer-derived slider layout.
-#
-# Pass --keep to leave the container running afterwards, which is what the
-# browser tests need.
+# Integration checks for the shared profile's VNC workspace, against the in-repo
+# Lua fixture. Launches the Simulator directly; sdk-contract-check covers the MCP path.
+# --keep leaves the container running for the browser tests.
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Its own compose project, its own ports, its own data directory. Without this
-# the suite recreates the container that a person may be using right now: it
-# needs a known game mounted, so it would unmount theirs, and it would fight
-# them for the single-listener audio stream. Isolated, it can run while someone
-# plays.
+# Its own compose project, ports and data directory, so it doesn't recreate a
+# shared container someone is using with their game mounted.
 export COMPOSE_PROJECT_NAME=open-crank-mcp-check
 export VNC_PORT="${VNC_PORT:-6180}"
 export AUDIO_PORT="${AUDIO_PORT:-8100}"
 
-# A fixed path rather than mktemp, reused each run. mktemp accumulated a
-# directory per run, each holding root-owned build output that needs sudo to
-# remove, because --keep skips cleanup by design.
+# Fixed paths, reused each run: they hold root-owned output that --keep leaves behind.
 GAME_DIR="/tmp/open-crank-mcp-check-game"
 export SHARED_DATA_DIR="/tmp/open-crank-mcp-check-data"
 
@@ -81,19 +68,15 @@ cleanup() {
     echo "your own shared container, if you have one, is untouched on port 6080."
     return
   fi
-  # pdc runs as root inside the container, so its output is root-owned on the
-  # host. Delete it from in there, where the ownership matches, rather than
-  # asking for sudo.
+  # Root-owned output, so deleted from inside a container rather than with sudo.
   in_container rm -rf /your-game/fixture.pdx >/dev/null 2>&1
   "${COMPOSE[@]}" --profile shared down >/dev/null 2>&1
-  # Root-owned, because the container runs as root, so removed from in there.
   docker run --rm -v /tmp:/host-tmp alpine \
     rm -rf "/host-tmp/$(basename "$GAME_DIR")" "/host-tmp/$(basename "$SHARED_DATA_DIR")" \
     >/dev/null 2>&1
 }
 
-# The fixture plus the harness it imports. setup would normally copy the
-# harness in; doing it here keeps this independent of the MCP tools.
+# The fixture plus its harness, copied here so this doesn't depend on the setup tool.
 rm -rf "$GAME_DIR" 2>/dev/null || true
 mkdir -p "$GAME_DIR" "$SHARED_DATA_DIR"
 cp -r "$REPO_DIR/lua/test-fixture/Source" "$GAME_DIR/"
@@ -110,26 +93,18 @@ GAME_DIR="$GAME_DIR" "${COMPOSE[@]}" --profile shared up -d simulator-shared >/d
 sleep 5
 
 # --- the pages websockify serves -------------------------------------------
-# All four have gone missing at least once, and a missing page is invisible
-# until someone opens that exact URL.
 for page in "" "vnc.html" "audio.html" "pd-audio.js" "pd-view.js"; do
   status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE_URL/$page")
   check "GET /$page" "200" "$status"
 done
 
-# Browsers download rather than play a stream served as octet-stream. Checked
-# over HTTP directly, which is safe now that each listener gets its own encoder -
-# it used to be that connecting could fail simply because someone was listening.
+# Browsers download rather than play a stream served as octet-stream.
 content_type=$(curl -s -D - -o /dev/null --max-time 8 "$AUDIO_URL/stream.mp3" 2>/dev/null \
   | tr -d '\r' | awk -F': ' 'tolower($1) == "content-type" { print $2; exit }')
 check "audio stream content type" "audio/mpeg" "$content_type"
 
-# Nothing should be capturing while nobody is listening. An encoder left running
-# on an idle stream drifts behind real time - measured at ~22s after a few
-# minutes - and hands that backlog to whoever connects next.
-# Polled, because the check just above disconnected a listener and its encoder
-# notices on its next write rather than instantly. Asserting immediately measures
-# this script's own last connection.
+# An idle encoder drifts behind real time. Polled, because the listener above
+# disconnected and its encoder only notices on its next write.
 idle_encoders=missing
 for _ in $(seq 1 10); do
   idle_encoders=$(in_container bash -c "ps -eo args | grep -c '[l]ibmp3lame'" | tr -d '\r')
@@ -138,7 +113,7 @@ for _ in $(seq 1 10); do
 done
 check "no encoder runs while nobody is listening" "0" "${idle_encoders:-missing}"
 
-# Two listeners at once, which the previous single-listener server could not do.
+# Two listeners at once.
 in_container bash -c 'ffmpeg -loglevel error -i http://127.0.0.1:8000/stream.mp3 -t 6 -f null /dev/null >/dev/null 2>&1 &' >/dev/null 2>&1
 in_container bash -c 'ffmpeg -loglevel error -i http://127.0.0.1:8000/stream.mp3 -t 6 -f null /dev/null >/dev/null 2>&1 &' >/dev/null 2>&1
 sleep 2
@@ -148,10 +123,8 @@ check_true "two listeners are served at once (saw ${concurrent:-0} encoders)" \
 sleep 6
 
 # --- window manager configuration ------------------------------------------
-# The mouse bindings are compared against openbox's own shipped config rather
-# than a hardcoded number. A partial rc.xml silently drops every binding it
-# doesn't mention, which is how dragging, resizing and the window list were
-# lost once already.
+# Compared against openbox's shipped config: a partial rc.xml silently drops
+# every mouse binding it doesn't mention.
 shipped=$(in_container grep -c '<mousebind' /etc/xdg/openbox/rc.xml | tr -d '\r')
 patched=$(in_container grep -c '<mousebind' /root/.config/openbox/rc.xml | tr -d '\r')
 check "openbox keeps every shipped mouse binding" "$shipped" "$patched"
@@ -177,16 +150,12 @@ if ! build_output=$(in_container bash -c 'cd /your-game && pdc Source fixture.pd
   exit 1
 fi
 
-# Detached exec, not 'nohup ... &' inside a normal exec. A backgrounded child of
-# an exec session gets torn down with that session, which made the Simulator
-# fail to be there about half the time.
+# Detached exec: a backgrounded child of a normal exec session dies with it.
 "${COMPOSE[@]}" exec -d simulator-shared /opt/playdate-sdk/bin/PlaydateSimulator \
   /your-game/fixture.pdx /opt/playdate-sdk/Disk/Data/dev.open-crank-mcp.contractchecklua \
   >/dev/null 2>&1
 
-# Waiting for the window and then for the layout to be published, rather than
-# sleeping a guessed number of seconds. The watcher publishes a couple of
-# seconds after the window appears.
+# The watcher publishes the layout a couple of seconds after the window appears.
 for _ in $(seq 1 30); do
   if in_container xdotool search --name '^Playdate Simulator$' >/dev/null 2>&1; then break; fi
   sleep 1
@@ -206,22 +175,12 @@ win_h=$(echo "$geometry" | awk -F= '/^HEIGHT=/ { print $2 }')
 check_true "window pinned to the top-left corner" \
   "$([ "${win_x:-999}" -le 10 ] && [ "${win_y:-999}" -le 48 ] && echo 1 || echo 0)"
 
-# The window's own size should match the measured formula for 1x.
 check "window size matches the 1x formula" "$(bash -c "source '$REPO_DIR/scripts/shared-lib.sh'; shared_window_size 1")" \
   "${win_w}x${win_h}"
 
 # --- nothing is covering the Simulator -------------------------------------
-#
-# The slider checks read pixels inside the Simulator's geometry. They cannot tell
-# a missing widget from a covered one, so both report "no trough found" and send
-# you after the scanner, which is fine.
-#
-# That happened. SDK 3.1.2 shipped, the Simulator announced it, and the modal
-# covered the volume slider on every container still pinned to 3.1.1. The fix was
-# to bump the pin. This catches the next one, before it looks like a scanner bug.
-#
-# Exact match, not an allowlist. A window nobody expected is worth failing on even
-# when it misses the slider, and a reject list only names what has already bitten.
+# The slider scan can't tell a covered widget (e.g. an SDK update modal) from a
+# missing one. Exact match, so any unexpected window fails.
 windows=$(in_container bash -c '
   for w in $(xdotool search --onlyvisible --name "." 2>/dev/null); do
     xdotool getwindowname "$w" 2>/dev/null
@@ -238,9 +197,7 @@ mute_y=$(echo "$layout" | awk -F'[:,]' '/muteY/ { gsub(/ /, "", $2); print $2 }'
 check_true "layout published a trough" \
   "$([ -n "${trough_top:-}" ] && [ -n "${trough_bottom:-}" ] && echo 1 || echo 0)"
 
-# Asserted as relationships, not pixel values: the exact numbers move with the
-# theme and the zoom level, but these have to hold for the click mapping to
-# mean anything.
+# Relationships, not pixel values, which move with theme and zoom.
 check_true "trough is inside the window horizontally" \
   "$([ "${trough_x:-0}" -gt "${win_x:-0}" ] && [ "${trough_x:-0}" -lt "$(( ${win_x:-0} + ${win_w:-0} ))" ] && echo 1 || echo 0)"
 check_true "trough runs downwards a plausible distance" \
@@ -250,10 +207,8 @@ check_true "mute icon sits below the trough" \
   "$([ "${mute_y:-0}" -gt "${trough_bottom:-0}" ] && echo 1 || echo 0)"
 
 # --- the slider reading -----------------------------------------------------
-# The published volume is what the browser follows, so what matters is that it
-# tracks the real slider. A fresh Simulator starts at zero; clicking part way up
-# the track has to move the number. This covers the whole chain the audio depends
-# on: X input, GTK's click-to-warp, the framebuffer scan, and the parser.
+# A fresh Simulator starts at zero; clicking part way up the track has to move the
+# published number. Covers X input, GTK's click-to-warp, the scan and the parser.
 volume_before=$(curl -s --max-time 10 "$BASE_URL/pd-volume.json" \
   | awk -F'[:}]' '{ gsub(/ /, "", $2); print $2 }')
 check "a fresh Simulator publishes zero volume" "0.000" "${volume_before:-missing}"
@@ -266,14 +221,12 @@ volume_after=$(curl -s --max-time 10 "$BASE_URL/pd-volume.json" \
 check_true "clicking the track raises the published volume (${volume_before:-?} -> ${volume_after:-?})" \
   "$(awk -v a="${volume_before:-0}" -v b="${volume_after:-0}" 'BEGIN { print (b > a && b <= 1) ? 1 : 0 }')"
 
-# A reading of -1 means the scan failed, and the page deliberately ignores it.
-# Publishing 0 on a failed scan would silence working audio.
+# -1 means the scan failed.
 check_true "the reading is a real number, not a failed scan" \
   "$(awk -v v="${volume_after:--1}" 'BEGIN { print (v >= 0) ? 1 : 0 }')"
 
 # --- the audio chain, without needing a noisy game -------------------------
-# A synthetic tone into the sink proves sink, monitor, encoder and HTTP all
-# work end to end, with no dependency on what the fixture plays.
+# A synthetic tone proves the sink and its monitor without depending on the fixture.
 tone_level=$(in_container bash -c '
   ffmpeg -loglevel error -f lavfi -i "sine=frequency=440:duration=4" -f pulse -device vnc_sink tone >/dev/null 2>&1 &
   sleep 1

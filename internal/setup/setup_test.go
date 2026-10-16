@@ -23,12 +23,7 @@ func TestDetectLanguageLua(t *testing.T) {
 	}
 }
 
-// TestDetectLanguageEmptyMainLuaDoesNotCountAsLua reproduces a real bug
-// found testing against the Playdate SDK's own bundled "Sprite Game"
-// example: a pure C project that ships a required-but-blank
-// Source/main.lua stub (0 bytes) alongside a real CMakeLists.txt.
-// Treating the stub's mere existence as a Lua signal misdetected it as
-// hybrid and skipped installing the C harness entirely.
+// The SDK's "Sprite Game" is pure C but ships an empty Source/main.lua stub.
 func TestDetectLanguageEmptyMainLuaDoesNotCountAsLua(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "Source", "main.lua"), "")
@@ -77,11 +72,7 @@ func TestDetectLanguageNeitherIsAnError(t *testing.T) {
 	}
 }
 
-// Same reason TestValidButton and TestValidDockMode exist in internal/harness: this is
-// called from internal/tools, so without a test in its own package mutation testing
-// reports its branches as uncovered. The empty string is real behaviour rather than an
-// oversight - it is how a caller asks for auto-detection, which is a different question
-// from naming an invalid language.
+// "" is rejected here: it means auto-detect, which callers handle separately.
 func TestValidLanguage(t *testing.T) {
 	for _, l := range Languages {
 		if !ValidLanguage(l) {
@@ -95,9 +86,6 @@ func TestValidLanguage(t *testing.T) {
 	}
 }
 
-// LanguageNames feeds both an error message and the schema enums the tools declare, so a
-// mismatch with Languages would publish a closed set that disagrees with the one actually
-// enforced.
 func TestLanguageNamesMatchLanguages(t *testing.T) {
 	names := LanguageNames()
 	if len(names) != len(Languages) {
@@ -110,21 +98,7 @@ func TestLanguageNamesMatchLanguages(t *testing.T) {
 	}
 }
 
-// TestSetupRefusesADirectoryThatIsNotAProject is the regression test for setup writing
-// into a path that was never a game.
-//
-// Only the auto-detect path checked, because it calls DetectLanguage anyway. With an
-// explicit language nothing looked, and setupLua creates Source/ on its way to writing
-// the harness - so setup(source_dir: "QBSRK", language: "lua") created
-// QBSRK/Source/mcp_harness.lua relative to the process's working directory, then failed
-// on the main.lua it could not patch and left the tree behind.
-//
-// Found by Specmatic's MCP auto-test, which generates a random string when a schema says
-// `type: string`: four such directories appeared in the repo root before anyone noticed
-// them. That is what an unchecked filesystem write looks like from the outside.
-//
-// The assertion that matters is the second one. An error alone was always returned; what
-// was missing is that nothing should be created on the way to it.
+// The point is the second assertion: nothing may be created on the way to the error.
 func TestSetupRefusesADirectoryThatIsNotAProject(t *testing.T) {
 	for _, language := range Languages {
 		parent := t.TempDir()
@@ -142,10 +116,6 @@ func TestSetupRefusesADirectoryThatIsNotAProject(t *testing.T) {
 	}
 }
 
-// An existing directory with nothing project-shaped in it is refused too, not just a
-// nonexistent one. This is the case that matters on a real machine: a mistyped but real
-// path - a home directory, a repo root - would otherwise get a Source/mcp_harness.lua
-// written into it.
 func TestSetupRefusesAnUnrelatedDirectory(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "notes.txt"), "not a game\n")
@@ -158,9 +128,6 @@ func TestSetupRefusesAnUnrelatedDirectory(t *testing.T) {
 	}
 }
 
-// An explicit language may still disagree with what detection would have answered - that
-// is the whole point of being able to pass one. A hybrid project asked to set up as Lua
-// installs the Lua harness, and the new project check must not turn that into an error.
 func TestSetupExplicitLanguageMayDisagreeWithDetection(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "Source", "main.lua"), "function playdate.update()\nend\n")
@@ -202,17 +169,8 @@ func mustRead(t *testing.T, path string) string {
 	return string(b)
 }
 
-// testHarnessFS stands in for opencrank.HarnessFS.
-//
-// A MapFS rather than the real embedded sources, so these tests exercise the
-// same code path without depending on the harness content. Nothing here asserts
-// what is inside a copied harness, only that the right path was written and that
-// the *game's* own files were patched correctly, which is the part with logic in
-// it. The keys must match the paths internal/setup asks for.
-//
-// The two stampable sources carry the version placeholder, because a real one
-// always does and CopyHarnessFile refuses a source without it. mcp_harness.c has
-// none on purpose - the C pair's stamp lives in the header.
+// testHarnessFS stands in for opencrank.HarnessFS. Stampable sources carry the
+// placeholder because CopyHarnessFile refuses one without it.
 func testHarnessFS() fs.FS {
 	return fstest.MapFS{
 		"lua/mcp_harness.lua":     {Data: []byte("-- test harness stand-in\nlocal V = \"" + harness.VersionPlaceholder + "\"\n")},

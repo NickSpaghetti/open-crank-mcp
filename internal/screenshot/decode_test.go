@@ -32,14 +32,8 @@ func TestDecodeRawToPNGRejectsWrongSize(t *testing.T) {
 	}
 }
 
-// TestDecodeRawToPNGPolarityMatchesRealHardware pins the bit-to-color
-// mapping to an absolute value, confirmed against the real Simulator by
-// internal/contracttest (the C fixture clears to kColorBlack and its
-// decoded screenshot comes back all zero). The other tests in this file
-// only check internal consistency (uniform, or differs from background),
-// since they were written before that mapping was known - they'd still
-// pass under a mutation that globally inverted polarity. This test is the
-// one that catches that.
+// TestDecodeRawToPNGPolarityMatchesRealHardware pins the absolute bit-to-color
+// mapping confirmed by internal/contracttest; the other tests survive inverted polarity.
 func TestDecodeRawToPNGPolarityMatchesRealHardware(t *testing.T) {
 	allClear := make([]byte, rawSize)
 	pngBytes, err := DecodeRawToPNG(allClear)
@@ -136,9 +130,7 @@ func TestDecodeRawToPNGSingleBitAtColumnSeven(t *testing.T) {
 	if pixel == background {
 		t.Fatalf("pixel (7,0) = %d, same as background %d, want the opposite", pixel, background)
 	}
-	// Every other bit in the byte is clear, so column 0..6 should all match
-	// the background - proves the set bit landed on exactly column 7, not
-	// some other column in the same byte.
+	// Columns 0..6 must match the background, so the bit landed on exactly column 7.
 	for x := 0; x < 7; x++ {
 		if got := grayAt(t, img, x, 0); got != background {
 			t.Fatalf("pixel (%d,0) = %d, want background %d - the single set bit should only affect column 7", x, got, background)

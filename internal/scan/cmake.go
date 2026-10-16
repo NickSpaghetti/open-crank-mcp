@@ -3,13 +3,8 @@ package scan
 import "strings"
 
 // FindCMakeCall locates the next call to the named command at or after from,
-// returning the offsets of its opening and closing parens.
-//
-// The command name is matched case-insensitively, because CMake command names
-// are, and at a token boundary, so "offset(" is not a "set(" call. Parens are
-// counted rather than scanned for the first ")", so a nested call or a
-// parenthesized comment inside the argument list doesn't end it early - the
-// failure that made the old pattern skip an entire ordinary CMakeLists.
+// returning the offsets of its opening and closing parens. The name matches
+// case-insensitively, as CMake does, and at a token boundary.
 func FindCMakeCall(content, name string, from int) (openAt, closeAt int, ok bool) {
 	lower := strings.ToLower(content)
 	for i := from; ; {
@@ -66,9 +61,8 @@ func CMakeCalls(content string, names ...string) []CMakeCall {
 	return calls
 }
 
-// sortCallsByPosition puts calls back in source order after the per-name
-// passes above. Insertion sort: a CMakeLists has a handful of targets, and the
-// list is already almost sorted.
+// sortCallsByPosition puts calls back in source order. Insertion sort, since the
+// list is short and nearly sorted.
 func sortCallsByPosition(calls []CMakeCall) {
 	for i := 1; i < len(calls); i++ {
 		for j := i; j > 0 && calls[j-1].OpenParen > calls[j].OpenParen; j-- {
@@ -78,15 +72,8 @@ func sortCallsByPosition(calls []CMakeCall) {
 }
 
 // CMakeCallOnOwnLine finds a call to name that takes up a whole line of its own,
-// and returns the offset at the end of that line - where a following statement
-// can be inserted.
-//
-// "Its own line" allows leading whitespace and a trailing comment, neither of
-// which the line-anchored pattern this replaced accepted - so a project() line
-// with a "# the game" comment after it went unrecognized, and the
-// include_directories(src) that depends on finding it was never added. The
-// offset is the line's end rather than the closing paren's, so such a comment
-// stays on the line it was written on.
+// and returns the offset at the end of that line. Leading whitespace and a
+// trailing comment are allowed; the comment stays on its line.
 func CMakeCallOnOwnLine(content, name string) (endOfLine int, ok bool) {
 	for i := 0; i < len(content); {
 		openAt, closeAt, found := FindCMakeCall(content, name, i)
@@ -107,12 +94,8 @@ func CMakeCallOnOwnLine(content, name string) (endOfLine int, ok bool) {
 }
 
 // endOfLineFrom returns the offset of the newline that ends the line at or after
-// i, or the end of the content.
-//
-// On a CRLF file this deliberately lands after the carriage return rather than
-// before it. Text inserted here begins with its own newline, so stopping short
-// of the "\r" would leave the existing line ending in a bare "\n" - rewriting a
-// line the caller never meant to touch.
+// i, or the end of the content. On CRLF files that is after the "\r", so
+// inserted text doesn't split the existing line ending.
 func endOfLineFrom(content string, i int) int {
 	nl := strings.IndexByte(content[i:], '\n')
 	if nl < 0 {
@@ -160,12 +143,8 @@ func blankToEndOfLine(content string, i int) bool {
 }
 
 // CMakeSetBlock is a multi-line set(<name> ...) call: the offsets of its source
-// list and of the indentation in front of its closing paren, which is what an
-// inserted entry copies so it lines up with the entries already there.
-//
-// Only multi-line calls are reported. A single-line set() has no line-shaped
-// body to add an entry to, and callers handle that shape by patching the target
-// that references the variable instead.
+// list and of the indentation in front of its closing paren, which inserted
+// entries copy.
 type CMakeSetBlock struct {
 	Name                   string
 	BodyStart, BodyEnd     int
@@ -198,15 +177,10 @@ func CMakeSetBlocks(content string) []CMakeSetBlock {
 			continue
 		}
 
-		// The body starts on the line after the variable name, so the run of
-		// whitespace after it has to hold a newline.
 		bodyStart, ok := afterLastNewline(content, nameEnd, SkipSpace(content, nameEnd))
 		if !ok {
 			continue
 		}
-		// The closing paren has to be on a line of its own too, and the
-		// whitespace in front of it is the indentation an inserted entry
-		// copies.
 		indentRunStart := SkipSpaceBefore(content, closeAt)
 		newline := strings.IndexByte(content[indentRunStart:closeAt], '\n')
 		if newline < 0 {
@@ -238,9 +212,7 @@ func afterLastNewline(content string, from, to int) (int, bool) {
 }
 
 // CMakeArgTokens splits a CMake argument list into individual arguments,
-// dropping the quotes around quoted ones. Parentheses are treated as
-// delimiters rather than kept: callers only ask whether a token is a source
-// path or a variable reference, and neither contains one.
+// dropping the quotes around quoted ones and treating parens as delimiters.
 func CMakeArgTokens(args string) []string {
 	var tokens []string
 	for i := 0; i < len(args); {
@@ -258,12 +230,8 @@ func CMakeArgTokens(args string) []string {
 			i += end + 2
 			continue
 		}
-		// The byte at i is known to start a token: space, "(", ")" and quote are
-		// all handled above. Consuming it before the loop rather than leaving the
-		// loop to discover it makes forward progress structural, so this cannot
-		// append a zero-length token and spin - which is not a theoretical
-		// concern, it is what took a CI runner down by growing this slice until
-		// the machine ran out of memory.
+		// Consume the first byte up front so the loop always advances and can't
+		// append zero-length tokens forever.
 		start := i
 		i++
 		for i < len(args) && !IsSpace(args[i]) && args[i] != '(' && args[i] != ')' && args[i] != '"' {
@@ -310,21 +278,11 @@ func CMakeSetBody(content, name string) (string, bool) {
 
 // FilterCMakeArgs rewrites content with every argument drop reports true for
 // removed, along with the whitespace in front of it, and reports whether
-// anything was removed.
-//
-// Whole arguments, not substrings: removing the text "src/mcp_harness.c" on
-// its own truncated a ${CMAKE_CURRENT_SOURCE_DIR}/src/mcp_harness.c entry and
-// left a dangling prefix behind, i.e. a CMakeLists that no longer configures.
-// Parens are their own tokens, so the ")" closing a call whose last argument
-// was removed survives. Every byte of content ends up either in a whitespace
-// run or a token, so a call that removes nothing returns the input unchanged.
+// anything was removed. Matches whole arguments, never substrings, and only in
+// code, not comments.
 func FilterCMakeArgs(content string, drop func(arg string) bool) (string, bool) {
 	var out strings.Builder
 	removed := false
-	// A comment naming the harness source is prose about the build, not part of
-	// it. Editing one used to leave a mangled half-sentence behind - harmless to
-	// CMake, and exactly the kind of unexplained edit that makes a user distrust
-	// everything else the tool did to their file.
 	code := CMakeCode(content)
 	for i := 0; i < len(content); {
 		spaceStart := i
@@ -347,9 +305,7 @@ func FilterCMakeArgs(content string, drop func(arg string) bool) (string, bool) 
 		case content[i] == '(' || content[i] == ')':
 			i++
 		default:
-			// Same as CMakeArgTokens: the byte at i is known to start a token, so
-			// consume it up front and the loop can only move forward.
-			i++
+			i++ // see CMakeArgTokens
 			for i < len(content) && !IsSpace(content[i]) && !strings.ContainsRune(`"()`, rune(content[i])) {
 				i++
 			}

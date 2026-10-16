@@ -9,11 +9,8 @@ import (
 	"strings"
 )
 
-// setupLua covers both Lua and Hybrid: a hybrid C+Lua project only needs
-// the Lua harness, since a real Lua VM still drives the update loop (see
-// guides/harness-wiring.md's "Hybrid C+Lua games" note), so this is the same
-// steps regardless of which of those two languages was detected, and
-// never touches CMakeLists.txt or any .c file.
+// setupLua covers both Lua and Hybrid: in a hybrid project the Lua VM still
+// drives the update loop, so only the Lua harness is needed.
 func setupLua(sourceDir string, harnessFS fs.FS, language Language) (SetupResult, error) {
 	result := SetupResult{Language: language}
 
@@ -35,17 +32,9 @@ func setupLua(sourceDir string, harnessFS fs.FS, language Language) (SetupResult
 
 const luaImportLine = `import "mcp_harness"`
 
-// patchLuaMain appends a marker block importing mcp_harness, if the
-// import isn't already present in some form - checked against the
-// literal import line, not just hasMarkerBlock, so a project hand-wired
-// before this tool existed (no markers) doesn't get a duplicate import.
-// Harmless either way per the SDK docs ("a second import call from
-// anywhere in the pdz will do nothing"), but there's no reason to add
-// one. Where in the file the import goes doesn't matter - the harness's
-// own __newindex hook on the playdate table intercepts a playdate.update
-// assignment whenever and wherever it happens, so this works whether the
-// import lands first (letting mcp.registerState() etc. be called
-// anywhere afterward, the natural place for it) or last.
+// patchLuaMain appends a marker block importing mcp_harness unless the import
+// line is already present (hand-wired projects have no markers). Placement
+// doesn't matter: the harness hooks playdate.update via __newindex.
 func patchLuaMain(mainPath string) (bool, error) {
 	b, err := os.ReadFile(mainPath)
 	if err != nil {
@@ -84,10 +73,8 @@ func teardownLua(sourceDir string) (TeardownResult, error) {
 		stillReferenced = strings.Contains(content, luaImportLine)
 	}
 
-	// Only remove the vendored harness copy if nothing still imports it -
-	// a hand-written (unmarked) import this tool doesn't touch would
-	// otherwise be left pointing at a file that no longer exists, break-
-	// ing the next build.
+	// Keep the harness if an unmarked import still references it, or the next
+	// build breaks.
 	harnessPath := filepath.Join(sourceDir, "Source", "mcp_harness.lua")
 	if !stillReferenced && fileExists(harnessPath) {
 		if err := os.Remove(harnessPath); err != nil {

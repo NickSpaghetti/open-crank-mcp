@@ -8,12 +8,7 @@ import (
 	"testing/fstest"
 )
 
-// These tests exercise each platform layout against a synthetic filesystem on
-// every OS. Windows also has a native integration test; macOS runtime behavior
-// remains unverified against a real Simulator.
-
-// testEnv builds an Env over a MapFS. Keys are absolute-looking paths with the
-// leading slash stripped, matching fsKey.
+// testEnv builds an Env over a MapFS keyed by fsKey.
 func testEnv(home string, files map[string]string, environ map[string]string) Env {
 	mapfs := fstest.MapFS{}
 	for path, content := range files {
@@ -26,8 +21,7 @@ func testEnv(home string, files map[string]string, environ map[string]string) En
 	}
 }
 
-// sdkFiles returns the files that make a directory look like a real SDK for a
-// given layout, so each test does not have to know each platform's layout.
+// sdkFiles returns the files that make root look like an SDK for a given layout.
 func sdkFiles(goos, root string) map[string]string {
 	switch goos {
 	case "darwin":
@@ -49,7 +43,6 @@ func sdkFiles(goos, root string) map[string]string {
 }
 
 func TestResolveOrder(t *testing.T) {
-	// Every platform, so a change to one layout's precedence cannot pass here.
 	for _, goos := range []string{"linux", "darwin", "windows"} {
 		t.Run(goos+"/env wins over everything", func(t *testing.T) {
 			files := map[string]string{}
@@ -92,8 +85,6 @@ func TestResolveOrder(t *testing.T) {
 	}
 }
 
-// The default install location is per-platform, so this asserts each one is
-// actually reachable rather than dead code.
 func TestResolveFallsBackToDefaultLocation(t *testing.T) {
 	for _, tc := range []struct {
 		goos    string
@@ -102,8 +93,7 @@ func TestResolveFallsBackToDefaultLocation(t *testing.T) {
 	}{
 		{"linux", "/home/u/PlaydateSDK", nil},
 		{"darwin", "/home/u/Developer/PlaydateSDK", nil},
-		// Confirmed install location. Windows also has no ~/.Playdate/config at
-		// all, so this default is the only thing resolution has to go on there.
+		// Windows has no ~/.Playdate/config, so this default is all it has.
 		{"windows", "/users/u/Documents/PlaydateSDK", map[string]string{"USERPROFILE": "/users/u"}},
 	} {
 		t.Run(tc.goos, func(t *testing.T) {
@@ -121,8 +111,6 @@ func TestResolveFallsBackToDefaultLocation(t *testing.T) {
 	}
 }
 
-// A directory that exists but holds no Simulator is not an SDK. Getting this
-// wrong means failing later, at launch, with something less clear.
 func TestResolveRejectsIncompleteSDK(t *testing.T) {
 	files := map[string]string{"/opt/not-an-sdk/bin/pdc": "pdc"} // no Simulator
 	_, err := resolveWith(testEnv("/home/u", files,
@@ -135,8 +123,6 @@ func TestResolveRejectsIncompleteSDK(t *testing.T) {
 	}
 }
 
-// Failure has to be actionable: it must list what was looked at and name the
-// variable that fixes it.
 func TestResolveFailureIsDiagnosable(t *testing.T) {
 	p, err := resolveWith(testEnv("/home/u", nil, nil), linuxLayout())
 	if err == nil {
@@ -167,8 +153,7 @@ func TestConfigParsing(t *testing.T) {
 		{"other keys present", "Foo\tbar\nSDKRoot\t/opt/sdk\nBaz\tqux\n", "/opt/sdk"},
 		{"first SDKRoot wins", "SDKRoot\t/opt/sdk\nSDKRoot\t/opt/other\n", "/opt/sdk"},
 		{"no trailing newline", "SDKRoot\t/opt/sdk", "/opt/sdk"},
-		// Each of these must fall through to the default location rather than
-		// resolving to something wrong.
+		// These must fall through to the default location.
 		{"empty file", "", ""},
 		{"key with no value", "SDKRoot\n", ""},
 		{"unrelated content", "nonsense\n", ""},
@@ -179,8 +164,6 @@ func TestConfigParsing(t *testing.T) {
 			for p, c := range sdkFiles("linux", "/opt/sdk") {
 				files[p] = c
 			}
-			// A valid SDK also sits at the default location, so a failed parse
-			// resolves there and the two cases are distinguishable.
 			for p, c := range sdkFiles("linux", "/home/u/PlaydateSDK") {
 				files[p] = c
 			}
@@ -202,8 +185,6 @@ func TestConfigParsing(t *testing.T) {
 	}
 }
 
-// A missing config file is the common case on a fresh machine, and must not be
-// an error.
 func TestResolveWithNoConfigFile(t *testing.T) {
 	p, err := resolveWith(testEnv("/home/u", sdkFiles("linux", "/home/u/PlaydateSDK"), nil), linuxLayout())
 	if err != nil {
@@ -214,9 +195,7 @@ func TestResolveWithNoConfigFile(t *testing.T) {
 	}
 }
 
-// macOS ships the Simulator as an application bundle, and the executable is
-// nested inside it. Resolving to the bundle directory, or to `open`, would break
-// get_logs silently - see paths_darwin.go.
+// See darwinLayout for why the bundle directory would break get_logs.
 func TestDarwinResolvesInnerExecutable(t *testing.T) {
 	root := "/Users/u/Developer/PlaydateSDK"
 	p, err := resolveWith(testEnv("/Users/u", sdkFiles("darwin", root), nil), darwinLayout())
@@ -232,8 +211,6 @@ func TestDarwinResolvesInnerExecutable(t *testing.T) {
 	}
 }
 
-// The bundle name is the least certain value in this package, so the fallback
-// name has to work too.
 func TestDarwinProbesAlternateBundleName(t *testing.T) {
 	root := "/Users/u/Developer/PlaydateSDK"
 	files := map[string]string{
@@ -249,11 +226,23 @@ func TestDarwinProbesAlternateBundleName(t *testing.T) {
 	}
 }
 
-// The escape hatch has to work even when probing found something, since its whole
-// purpose is correcting a wrong guess.
 func TestSimulatorBinOverride(t *testing.T) {
 	root := "/opt/sdk"
 	p, err := resolveWith(testEnv("/home/u", sdkFiles("linux", root), map[string]string{
+		EnvVarSDKPath:      root,
+		EnvVarSimulatorBin: "/somewhere/else/MySimulator",
+	}), linuxLayout())
+	if err != nil {
+		t.Fatalf("resolveWith: %v", err)
+	}
+	if p.SimulatorBin != "/somewhere/else/MySimulator" {
+		t.Errorf("SimulatorBin = %q, want the override", p.SimulatorBin)
+	}
+}
+
+func TestSimulatorBinOverrideRescuesUnprobedRoot(t *testing.T) {
+	root := "/opt/sdk"
+	p, err := resolveWith(testEnv("/home/u", map[string]string{root + "/bin/pdc": "pdc"}, map[string]string{
 		EnvVarSDKPath:      root,
 		EnvVarSimulatorBin: "/somewhere/else/MySimulator",
 	}), linuxLayout())
@@ -290,8 +279,7 @@ func TestBuildEnvSetsSDKPath(t *testing.T) {
 			}
 		}
 	}
-	// Exactly one: a stale inherited value must be replaced, not shadowed, since
-	// which one a child process sees would otherwise be unspecified.
+	// Exactly one: with duplicates, which one a child sees is unspecified.
 	if found != 1 {
 		t.Errorf("%s appears %d times in BuildEnv(), want exactly 1", EnvVarSDKPath, found)
 	}
@@ -310,8 +298,6 @@ func TestFsKey(t *testing.T) {
 	}
 }
 
-// Sanity check that MapFS keys and fsKey agree, since every other test depends
-// on it.
 func TestExistsAgreesWithMapFS(t *testing.T) {
 	env := testEnv("/home/u", map[string]string{"/opt/sdk/bin/pdc": "pdc"}, nil)
 	if !exists(env, "/opt/sdk/bin/pdc") {
@@ -330,9 +316,6 @@ func TestExistsAgreesWithMapFS(t *testing.T) {
 
 var _ fs.FS = fstest.MapFS{}
 
-// Describe is what `make sdk-path` prints, and that output is the whole product
-// of that command: it exists so a person can see which of the three sources won
-// when detection surprises them.
 func TestDescribe(t *testing.T) {
 	p := Paths{
 		Root:         "/opt/sdk",
@@ -348,8 +331,6 @@ func TestDescribe(t *testing.T) {
 			t.Errorf("Describe() omits %q:\n%s", want, got)
 		}
 	}
-	// Everything ruled out has to be listed, since that is what explains a
-	// surprising answer.
 	for _, want := range p.Tried {
 		if !strings.Contains(got, want) {
 			t.Errorf("Describe() omits a considered path %q:\n%s", want, got)
@@ -357,8 +338,6 @@ func TestDescribe(t *testing.T) {
 	}
 }
 
-// With a single candidate there is nothing to explain, and repeating it under
-// "considered" is noise.
 func TestDescribeOmitsCandidateListWhenThereIsOnlyOne(t *testing.T) {
 	p := Paths{
 		Root:       "/opt/sdk",
@@ -370,8 +349,6 @@ func TestDescribeOmitsCandidateListWhenThereIsOnlyOne(t *testing.T) {
 	}
 }
 
-// A candidate that is absent and one that exists but is incomplete are different
-// problems with different fixes, so the diagnostic distinguishes them.
 func TestResolveDistinguishesAbsentFromIncomplete(t *testing.T) {
 	// Present, but with no Simulator in it.
 	files := map[string]string{"/opt/incomplete/bin/pdc": "pdc"}

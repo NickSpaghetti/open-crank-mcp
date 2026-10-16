@@ -5,12 +5,6 @@ import (
 	"testing"
 )
 
-// The contract from issue #35, asserted here rather than only on Windows
-// because processControl is shared code and none of this is platform specific.
-//
-// TestStopAfterProcessAlreadyExitedDoesNotError reaches the same sequence
-// through Wait and Stop, but it discards Stop's error and only proves nothing
-// panics, which the buggy version also managed. This counts the calls.
 func TestProcessControlStopAfterReleaseIsANoOp(t *testing.T) {
 	var stops, releases int
 	c := &processControl{
@@ -38,8 +32,7 @@ func TestProcessControlStopAfterReleaseIsANoOp(t *testing.T) {
 	}
 }
 
-// A failed stop must stay retryable. Marking it stopped regardless would turn
-// one transient failure into a Simulator nothing can ever kill.
+// A failed stop must stay retryable.
 func TestProcessControlFailedStopIsRetryable(t *testing.T) {
 	boom := errors.New("terminate failed")
 	var stops int
@@ -64,9 +57,6 @@ func TestProcessControlFailedStopIsRetryable(t *testing.T) {
 	}
 }
 
-// Stop falls back to killProcess when there is no platform control. On Unix the
-// two paths have the same effect, so only a control that records being used can
-// tell them apart.
 func TestStopPrefersTheControlOverKillProcess(t *testing.T) {
 	sim, err := Launch(testShell(t), "-c", "sleep 30")
 	if err != nil {
@@ -85,8 +75,7 @@ func TestStopPrefersTheControlOverKillProcess(t *testing.T) {
 	}
 }
 
-// Wait releases the platform control. On Windows that is the CloseHandle that
-// frees the job object, so skipping it leaks a kernel handle per launch.
+// Wait releases the platform control; on Windows skipping it leaks a job handle per launch.
 func TestWaitReleasesTheControl(t *testing.T) {
 	sim, err := Launch(testShell(t), "-c", "true")
 	if err != nil {
@@ -102,8 +91,7 @@ func TestWaitReleasesTheControl(t *testing.T) {
 	}
 }
 
-// A release failure surfaces when the process itself exited cleanly. Otherwise
-// the process error is the more useful one and wins.
+// A release failure surfaces only when the process itself exited cleanly.
 func TestWaitReportsAReleaseFailure(t *testing.T) {
 	boom := errors.New("closing the job object failed")
 	sim, err := Launch(testShell(t), "-c", "true")

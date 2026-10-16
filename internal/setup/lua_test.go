@@ -81,12 +81,8 @@ func TestSetupAndTeardownLuaRoundTrip(t *testing.T) {
 	}
 }
 
-// TestTeardownLuaPreservesHandWrittenImport reproduces a real bug found
-// testing against missile-command (a project hand-wired before this tool
-// existed): its main.lua has a plain, unmarked `import "mcp_harness"`.
-// Teardown must not delete the vendored harness file in that case - doing
-// so would leave the import pointing at a file that no longer exists,
-// breaking the next build.
+// An unmarked, hand-written import must keep the harness file, or the next
+// build breaks.
 func TestTeardownLuaPreservesHandWrittenImport(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "Source", "main.lua")

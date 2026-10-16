@@ -2,27 +2,12 @@ name: Weekly SDK Sweep
 
 on:
   schedule:
-    # Sunday 9PM EST = Monday 2AM UTC. GitHub Actions cron always runs in
-    # UTC and doesn't observe DST, so this stays 9PM EST (not EDT) year-round.
+    # Monday 2AM UTC (Sunday 9PM EST); Actions cron is UTC and ignores DST.
     - cron: '0 2 * * 1'
   workflow_dispatch: {}
 
-# Container-only, on purpose rather than by omission.
-#
-# The knob this sweep turns is PLAYDATE_SDK_VERSION, which is a Docker build
-# arg: the point is catching upstream SDK drift by building against a pinned
-# version and against Panic's `latest` alias. A native install is whatever
-# version the developer happened to install, so there is no equivalent knob to
-# turn, and pinning one on a runner would just re-implement the container's own
-# fetch outside the container for the same signal.
-#
-# A macOS leg would add real signal, since it would be the only place the
-# Simulator runs on Darwin. It was previously described as blocked on
-# provisioning, which was wrong: the macOS download is a .zip containing a .pkg,
-# and `installer -pkg` handles that without interaction. ci.yml's native-macos
-# job now does exactly that. Adding a leg here is worth doing once that job has
-# actually gone green, so this sweep does not start reporting failures from an
-# unproven path.
+# Container-only: the sweep varies PLAYDATE_SDK_VERSION, a Docker build arg,
+# across the pin and Panic's `latest` alias.
 jobs:
   sdk-contract-check:
     runs-on: ubuntu-latest
@@ -34,24 +19,14 @@ jobs:
       - uses: actions/checkout@v7
       - run: make sdk-contract-check PLAYDATE_SDK_VERSION=${{ matrix.sdk_version }}
 
-  # Whether the pin is still current, which the sweep above does not answer. That
-  # one builds `latest` and proves the harness works on it; it passed every week
-  # while 3.1.2 shipped, because nothing was broken. A stale pin is not a broken
-  # build, it is a Simulator showing an update modal over its own volume slider.
+  # The sweep proves `latest` works, not that the pin is current.
   sdk-pin-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - run: make sdk-pin-check
 
-  # Upstream drift, both kinds: the Agent Plugins schemas are vendored at
-  # plugin/schemas/ so per-PR validation is offline and deterministic, and this
-  # notices both the published copies moving away from them and a newer spec
-  # version being published beside them.
-  #
-  # Here rather than in ci.yml for the same reason the SDK sweep is: it reports
-  # on somebody else's release schedule, and a pull request should not go red
-  # because of one - or because a third-party site was briefly down.
+  # Upstream Agent Plugins drift against the vendored plugin/schemas/.
   plugin-upstream-check:
     runs-on: ubuntu-latest
     steps:

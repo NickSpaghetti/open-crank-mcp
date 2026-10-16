@@ -7,34 +7,14 @@ import (
 	"testing"
 )
 
-// Edge-case tests for the regex-driven C patcher, written ahead of the
-// planned port to a hand-written scanner (see docs/ROADMAP.md - "no regex in
-// source"). They serve two purposes, and each case says which one it is:
-//
-//   - LOCK: characterization. The current behavior is correct (or at least
-//     acceptable), and the port has to reproduce it exactly. A failure after
-//     the port is a regression.
-//   - BUG: the current behavior is wrong, and the test asserts the wrong
-//     behavior on purpose so the port stays byte-identical through steps 1-5
-//     of the plan. The comment names what the right answer is. Step 6
-//     (comment/string awareness) flips these deliberately, one at a time.
-//
-// The BUG cases all come from the same root cause: a regex sees a .c file as
-// a flat byte string, so a match inside a comment or a string literal is
-// indistinguishable from real code, and any real code whose spacing differs
-// from the pattern is invisible. Both directions do damage - a false match
-// rewrites something that was never code, and a missed match means
-// press_button/set_crank silently do nothing at runtime with no diagnostic.
+// Edge-case tests for the C patcher. Each case pins current behavior; where
+// that behavior is a known miss, the case says so and asserts it is reported.
 
 // ---------------------------------------------------------------------------
-// setupC end to end - the shapes step 7 changed the outcome for
+// setupC end to end
 // ---------------------------------------------------------------------------
 
-// TestSetupCSwitchBasedHandler covers the worst of the old failures at the
-// level the user actually sees it. A handler written as a switch used to fail
-// the whole setup call, after the harness files had been copied and
-// CMakeLists.txt patched - a half-applied state the user then had to undo by
-// hand. It is an ordinary way to write the handler, so it has to work.
+// A switch-based handler must wire cleanly, with no ManualSteps.
 func TestSetupCSwitchBasedHandler(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "CMakeLists.txt"),
@@ -59,9 +39,7 @@ func TestSetupCSwitchBasedHandler(t *testing.T) {
 		t.Errorf("ManualSteps = %q, want none", result.ManualSteps)
 	}
 
-	// Every patched file is reported, and every reported entry names a real
-	// file - an empty path used to be possible when the update callback could
-	// not be located.
+	// Every reported entry names a real file.
 	patched := map[string]bool{}
 	for _, change := range result.FilesPatched {
 		if change.Path == "" {
@@ -100,13 +78,9 @@ func TestSetupCSwitchBasedHandler(t *testing.T) {
 	}
 }
 
-// TestSetupCOnTheSDKTemplateShape runs setup against this repo's own contract
-// fixture, which is the SDK's project template: two targets (a device
-// executable and a simulator library) built from the same sources, wrapped in
-// if/else, alongside an execute_process(...) call whose argument list contains
-// nested parens and quoted strings. It is the shape every Playdate C project
-// starts from, and the one the target rule and the paren counting have to get
-// right.
+// TestSetupCOnTheSDKTemplateShape runs setup against the contract fixture,
+// the SDK's project template: two targets from the same sources, plus an
+// execute_process(...) with nested parens and quoted strings.
 func TestSetupCOnTheSDKTemplateShape(t *testing.T) {
 	template, err := os.ReadFile(filepath.Join("..", "..", "c-harness", "test", "fixture-game", "CMakeLists.txt"))
 	if err != nil {
@@ -191,12 +165,8 @@ func TestSetupCSkippedUpdatePatchReportsNoFile(t *testing.T) {
 	}
 }
 
-// TestSetupCPicksTheGameTargetOverATool checks the target rule end to end: the
-// harness goes into the target that builds the game and nowhere else. It used
-// to go into every add_library/add_executable in the file, which meant a
-// host-side tool target got a source that needs pd_api.h on an include path it
-// does not have, and an INTERFACE library got a source argument that CMake
-// rejects outright.
+// TestSetupCPicksTheGameTargetOverATool: only the target building the game
+// gets the harness; an INTERFACE library or host tool target would fail to build.
 func TestSetupCPicksTheGameTargetOverATool(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "CMakeLists.txt"),
@@ -234,11 +204,7 @@ func TestSetupCPicksTheGameTargetOverATool(t *testing.T) {
 	}
 }
 
-// TestSetupCReportsInputCallsItCannotRewrite covers the other half of step 7:
-// an input call the patterns can't reach is reported with its file and line
-// instead of being left silent. Silence there is the tool's worst failure mode
-// - press_button and set_crank do nothing, setup says it succeeded, and
-// nothing in the game's own output points at the cause.
+// Input calls that can't be rewritten are reported with file and line.
 func TestSetupCReportsInputCallsItCannotRewrite(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "CMakeLists.txt"),
@@ -314,64 +280,50 @@ func TestPatchInputCallsEdgeCases(t *testing.T) {
 		wantSteps int
 	}{
 		{
-			// LOCK (fixed in step 6): a call named in a line comment is not
-			// code, so nothing is rewritten and nothing is reported - a
-			// comment describing the raw call is not a call this tool failed
-			// to reach.
+			// A call named in a comment is not code: nothing rewritten or reported.
 			name:        "call_in_line_comment_is_left_alone",
 			src:         "void f(void) {\n\t// pd->system->getCrankAngle() is the raw call\n}\n",
 			wantChanged: false,
 			wantHas:     []string{"// pd->system->getCrankAngle() is the raw call"},
 		},
 		{
-			// LOCK (fixed in step 6): same, inside a block comment.
+			// Same, inside a block comment.
 			name:        "call_in_block_comment_is_left_alone",
 			src:         "/*\n * Reads input via pd->system->getCrankChange().\n */\nvoid f(void) {}\n",
 			wantChanged: false,
 			wantHas:     []string{"* Reads input via pd->system->getCrankChange()."},
 		},
 		{
-			// LOCK (fixed in step 6): the literal is data the game prints, not
-			// code. Rewriting it left the code correct and the log message a
-			// lie, which is the case that made comment/string awareness worth
-			// doing rather than shrugging at.
+			// A string literal is data, not code.
 			name:        "call_in_string_literal_is_left_alone",
 			src:         "void f(void) {\n\tpd->system->logToConsole(\"pd->system->getCrankAngle() returned %f\", a);\n}\n",
 			wantChanged: false,
 			wantHas:     []string{`"pd->system->getCrankAngle() returned %f"`},
 		},
 		{
-			// BUG (miss), now reported: C allows whitespace around ->, and
-			// the patterns have no \s* between their tokens. The call is
-			// still not rewritten - that waits for the port, which gets
-			// whitespace tolerance for free - but it is no longer silent.
+			// Known miss: whitespace around "->" is not rewritten, only reported.
 			name:        "spaces_around_arrows_are_missed_but_reported",
 			src:         "void f(void) {\n\tfloat a = pd -> system -> getCrankAngle();\n}\n",
 			wantChanged: false,
 			wantSteps:   1,
 		},
 		{
-			// BUG (miss), now reported: same defect, split across lines -
-			// the shape clang-format produces on a long line.
+			// Known miss, reported: the call split across lines (clang-format's shape).
 			name:        "arrow_split_across_lines_is_missed_but_reported",
 			src:         "void f(void) {\n\tPDButtons c;\n\tpd->system->\n\t\tgetButtonState(&c, NULL, NULL);\n}\n",
 			wantChanged: false,
 			wantSteps:   1,
 		},
 		{
-			// BUG (miss), now reported: the three crank patterns hardcode
-			// "()" with no room for whitespace.
+			// Known miss, reported: whitespace inside the crank calls' "()".
 			name:        "space_inside_empty_parens_is_missed_but_reported",
 			src:         "void f(void) {\n\tfloat a = pd->system->getCrankAngle( );\n}\n",
 			wantChanged: false,
 			wantSteps:   1,
 		},
 		{
-			// LOCK (fixed in step 7): the receiver is a whole member-access
-			// chain now, so a game that reaches the API through a struct gets
-			// mcp_get_button_state(game->pd, ...). It used to capture only
-			// "pd" and leave game->mcp_get_button_state(pd, ...) behind,
-			// which does not compile.
+			// The whole member-access chain is the receiver, so this becomes
+			// mcp_get_button_state(game->pd, ...).
 			name:        "member_chain_receiver_is_rewritten_whole",
 			src:         "void f(Game *game) {\n\tPDButtons c;\n\tgame->pd->system->getButtonState(&c, NULL, NULL);\n}\n",
 			wantChanged: true,
@@ -379,87 +331,69 @@ func TestPatchInputCallsEdgeCases(t *testing.T) {
 			wantLacks:   []string{"game->mcp_get_button_state"},
 		},
 		{
-			// LOCK: a dotted chain works the same way.
+			// A dotted chain works the same way.
 			name:        "dotted_chain_receiver_is_rewritten_whole",
 			src:         "void f(Game *game) {\n\tfloat a = game->state.pd->system->getCrankAngle();\n}\n",
 			wantChanged: true,
 			wantHas:     []string{"mcp_get_crank_angle(game->state.pd)"},
 		},
 		{
-			// LOCK: a receiver this tool cannot rewrite (a call in the chain)
-			// is left alone and reported, rather than half-rewritten into
-			// something that does not compile.
+			// A receiver with a call in the chain is left alone and reported.
 			name:        "call_in_the_receiver_chain_is_left_alone_and_reported",
 			src:         "void f(void) {\n\tPDButtons c;\n\tapi()->pd->system->getButtonState(&c, NULL, NULL);\n}\n",
 			wantChanged: false,
 			wantSteps:   1,
 		},
 		{
-			// LOCK: a greater-than immediately before the receiver is not
-			// mistaken for the "->" of a longer chain.
+			// A greater-than before the receiver is not the "->" of a longer chain.
 			name:        "greater_than_before_the_receiver_is_not_a_chain",
 			src:         "void f(void) {\n\tif (a>pd->system->getCrankAngle()) { return; }\n}\n",
 			wantChanged: true,
 			wantHas:     []string{"if (a>mcp_get_crank_angle(pd))"},
 		},
 		{
-			// LOCK: an alias macro is genuinely out of scope - resolving it
-			// needs a preprocessor, not a better scanner. Left unpatched,
-			// same as today.
+			// An alias macro is out of scope: resolving it needs a preprocessor.
 			name:        "macro_alias_for_system_is_out_of_scope",
 			src:         "#define SYS pd->system\nvoid f(void) {\n\tfloat a = SYS->getCrankAngle();\n}\n",
 			wantChanged: false,
 		},
 		{
-			// LOCK: walkCSources filters on ".c", so a C++ translation unit
-			// is skipped. The Playdate C API is C, and this project has no
-			// C++ example, so this is deliberate scope, not a defect - but
-			// the port must keep the same extension filter.
+			// C++ translation units are skipped; the Playdate API is C.
 			name:        "cpp_file_is_not_walked",
 			file:        "src/game.cpp",
 			src:         "void f(void) {\n\tfloat a = pd->system->getCrankAngle();\n}\n",
 			wantChanged: false,
 		},
 		{
-			// LOCK: headers are skipped too, so an input call in a static
-			// inline function in a .h stays unpatched. Worth knowing about
-			// (it is a real silent-miss shape) but changing it is a scope
-			// decision, not part of the port.
+			// Headers are skipped, so a static inline input call in a .h stays unpatched.
 			name:        "header_file_is_not_walked",
 			file:        "src/input.h",
 			src:         "static inline float angle(void) {\n\treturn pd->system->getCrankAngle();\n}\n",
 			wantChanged: false,
 		},
 		{
-			// LOCK: CRLF sources (a game authored on Windows) patch fine
-			// today because the pattern never touches line endings. A
-			// line-oriented scanner is where this breaks, so it is pinned
-			// here: the patched line keeps its \r and no \n is introduced
-			// mid-line.
+			// CRLF: the patched line keeps its \r and no \n is introduced mid-line.
 			name:        "crlf_source_is_patched",
 			src:         "#include <stdio.h>\r\nvoid f(void) {\r\n\tfloat a = pd->system->getCrankAngle();\r\n}\r\n",
 			wantChanged: true,
 			wantHas:     []string{"float a = mcp_get_crank_angle(pd);\r\n"},
 		},
 		{
-			// LOCK: every occurrence is replaced, not just the first.
+			// Every occurrence is replaced, not just the first.
 			name:        "all_occurrences_in_one_file_are_replaced",
 			src:         "void a(void) { float x = pd->system->getCrankAngle(); }\nvoid b(void) { float y = pd->system->getCrankAngle(); }\n",
 			wantChanged: true,
 			wantLacks:   []string{"->system->"},
 		},
 		{
-			// LOCK: two different API pointer names in one file each keep
-			// their own receiver.
+			// Two different API pointer names each keep their own receiver.
 			name:        "distinct_receivers_are_kept_per_call",
 			src:         "void a(void) { float x = pd->system->getCrankAngle(); }\nvoid b(void) { float y = playdate->system->getCrankAngle(); }\n",
 			wantChanged: true,
 			wantHas:     []string{"mcp_get_crank_angle(pd)", "mcp_get_crank_angle(playdate)"},
 		},
 		{
-			// LOCK: a patched file that had no mcp_harness.h include gets
-			// one, so the mcp_get_* calls are declared. Regression guard for
-			// the implicit-declaration bug noted in patchInputCalls.
+			// A patched file without the harness include gets one.
 			name:        "patched_file_gains_the_harness_include",
 			src:         "#include <stdio.h>\nvoid f(void) { float a = pd->system->getCrankAngle(); }\n",
 			wantChanged: true,
@@ -497,10 +431,8 @@ func TestPatchInputCallsEdgeCases(t *testing.T) {
 	}
 }
 
-// TestPatchInputCallsPortHazards pins the details of Go's regexp semantics
-// that a hand-written scanner is most likely to get subtly different. None of
-// these is a bug in the current code - they exist so the port has to make the
-// same choices deliberately instead of discovering them from a bug report.
+// TestPatchInputCallsPortHazards pins scanner details that are easy to get
+// subtly different: ASCII identifiers, case, byte offsets, and termination.
 func TestPatchInputCallsPortHazards(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -510,29 +442,21 @@ func TestPatchInputCallsPortHazards(t *testing.T) {
 		wantSteps   int
 	}{
 		{
-			// Go's \w is ASCII-only: [0-9A-Za-z_]. C23 and GCC's extensions
-			// allow non-ASCII identifiers, and this call is not patched
-			// today (it is reported instead). A scanner reading identifiers
-			// with unicode.IsLetter would start matching it - a change in
-			// behavior, not a fix, and not one to make by accident.
+			// Identifiers are ASCII-only, so a non-ASCII one (C23/GCC) is not patched,
+			// only reported.
 			name:        "non_ascii_identifier_is_not_matched",
 			src:         "void f(void) {\n\tfloat a = pdé->system->getCrankAngle();\n}\n",
 			wantChanged: false,
 			wantSteps:   1,
 		},
 		{
-			// Matching is case-sensitive. A scanner doing a
-			// case-insensitive compare on the member names would match
-			// this. C is case-sensitive, so staying strict is correct.
+			// Matching is case-sensitive, as C is.
 			name:        "member_names_are_case_sensitive",
 			src:         "void f(void) {\n\tfloat a = pd->System->GetCrankAngle();\n}\n",
 			wantChanged: false,
 		},
 		{
-			// Offsets are byte offsets. A port that indexes by rune, or
-			// rebuilds the file from decoded runes, corrupts the multi-byte
-			// text before the match - so the comment is asserted intact
-			// alongside the patch.
+			// Offsets are byte offsets: the multi-byte text before the match stays intact.
 			name:        "multibyte_text_before_a_call_survives_intact",
 			src:         "void f(void) {\n\t// ángulo del cigüeñal · ✓\n\tfloat a = pd->system->getCrankAngle();\n}\n",
 			wantChanged: true,
@@ -542,18 +466,14 @@ func TestPatchInputCallsPortHazards(t *testing.T) {
 			},
 		},
 		{
-			// Two matches in one expression, replaced left to right and
-			// non-overlapping. A scanner that restarts from the start of the
-			// rewritten text after each edit either loops or double-patches.
+			// Two matches in one expression are both replaced, without overlap.
 			name:        "two_calls_in_one_expression_are_both_replaced",
 			src:         "void f(void) {\n\tfloat d = pd->system->getCrankAngle() - pd->system->getCrankChange();\n}\n",
 			wantChanged: true,
 			wantHas:     []string{"float d = mcp_get_crank_angle(pd) - mcp_get_crank_change(pd);"},
 		},
 		{
-			// The replacement text itself contains no ->system->, so a
-			// scanner that rescans its own output still terminates with the
-			// same result. Pinned as the idempotency property the port needs.
+			// The replacement contains no ->system->, so re-running is a no-op.
 			name:        "replacement_output_is_not_itself_a_match",
 			src:         "void f(void) {\n\tfloat a = mcp_get_crank_angle(pd);\n}\n",
 			wantChanged: false,
@@ -582,7 +502,7 @@ func TestPatchInputCallsPortHazards(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// insertIncludeIfMissing: (?m)^#include\s*[<"][^>"]+[>"]\s*$
+// insertIncludeIfMissing
 // ---------------------------------------------------------------------------
 
 func TestInsertIncludeIfMissingEdgeCases(t *testing.T) {
@@ -600,77 +520,64 @@ func TestInsertIncludeIfMissingEdgeCases(t *testing.T) {
 		wantStray bool
 	}{
 		{
-			// BUG (miss): a trailing comment on the last include defeats
-			// \s*$, so that line is not seen as an include and the harness
-			// include is prepended to the top of the file instead of joining
-			// the include block. Cosmetic here, but the same \s*$ strictness
-			// is what breaks projectLineRe below, where it is not cosmetic.
+			// Known miss: a trailing comment hides the include, so ours goes at the top.
 			name:        "include_with_trailing_comment_is_not_seen",
 			src:         "#include <stdio.h> // c stdlib\nvoid f(void) {}\n",
 			wantChanged: true,
 			wantAfter:   "",
 		},
 		{
-			// BUG (miss): ^ anchors at column 0, so an indented include
-			// (inside an #ifdef block, commonly) is not seen.
+			// Known miss: an indented include (e.g. inside #ifdef) is not seen.
 			name:        "indented_include_is_not_seen",
 			src:         "#ifdef _WIN32\n\t#include <windows.h>\n#endif\nvoid f(void) {}\n",
 			wantChanged: true,
 			wantAfter:   "",
 		},
 		{
-			// BUG (miss): "# include" with a space is legal C and not seen.
+			// Known miss: "# include" with a space is legal C and not seen.
 			name:        "hash_space_include_is_not_seen",
 			src:         "#  include <stdio.h>\nvoid f(void) {}\n",
 			wantChanged: true,
 			wantAfter:   "",
 		},
 		{
-			// LOCK: a commented-out include earlier in the file is harmless,
-			// because the LAST match wins and that is the real one. Pinned
-			// so the port keeps last-match-wins rather than first.
+			// A commented-out include earlier in the file is harmless: the last one wins.
 			name:        "commented_include_before_a_real_one_is_harmless",
 			src:         "/* legacy:\n#include <old.h>\n*/\n#include <stdio.h>\nvoid f(void) {}\n",
 			wantChanged: true,
 			wantAfter:   "#include <stdio.h>",
 		},
 		{
-			// LOCK (fixed in step 6): an include inside a block comment is
-			// skipped, so the insertion joins the real include block instead
-			// of landing in the comment. It used to land inside it, where the
-			// marker block's own "*/" closed the outer comment early and left
-			// the original "*/" stranded as a stray token - a hard compile
-			// error pointing at a line the user did not write.
+			// An include inside a block comment is skipped; our /* */ marker would
+			// close the comment early.
 			name:        "commented_include_as_last_match_is_skipped",
 			src:         "#include <stdio.h>\n/* legacy:\n#include <old.h>\n*/\nvoid f(void) {}\n",
 			wantChanged: true,
 			wantAfter:   "#include <stdio.h>",
 		},
 		{
-			// LOCK: CRLF include block is matched (\r is absorbed by \s*)
-			// and the insertion lands after the last include. A line-based
-			// port must not regress this.
+			// CRLF include block: the insertion lands after the last include.
 			name:        "crlf_include_block_is_matched",
 			src:         "#include <stdio.h>\r\n#include \"pd_api.h\"\r\n\r\nvoid f(void) {}\r\n",
 			wantChanged: true,
 			wantAfter:   `#include "pd_api.h"`,
 		},
 		{
-			// LOCK: the last include wins, not the first.
+			// The last include wins, not the first.
 			name:        "insertion_follows_the_last_include",
 			src:         "#include <stdio.h>\n#include <stdlib.h>\n#include \"pd_api.h\"\nvoid f(void) {}\n",
 			wantChanged: true,
 			wantAfter:   `#include "pd_api.h"`,
 		},
 		{
-			// LOCK: no includes at all means prepend.
+			// No includes at all means prepend.
 			name:        "no_includes_means_prepend",
 			src:         "void f(void) {}\n",
 			wantChanged: true,
 			wantAfter:   "",
 		},
 		{
-			// LOCK: idempotent against the literal text, markers or not.
+			// Idempotent against the literal text, markers or not.
 			name:        "already_present_is_a_no_op",
 			src:         "#include \"mcp_harness.h\"\nvoid f(void) {}\n",
 			wantChanged: false,
@@ -714,17 +621,14 @@ func TestInsertIncludeIfMissingEdgeCases(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// patchCMakeSourceList: setBlockRe and addCallRe
+// patchCMakeSourceList
 // ---------------------------------------------------------------------------
 
 func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 	tests := []struct {
 		name string
 		src  string
-		// gameSource is the project-relative path of the file defining
-		// eventHandler, which is how the game's own target is told apart from
-		// anything else in the file. Empty exercises the fallback for a
-		// project where it could not be found.
+		// gameSource "" defaults to src/main.c; "-" exercises the unknown-handler fallback.
 		gameSource  string
 		wantChanged bool
 		wantHas     []string
@@ -732,12 +636,8 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 		wantRefs    int // occurrences of src/mcp_harness.c, when it matters
 	}{
 		{
-			// LOCK: a single-line set() does not match setBlockRe (which
-			// requires a newline after the variable name), so the harness
-			// lands in the add_library argument list instead. Different
-			// placement from the multi-line case, same working build. The
-			// port must make the same choice, including leaving the set()
-			// line alone.
+			// A single-line set() is not a set() block, so the harness lands in the
+			// add_library call instead and the set() line is left alone.
 			name:        "single_line_set_falls_through_to_add_library",
 			src:         "set(GAME_SOURCES src/main.c)\nadd_library(${NAME} SHARED ${GAME_SOURCES})\n",
 			wantChanged: true,
@@ -745,8 +645,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK: same fall-through when the closing paren shares the last
-			// source's line - setBlockRe needs \n before it.
+			// Same when the closing paren shares the last source's line.
 			name:        "closing_paren_on_source_line_falls_through",
 			src:         "set(GAME_SOURCES\n\tsrc/main.c)\nadd_library(${NAME} SHARED ${GAME_SOURCES})\n",
 			wantChanged: true,
@@ -754,11 +653,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK (fixed in step 7): every multi-line set() block is
-			// considered, and the one holding the game's sources wins. Only
-			// the first block used to be looked at, so a project listing
-			// something else multi-line first (compiler flags here) abandoned
-			// the set() path entirely.
+			// Every multi-line set() is considered; the one holding the game's sources wins.
 			name: "source_set_block_is_found_past_a_non_source_one",
 			src: "set(CMAKE_C_FLAGS\n\t-Wall\n)\n" +
 				"set(GAME_SOURCES\n\tsrc/main.c\n)\n" +
@@ -769,10 +664,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK (fixed by the port): a comment containing parentheses
-			// inside the argument list used to defeat the [^()]* character
-			// class, so nothing matched and setup reported a ManualStep for a
-			// perfectly ordinary CMakeLists. Counting parens handles it.
+			// A comment with parentheses inside the argument list does not break matching.
 			name:        "parens_in_an_arg_list_comment_are_handled",
 			src:         "add_library(${NAME} SHARED\n\tsrc/main.c  # (entry point)\n)\n",
 			wantChanged: true,
@@ -780,8 +672,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK (fixed by the port): same class - a quoted path containing
-			// parens.
+			// Same for a quoted path containing parens.
 			name:        "parens_inside_a_quoted_path_are_handled",
 			src:         "add_library(${NAME} SHARED src/main.c \"src/my (old) file.c\")\n",
 			wantChanged: true,
@@ -789,10 +680,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK: a generator expression is matched, because $<...> uses
-			// angle brackets - no parens for [^()]* to trip over. Worth
-			// pinning so a port's balanced-paren scanner does not start
-			// treating $< > as nesting.
+			// A generator expression's $< > is not treated as nesting.
 			name:        "generator_expression_in_arg_list_is_matched",
 			src:         "add_library(${NAME} SHARED src/main.c $<$<BOOL:${DEBUG}>:src/debug.c>)\n",
 			wantChanged: true,
@@ -800,10 +688,8 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK: every add_library/add_executable gets the entry, which
-			// is what the SDK template needs (a simulator .so and a device
-			// executable built from the same sources). Reverse iteration
-			// keeps the offsets valid - assert both, in order.
+			// Every target that builds the game gets the entry (the SDK template's
+			// simulator .so and device executable).
 			name: "all_targets_get_the_entry",
 			src: "add_library(${NAME} SHARED src/main.c)\n" +
 				"add_executable(${NAME}_device src/main.c)\n",
@@ -815,11 +701,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs: 2,
 		},
 		{
-			// LOCK (fixed in step 7): only the target that builds the game
-			// gets the entry. An INTERFACE library used to get a source
-			// argument, which CMake rejects outright, and an unrelated tool
-			// target used to get a harness source that needs pd_api.h on an
-			// include path it does not have.
+			// Only the target that builds the game gets the entry.
 			name: "unrelated_and_interface_targets_are_skipped",
 			src: "add_library(vendor_iface INTERFACE)\n" +
 				"if(BUILD_TOOLS)\n\tadd_executable(gen src/gen.c)\nendif()\n" +
@@ -833,11 +715,8 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs: 1,
 		},
 		{
-			// LOCK: with no gameSource to go on, the looser rule applies -
-			// any target that already holds sources gets the entry - but a
-			// target with no sources at all is still skipped, because a
-			// source on an INTERFACE library is a hard CMake error rather
-			// than a guess that might pay off.
+			// With no gameSource, any target holding sources gets the entry, but a
+			// sourceless (INTERFACE) target is still skipped.
 			name: "without_a_game_source_every_source_bearing_target_is_patched",
 			src: "add_library(vendor_iface INTERFACE)\n" +
 				"add_executable(gen src/gen.c)\n" +
@@ -848,29 +727,21 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    2,
 		},
 		{
-			// LOCK: a source list this tool cannot resolve - file(GLOB ...),
-			// or a variable set in a parent scope - counts as the game's.
-			// Refusing to patch there would break projects that build fine
-			// today, and the cost of being wrong is one extra source in a
-			// target rather than a game that never answers the harness.
+			// An unresolvable source list (file(GLOB) or parent scope) counts as the game's.
 			name:        "unresolvable_source_variable_is_assumed_to_be_the_game",
 			src:         "file(GLOB GAME_SRC src/*.c)\nadd_library(game SHARED ${GAME_SRC})\n",
 			wantChanged: true,
 			wantRefs:    1,
 		},
 		{
-			// LOCK: a variable that IS resolvable and holds someone else's
-			// sources does not count.
+			// A resolvable variable holding someone else's sources does not count.
 			name:        "resolvable_variable_holding_other_sources_is_skipped",
 			src:         "set(TOOL_SRC\n\tsrc/gen.c\n)\nadd_executable(gen ${TOOL_SRC})\n",
 			wantChanged: false,
 		},
 		{
-			// LOCK: a source list one level further indirect is followed once
-			// and then given the benefit of the doubt, so the target still
-			// gets the entry. The set() block itself is left alone - appending
-			// a source to a list that might be compiler flags is the one
-			// mistake in this area that is not recoverable.
+			// A nested variable is followed once then assumed to be the game's. The set()
+			// block is left alone: it might be compiler flags.
 			name: "doubly_indirect_source_list_still_patches_the_target",
 			src: "set(GAME_SOURCES\n\t${COMMON_SRC}\n)\n" +
 				"add_library(game SHARED ${GAME_SOURCES})\n",
@@ -879,8 +750,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK: idempotent - a target already listing the harness is
-			// skipped while its sibling still gets patched.
+			// Idempotent per target: one already listing the harness is skipped.
 			name: "already_listed_target_is_skipped_per_target",
 			src: "add_library(${NAME} SHARED src/main.c src/mcp_harness.c)\n" +
 				"add_executable(${NAME}_device src/main.c)\n",
@@ -888,10 +758,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    2,
 		},
 		{
-			// LOCK (fixed in step 7): CMake command names are
-			// case-insensitive and older projects write them in caps. Only
-			// the command name is matched loosely - paths stay
-			// case-sensitive, because the filesystem is.
+			// CMake command names are case-insensitive; paths stay case-sensitive.
 			name:        "uppercase_cmake_commands_are_patched",
 			src:         "SET(GAME_SOURCES\n\tsrc/main.c\n)\nADD_LIBRARY(a SHARED ${GAME_SOURCES})\n",
 			wantChanged: true,
@@ -899,16 +766,13 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK: nothing to patch means no change, which is what drives
-			// setupC's ManualStep.
+			// Nothing to patch means no change, which drives setupC's ManualStep.
 			name:        "no_target_and_no_source_set_is_no_change",
 			src:         "cmake_minimum_required(VERSION 3.14)\nproject(Game C)\n",
 			wantChanged: false,
 		},
 		{
-			// LOCK: the multi-line set() path takes the indent of the
-			// closing paren's line and adds one tab. Pinning the exact
-			// output because the port reimplements this offset arithmetic.
+			// The multi-line set() path uses the closing paren's indent plus one tab.
 			name:        "multiline_set_indent_is_derived_from_closing_paren",
 			src:         "set(GAME_SOURCES\n    src/main.c\n  )\nadd_library(${NAME} SHARED ${GAME_SOURCES})\n",
 			wantChanged: true,
@@ -916,10 +780,7 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK: a blank line before the closing paren is absorbed into
-			// the captured indent, so the inserted entry ends up separated
-			// by a blank line. Odd-looking and harmless; pinned because it
-			// is easy for a port to normalize by accident.
+			// A blank line before the closing paren is absorbed into the captured indent.
 			name:        "blank_line_before_closing_paren_is_absorbed_into_indent",
 			src:         "set(GAME_SOURCES\n\tsrc/main.c\n\n)\nadd_library(${NAME} SHARED ${GAME_SOURCES})\n",
 			wantChanged: true,
@@ -927,10 +788,8 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 			wantRefs:    1,
 		},
 		{
-			// LOCK: CRLF CMakeLists. The set() body keeps its \r and the
-			// inserted line is bare \n, so the file ends up with mixed line
-			// endings - which CMake accepts. Pinned as-is: normalizing is a
-			// behavior change, not a port.
+			// CRLF: the set() body keeps its \r and the inserted line is bare \n, which
+			// CMake accepts.
 			name:        "crlf_set_block_inserts_a_bare_lf_line",
 			src:         "set(GAME_SOURCES\r\n\tsrc/main.c\r\n)\r\nadd_library(${NAME} SHARED ${GAME_SOURCES})\r\n",
 			wantChanged: true,
@@ -974,10 +833,8 @@ func TestPatchCMakeSourceListEdgeCases(t *testing.T) {
 	}
 }
 
-// The scanners the patching is built from, at their boundaries. A hand-written
-// scanner's characteristic bug is an offset that is one byte off - the CRLF
-// insertion bug below was exactly that - and the cases that catch it are the
-// ones where a token sits at the very start or the very end of the content.
+// Scanner boundaries: tokens at the very start or end of content are where
+// off-by-one offsets show up.
 func TestScannerBoundaries(t *testing.T) {
 	t.Run("receiverIsWhole", func(t *testing.T) {
 		tests := []struct {
@@ -1085,11 +942,8 @@ func TestScannerBoundaries(t *testing.T) {
 	})
 }
 
-// TestInsertionsKeepExistingLineEndings pins the CRLF property of the insertion
-// points: text is added on its own new line, and the line it follows keeps the
-// ending it had. Getting this backwards is easy - stopping an offset just before
-// the "\r" of a CRLF pair silently rewrites a line the patch was never meant to
-// touch - and nothing caught it until this test.
+// TestInsertionsKeepExistingLineEndings: inserted text goes on its own new
+// line, and the line it follows keeps its CRLF ending.
 func TestInsertionsKeepExistingLineEndings(t *testing.T) {
 	t.Run("include", func(t *testing.T) {
 		got, changed := insertIncludeIfMissing("#include <stdio.h>\r\n#include \"pd_api.h\"\r\n\r\nvoid f(void) {}\r\n")
@@ -1125,79 +979,68 @@ func TestPatchCMakeIncludeDirectoriesEdgeCases(t *testing.T) {
 		wantAfter string
 	}{
 		{
-			// LOCK (fixed by the port): "project (Game C)" with a space is
-			// valid CMake. It used to go unmatched, so include_directories(src)
-			// was never added, and a project keeping its sources outside src/
-			// then failed to find mcp_harness.h - surfacing as a compile error
-			// in the user's own file.
+			// "project (Game C)" with a space is valid CMake.
 			name:        "space_before_paren_is_handled",
 			src:         "cmake_minimum_required(VERSION 3.14)\nproject (Game C)\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: true,
 		},
 		{
-			// LOCK (fixed by the port): a trailing comment used to defeat the
-			// end-of-line anchor. The comment stays on the project line and the
-			// insertion goes after it.
+			// A trailing comment stays on the project line; the insertion goes after it.
 			name:        "trailing_comment_on_project_line_is_handled",
 			src:         "project(Game C) # the game\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: true,
 			wantAfter:   "project(Game C) # the game\n",
 		},
 		{
-			// LOCK (fixed by the port): the column-0 anchor was a pattern
-			// artifact, not a rule about CMake.
+			// An indented project() line is matched.
 			name:        "indented_project_line_is_handled",
 			src:         "  project(Game C)\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: true,
 		},
 		{
-			// LOCK (fixed in step 6): a commented-out attempt is a note about
-			// something that is not there. Reading it as "already present"
-			// suppressed the real insertion entirely.
+			// A commented-out include_directories(src) is not "already present".
 			name:        "commented_include_directories_does_not_suppress_the_patch",
 			src:         "project(Game C)\n# include_directories(src)  # tried this, did not help\n",
 			wantChanged: true,
 		},
 		{
-			// LOCK: a multi-line project() call is matched, because [^)]*
-			// crosses newlines.
+			// A multi-line project() call is matched.
 			name:        "multiline_project_call_is_matched",
 			src:         "project(Game\n\tC\n)\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: true,
 		},
 		{
-			// LOCK: plain form.
+			// Plain form.
 			name:        "plain_project_line_is_matched",
 			src:         "cmake_minimum_required(VERSION 3.14)\nproject(Game C)\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: true,
 		},
 		{
-			// LOCK: CRLF project line is matched (\r absorbed by \s*).
+			// CRLF project line is matched.
 			name:        "crlf_project_line_is_matched",
 			src:         "project(Game C)\r\nadd_library(a SHARED src/main.c)\r\n",
 			wantChanged: true,
 		},
 		{
-			// LOCK: idempotent against a hand-written line.
+			// Idempotent against a hand-written line.
 			name:        "existing_include_directories_is_a_no_op",
 			src:         "project(Game C)\ninclude_directories(src)\n",
 			wantChanged: false,
 		},
 		{
-			// LOCK (fixed in step 7): PROJECT(...) in caps is valid CMake.
+			// PROJECT(...) in caps is valid CMake.
 			name:        "uppercase_project_command_is_matched",
 			src:         "PROJECT(Game C)\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: true,
 		},
 		{
-			// LOCK (fixed in step 7): an existing INCLUDE_DIRECTORIES(src) in
-			// caps is recognized, so the line is not added a second time.
+			// An existing INCLUDE_DIRECTORIES(src) in caps is recognized.
 			name:        "uppercase_existing_include_directories_is_a_no_op",
 			src:         "project(Game C)\nINCLUDE_DIRECTORIES(src)\n",
 			wantChanged: false,
 		},
 		{
-			// LOCK: no project() line means no insertion, and no guess.
+			// No project() line means no insertion.
 			name:        "no_project_line_is_a_no_op",
 			src:         "add_library(a SHARED src/main.c)\n",
 			wantChanged: false,
@@ -1230,7 +1073,7 @@ func TestPatchCMakeIncludeDirectoriesEdgeCases(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// findEventHandler: \beventHandler\s*\(\s*PlaydateAPI\s*\*\s*(\w+)
+// findEventHandler
 // ---------------------------------------------------------------------------
 
 func TestFindEventHandlerEdgeCases(t *testing.T) {
@@ -1241,42 +1084,32 @@ func TestFindEventHandlerEdgeCases(t *testing.T) {
 		wantNoFind bool
 	}{
 		{
-			// LOCK: the SDK's own DllExport form, attribute and all.
+			// The SDK's own DllExport form, attribute and all.
 			name:    "dllexport_prototype_form",
 			src:     "#ifdef _WINDLL\n__declspec(dllexport)\n#endif\nint eventHandler(PlaydateAPI* pd, PDSystemEvent event, uint32_t arg) {\n\treturn 0;\n}\n",
 			wantVar: "pd",
 		},
 		{
-			// LOCK: whitespace around the pointer star and the parameter
-			// name is tolerated, and the name is captured rather than
-			// assumed.
+			// Whitespace around the star and name is tolerated; the name is captured.
 			name:    "spaced_pointer_and_custom_var_name",
 			src:     "int eventHandler ( PlaydateAPI * playdate , PDSystemEvent event, uint32_t arg) {\n\treturn 0;\n}\n",
 			wantVar: "playdate",
 		},
 		{
-			// LOCK: \b keeps a differently-named function from matching.
+			// A differently-named function does not match.
 			name:       "similarly_named_function_does_not_match",
 			src:        "int myEventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\treturn 0;\n}\n",
 			wantNoFind: true,
 		},
 		{
-			// LOCK (fixed in step 6): a commented-out eventHandler is not one.
-			// Accepting it designated this file as the handler's home, where
-			// no kEventInit branch could then be found - and setup failed the
-			// whole call after having already copied the harness files in and
-			// patched CMakeLists.
+			// A commented-out eventHandler is not one.
 			name:       "commented_out_event_handler_is_skipped",
 			src:        "// int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg);\nvoid other(void) {}\n",
 			wantNoFind: true,
 		},
 		{
-			// LOCK: a prototype before the definition matches first. Same
-			// parameter name, same file, so the outcome is identical - but
-			// pinned, because a port that looks for a definition (a "{"
-			// after the parameter list) would report the other file in a
-			// project that declares eventHandler in one .c and defines it in
-			// another, changing which file gets patched.
+			// A prototype before the definition matches first. Pinned: preferring the
+			// definition would pick a different file when they are split across .c files.
 			name:    "prototype_matches_before_definition",
 			src:     "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg);\n\nint eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\treturn 0;\n}\n",
 			wantVar: "pd",
@@ -1313,11 +1146,6 @@ func TestFindEventHandlerEdgeCases(t *testing.T) {
 // patchEventHandlerInit and findInitInsertionPoint
 // ---------------------------------------------------------------------------
 
-// This used to be the most brittle pattern in the file, and the only one whose
-// failure was fatal rather than a ManualStep: an unrecognized branch shape
-// failed the whole setup call, leaving the harness files copied and CMakeLists
-// patched but nothing wired. Step 7 widened the shapes it accepts and
-// downgraded the rest to ManualSteps.
 func TestPatchEventHandlerInitEdgeCases(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1330,91 +1158,73 @@ func TestPatchEventHandlerInitEdgeCases(t *testing.T) {
 		wantInitBefore string
 	}{
 		{
-			// LOCK: the canonical shape from the SDK examples.
+			// The canonical shape from the SDK examples.
 			name: "canonical_if_branch",
 			src:  "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tif (event == kEventInit) {\n\t\tsetup();\n\t}\n\treturn 0;\n}\n",
 		},
 		{
-			// LOCK (fixed in step 7): a switch over the event is idiomatic C
-			// and arguably the more natural way to write this handler. The
-			// call goes right after the case label's colon, which is a
-			// statement position whether or not the body has braces.
+			// A switch: the call goes right after the case label's colon.
 			name:           "switch_case_with_braces",
 			src:            "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tswitch (event) {\n\tcase kEventInit: {\n\t\tsetup();\n\t\tbreak;\n\t}\n\t}\n\treturn 0;\n}\n",
 			wantInitBefore: "setup();",
 		},
 		{
-			// LOCK (fixed in step 7): the same, with no braces on the case
-			// body - the shape a switch usually has.
+			// The same, with no braces on the case body.
 			name:           "switch_case_without_braces",
 			src:            "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tswitch (event) {\n\tcase kEventInit:\n\t\tsetup();\n\t\tbreak;\n\t}\n\treturn 0;\n}\n",
 			wantInitBefore: "setup();",
 		},
 		{
-			// LOCK (fixed in step 7): a compound condition. Most real
-			// handlers guard against double init this way.
+			// A compound condition (a double-init guard).
 			name:           "compound_condition",
 			src:            "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tif (event == kEventInit && !inited) {\n\t\tsetup();\n\t}\n\treturn 0;\n}\n",
 			wantInitBefore: "setup();",
 		},
 		{
-			// LOCK (fixed in step 7): Yoda comparison.
+			// Yoda comparison.
 			name:           "reversed_comparison",
 			src:            "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tif (kEventInit == event) {\n\t\tsetup();\n\t}\n\treturn 0;\n}\n",
 			wantInitBefore: "setup();",
 		},
 		{
-			// LOCK (fixed in step 7): redundant parentheses.
+			// Redundant parentheses.
 			name:           "double_parens",
 			src:            "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tif ((event == kEventInit)) {\n\t\tsetup();\n\t}\n\treturn 0;\n}\n",
 			wantInitBefore: "setup();",
 		},
 		{
-			// LOCK: a braceless branch still can't be patched - there is no
-			// block to insert into without rewriting the branch - but it is a
-			// ManualStep naming the file now, not a failed setup call.
+			// A braceless branch has no block to insert into: a ManualStep naming the file.
 			name:     "braceless_branch_reports_a_manual_step",
 			src:      "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tif (event == kEventInit)\n\t\tsetup();\n\treturn 0;\n}\n",
 			wantStep: "no braces to insert into",
 		},
 		{
-			// LOCK: kEventInit used in an expression rather than a branch. The
-			// ";" reached before any "{" is what rules it out, and guessing at
-			// the if (wantInit) below it is not something this tool should do.
+			// kEventInit in an expression, not a branch: the ";" before any "{" rules it out.
 			name:     "kEventInit_in_an_expression_reports_a_manual_step",
 			src:      "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tint wantInit = event == kEventInit;\n\tif (wantInit) {\n\t\tsetup();\n\t}\n\treturn 0;\n}\n",
 			wantStep: "no braces to insert into",
 		},
 		{
-			// LOCK: no kEventInit anywhere. Reported, not fatal.
+			// No kEventInit anywhere: reported, not fatal.
 			name:     "no_init_branch_reports_a_manual_step",
 			src:      "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\treturn 0;\n}\n",
 			wantStep: "could not find where",
 		},
 		{
-			// LOCK (fixed in step 6): the first match in CODE wins, so the
-			// live branch gets the call and the commented-out one above it is
-			// stepped over. It used to take the comment, putting the init call
-			// where it never compiles while setup still reported success - the
-			// worst outcome in this file, because the symptom (a harness that
-			// never answers) reads like a transport bug.
+			// The first kEventInit in code wins, not the commented-out one above it.
 			name: "commented_branch_does_not_swallow_the_init_call",
 			src: "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n" +
 				"\t// was: if (event == kEventInit) { legacySetup(); }\n" +
 				"\tif (event == kEventInit) {\n\t\tsetup();\n\t}\n\treturn 0;\n}\n",
-			// Same anchor as every other case here: the call goes in front of
-			// the live branch's first statement. It used to land above this
-			// line entirely, inside the comment.
 			wantInitBefore: "setup();",
 		},
 		{
-			// LOCK: whitespace around == is tolerated.
+			// Whitespace around == is tolerated.
 			name: "spaced_comparison_is_matched",
 			src:  "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tif ( event  ==  kEventInit )\n\t{\n\t\tsetup();\n\t}\n\treturn 0;\n}\n",
 		},
 		{
-			// LOCK: an existing hand-written init call is not duplicated,
-			// and the file is still patched for the include only.
+			// An existing hand-written init call is not duplicated; only the include is added.
 			name: "existing_hand_written_init_is_not_duplicated",
 			src:  "int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {\n\tif (event == kEventInit) {\n\t\tmcp_harness_init(pd);\n\t}\n\treturn 0;\n}\n",
 		},
@@ -1438,8 +1248,7 @@ func TestPatchEventHandlerInitEdgeCases(t *testing.T) {
 				if strings.Contains(got, "mcp_harness_init(") {
 					t.Errorf("init call inserted despite reporting a manual step:\n%s", got)
 				}
-				// The include is still inserted, so the hand-written call the
-				// manual step asks for has a declaration to use.
+				// The include is still inserted so the hand-written call has a declaration.
 				if !strings.Contains(got, `#include "mcp_harness.h"`) {
 					t.Errorf("harness include missing, the manual step's own advice would not compile:\n%s", got)
 				}
@@ -1466,7 +1275,7 @@ func TestPatchEventHandlerInitEdgeCases(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// patchUpdateCallback: setUpdateCallbackRe and the dynamic funcRe
+// patchUpdateCallback
 // ---------------------------------------------------------------------------
 
 func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
@@ -1478,7 +1287,7 @@ func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
 		wantHas        []string
 	}{
 		{
-			// LOCK: the canonical shape.
+			// The canonical shape.
 			name: "canonical_registration_and_definition",
 			src: "static PlaydateAPI *pd = NULL;\n" +
 				"static int update(void *ud) { return 1; }\n" +
@@ -1488,10 +1297,8 @@ func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
 			wantHas:     []string{"mcp_harness_update(pd);"},
 		},
 		{
-			// BUG (miss): a cast on the callback argument - the form the SDK
-			// docs themselves show for C++ callers - defeats
-			// (\w+) right after the paren, so the update hook is never
-			// wired. Degrades to a ManualStep, so at least it is reported.
+			// Known miss: a cast on the callback argument (the SDK docs' C++ form) is not
+			// read, so it degrades to a ManualStep.
 			name: "cast_in_registration_is_missed",
 			src: "static PlaydateAPI *pd = NULL;\n" +
 				"static int update(void *ud) { return 1; }\n" +
@@ -1500,11 +1307,7 @@ func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
 			wantManualStep: "setUpdateCallback",
 		},
 		{
-			// LOCK (fixed by the port): a function-pointer parameter in the
-			// callback's own signature used to defeat the "no parens inside"
-			// character class, so the definition went unfound even though it
-			// was right there, and the harness never got its per-frame call.
-			// Counting the parameter list's parens handles it.
+			// A function-pointer parameter in the callback's signature is handled.
 			name: "function_pointer_param_in_the_callback_signature",
 			src: "static PlaydateAPI *pd = NULL;\n" +
 				"static int update(int (*tick)(void), void *ud) { return 1; }\n" +
@@ -1514,9 +1317,7 @@ func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
 			wantHas:     []string{"mcp_harness_update(pd);"},
 		},
 		{
-			// LOCK (fixed in step 6): the live registration wins. The
-			// commented-out one used to, sending the tool after a callback the
-			// user had already deleted and reporting a ManualStep naming it.
+			// The live registration wins over a commented-out one.
 			name: "commented_registration_does_not_win_the_match",
 			src: "static PlaydateAPI *pd = NULL;\n" +
 				"static int update(void *ud) { return 1; }\n" +
@@ -1527,8 +1328,7 @@ func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
 			wantHas:     []string{"mcp_harness_update(pd);"},
 		},
 		{
-			// LOCK: registration split across lines is matched, because
-			// \s* crosses newlines.
+			// A registration split across lines is matched.
 			name: "registration_split_across_lines_is_matched",
 			src: "static PlaydateAPI *pd = NULL;\n" +
 				"static int update(void *ud) { return 1; }\n" +
@@ -1538,10 +1338,8 @@ func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
 			wantHas:     []string{"mcp_harness_update(pd);"},
 		},
 		{
-			// LOCK: an existing hand-written update call is left alone even
-			// when the API pointer is only declared in a header this file
-			// includes (missile-command's shape) - the mcp_harness_update
-			// check runs before the variable heuristic on purpose.
+			// An existing update call is left alone even when the API pointer is only
+			// declared in an included header.
 			name: "existing_hand_written_update_is_a_no_op",
 			src: "#include \"entity.h\"\n" +
 				"static int update(void *ud) { mcp_harness_update(mc_pd); return 1; }\n" +
@@ -1550,7 +1348,7 @@ func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
 			wantChanged: false,
 		},
 		{
-			// LOCK: no visible API pointer means a ManualStep, not a guess.
+			// No visible API pointer means a ManualStep, not a guess.
 			name: "no_visible_playdate_var_reports_a_manual_step",
 			src: "static int update(void *ud) { return 1; }\n" +
 				"int eventHandler(PlaydateAPI *p, PDSystemEvent event, uint32_t arg) {\n" +
@@ -1593,7 +1391,7 @@ func TestPatchUpdateCallbackEdgeCases(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// findAccessiblePlaydateVar: (?:static\s+)?PlaydateAPI\s*\*\s*(\w+)\s*(?:=|;)
+// findAccessiblePlaydateVar
 // ---------------------------------------------------------------------------
 
 func TestFindAccessiblePlaydateVarEdgeCases(t *testing.T) {
@@ -1603,58 +1401,48 @@ func TestFindAccessiblePlaydateVarEdgeCases(t *testing.T) {
 		wantVar string
 		wantOK  bool
 	}{
-		// LOCK: the shapes this project's own examples use.
+		// Common declaration shapes.
 		{name: "static_initialized", src: "static PlaydateAPI *pd = NULL;\n", wantVar: "pd", wantOK: true},
 		{name: "static_uninitialized", src: "static PlaydateAPI *g_pd;\n", wantVar: "g_pd", wantOK: true},
 		{name: "star_hugs_type", src: "PlaydateAPI* mc_pd = NULL;\n", wantVar: "mc_pd", wantOK: true},
 		{name: "extern_declaration", src: "extern PlaydateAPI *mc_pd;\n", wantVar: "mc_pd", wantOK: true},
 		{
-			// LOCK: a parameter is correctly not mistaken for an accessible
-			// variable - the trailing (?:=|;) is what rules it out.
+			// A parameter is not an accessible variable.
 			name: "function_parameter_is_not_a_variable",
 			src:  "void render(PlaydateAPI *pd) {\n\t(void)pd;\n}\n",
 		},
 		{
-			// LOCK: an array of pointers is not a usable pointer, and is
-			// correctly rejected.
+			// An array of pointers is rejected.
 			name: "pointer_array_is_rejected",
 			src:  "PlaydateAPI *pds[4];\n",
 		},
 		{
-			// LOCK: a pointer-to-pointer is rejected.
+			// A pointer-to-pointer is rejected.
 			name: "double_pointer_is_rejected",
 			src:  "PlaydateAPI **pdp;\n",
 		},
 		{
-			// LOCK (fixed in step 7): a typedef is not a variable. It used to
-			// be inserted into generated code as mcp_harness_update(PDRef),
-			// which does not compile, with the error landing in the user's own
-			// file. The declaration that follows it is not a match either -
-			// "PDRef pd" is not the PlaydateAPI spelling this looks for - so
-			// the outcome is a ManualStep.
+			// A typedef is not a variable, and "PDRef pd" is not the PlaydateAPI
+			// spelling this looks for, so the outcome is a ManualStep.
 			name: "typedef_is_not_a_variable",
 			src:  "typedef PlaydateAPI *PDRef;\nstatic PDRef pd = NULL;\n",
 		},
 		{
-			// LOCK: a typedef followed by a real declaration finds the real
-			// one, rather than stopping at the first textual match.
+			// A typedef followed by a real declaration finds the real one.
 			name:    "real_declaration_after_a_typedef_is_found",
 			src:     "typedef PlaydateAPI *PDRef;\nstatic PlaydateAPI *pd = NULL;\n",
 			wantVar: "pd",
 			wantOK:  true,
 		},
 		{
-			// LOCK (fixed in step 6): a declaration in a comment declares
-			// nothing, and passing its name to mcp_harness_update() produced a
-			// file that does not compile.
+			// A declaration in a comment declares nothing.
 			name:    "commented_declaration_is_skipped",
 			src:     "// static PlaydateAPI *pd = NULL;  // removed, use the param\nstatic int update(void *ud) { return 1; }\n",
 			wantVar: "",
 			wantOK:  false,
 		},
 		{
-			// LOCK (fixed in step 6): a commented-out old name no longer
-			// shadows the live declaration below it.
+			// A commented-out old name does not shadow the live declaration below it.
 			name:    "commented_declaration_does_not_shadow_the_real_one",
 			src:     "// static PlaydateAPI *oldPd = NULL;\nstatic PlaydateAPI *pd = NULL;\n",
 			wantVar: "pd",
@@ -1673,7 +1461,7 @@ func TestFindAccessiblePlaydateVarEdgeCases(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// teardownCMakeLists: [ \t\n]*src/mcp_harness\.c
+// teardownCMakeLists
 // ---------------------------------------------------------------------------
 
 func TestTeardownCMakeListsEdgeCases(t *testing.T) {
@@ -1685,34 +1473,29 @@ func TestTeardownCMakeListsEdgeCases(t *testing.T) {
 		wantLacks   []string
 	}{
 		{
-			// LOCK: the round trip this tool actually produces - inline
-			// argument list.
+			// The round trip this tool produces: inline argument list.
 			name:        "inline_entry_is_removed_cleanly",
 			src:         "add_library(${NAME} SHARED src/main.c src/mcp_harness.c)\n",
 			wantChanged: true,
 			wantHas:     []string{"add_library(${NAME} SHARED src/main.c)"},
 		},
 		{
-			// LOCK: multi-line set() entry, including the newline and indent
-			// the patch added.
+			// Multi-line set() entry, including the newline and indent the patch added.
 			name:        "set_block_entry_is_removed_with_its_line",
 			src:         "set(GAME_SOURCES\n\tsrc/main.c\n\tsrc/mcp_harness.c\n)\n",
 			wantChanged: true,
 			wantHas:     []string{"set(GAME_SOURCES\n\tsrc/main.c\n)"},
 		},
 		{
-			// LOCK: every occurrence is removed, not just the first.
+			// Every occurrence is removed, not just the first.
 			name:        "all_occurrences_are_removed",
 			src:         "add_library(a SHARED src/main.c src/mcp_harness.c)\nadd_executable(b src/main.c src/mcp_harness.c)\n",
 			wantChanged: true,
 			wantLacks:   []string{"mcp_harness.c"},
 		},
 		{
-			// LOCK (fixed in step 7): a prefixed entry is removed whole.
-			// Removal used to match the bare path anywhere, so this lost only
-			// its tail and left a dangling ${CMAKE_CURRENT_SOURCE_DIR}/
-			// argument behind - a CMakeLists that no longer configures, from
-			// the operation that is supposed to be the safe direction.
+			// A prefixed entry is removed whole; a dangling ${CMAKE_CURRENT_SOURCE_DIR}/
+			// would stop the project configuring.
 			name:        "prefixed_path_is_removed_whole",
 			src:         "add_library(a SHARED src/main.c ${CMAKE_CURRENT_SOURCE_DIR}/src/mcp_harness.c)\n",
 			wantChanged: true,
@@ -1720,7 +1503,7 @@ func TestTeardownCMakeListsEdgeCases(t *testing.T) {
 			wantLacks:   []string{"CMAKE_CURRENT_SOURCE_DIR"},
 		},
 		{
-			// LOCK: a quoted entry is removed whole, quotes included.
+			// A quoted entry is removed whole, quotes included.
 			name:        "quoted_entry_is_removed_whole",
 			src:         "add_library(a SHARED src/main.c \"src/mcp_harness.c\")\n",
 			wantChanged: true,
@@ -1728,40 +1511,34 @@ func TestTeardownCMakeListsEdgeCases(t *testing.T) {
 			wantLacks:   []string{`""`},
 		},
 		{
-			// LOCK: CRLF CMakeLists teardown leaves no stray carriage return
-			// where the entry's line used to be.
+			// CRLF teardown leaves no stray carriage return.
 			name:        "crlf_set_block_entry_is_removed_cleanly",
 			src:         "set(GAME_SOURCES\r\n\tsrc/main.c\r\n\tsrc/mcp_harness.c\r\n)\r\n",
 			wantChanged: true,
 			wantHas:     []string{"set(GAME_SOURCES\r\n\tsrc/main.c\r\n)\r\n"},
 		},
 		{
-			// LOCK (fixed in step 6): a mention inside a comment is prose about
-			// the build, not part of it. Editing one left a mangled
-			// half-sentence behind - harmless to CMake, and exactly the kind of
-			// unexplained edit that makes a user distrust every other change.
+			// A mention inside a comment is not part of the build and is left alone.
 			name:        "mention_in_a_comment_is_left_alone",
 			src:         "# src/mcp_harness.c is added by open-crank setup\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: false,
 			wantHas:     []string{"# src/mcp_harness.c is added by open-crank setup"},
 		},
 		{
-			// LOCK: the marker-wrapped include_directories block is removed
-			// by marker, independently of the source entry.
+			// The marker-wrapped include_directories block is removed by marker.
 			name:        "marker_wrapped_include_directories_is_stripped",
 			src:         "project(Game C)\n" + markerBlock(cmakeMarkerBegin, cmakeMarkerEnd, "include_directories(src)") + "\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: true,
 			wantLacks:   []string{"include_directories(src)", cmakeMarkerBegin},
 		},
 		{
-			// LOCK: a hand-written include_directories(src) with no markers
-			// is left alone - teardown never removes what setup did not add.
+			// A hand-written include_directories(src) with no markers is left alone.
 			name:        "unmarked_include_directories_is_left_alone",
 			src:         "project(Game C)\ninclude_directories(src)\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: false,
 		},
 		{
-			// LOCK: nothing to do means no write.
+			// Nothing to do means no write.
 			name:        "clean_file_is_untouched",
 			src:         "project(Game C)\nadd_library(a SHARED src/main.c)\n",
 			wantChanged: false,
@@ -1803,16 +1580,8 @@ func TestTeardownCMakeListsEdgeCases(t *testing.T) {
 // teardownC's hand-wiring check
 // ---------------------------------------------------------------------------
 
-// TestTeardownCIgnoresHarnessMentionsInComments is the counterpart to
-// TestTeardownCPreservesHandWrittenReferences: that one pins teardown as a full
-// no-op when the project really does reference the harness by hand, this one
-// pins that a comment about the harness is not such a reference.
-//
-// The check is deliberately conservative, so it has to be accurate. Reading a
-// leftover comment as hand-wiring made teardown a silent no-op - it reported
-// nothing removed and nothing patched, on a project it could have cleaned up
-// completely, and gave the user no way to tell that apart from "there was
-// nothing to do".
+// TestTeardownCIgnoresHarnessMentionsInComments: a comment about the harness
+// is not hand-wiring, so teardown still cleans up.
 func TestTeardownCIgnoresHarnessMentionsInComments(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "CMakeLists.txt"),

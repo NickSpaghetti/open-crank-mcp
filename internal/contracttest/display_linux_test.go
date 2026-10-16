@@ -11,11 +11,7 @@ import (
 )
 
 // startDisplay brings up an Xvfb display on the given number and points DISPLAY
-// at it, cleaning up when the test ends.
-//
-// The display number is a parameter because each contract test function is
-// self-contained and uses its own, rather than relying on execution order for
-// shared setup.
+// at it, cleaning up when the test ends. Each test uses its own display number.
 func startDisplay(t *testing.T, display string) {
 	t.Helper()
 	xvfb, err := simulator.Launch("Xvfb", display, "-screen", "0", "1280x800x24")

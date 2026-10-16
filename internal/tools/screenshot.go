@@ -15,32 +15,21 @@ import (
 type GetScreenshotInput struct{}
 
 func (s *Server) getScreenshot(_ context.Context, _ *mcp.CallToolRequest, _ GetScreenshotInput) (*mcp.CallToolResult, any, error) {
-	// Held across the round trip AND the file read below: the screenshot
-	// path (mcp/screenshot.png|raw) is fixed, not per-request, so a second
-	// concurrent get_screenshot call could otherwise overwrite it between
-	// this call's round trip returning and its own os.ReadFile.
+	// Held across the round trip and the file read: the screenshot path is
+	// fixed, so a concurrent call could overwrite it in between.
 	s.harnessMu.Lock()
 	defer s.harnessMu.Unlock()
 
 	resp, err := s.roundTripLocked(harness.Command{Type: harness.CmdScreenshot})
 	if err != nil {
-		// The round-trip error names response.json in the data directory, which
-		// says nothing about the scratch directory the PNG is written to. A
-		// screenshot that never comes back is usually about the latter.
+		// The round-trip error names response.json, not the scratch directory
+		// the PNG is written to.
 		result, wrapErr := handleRoundTripErr(fmt.Errorf("%w%s", err, s.scratchReport()))
 		return result, nil, wrapErr
 	}
 
-	// The two harnesses write to different places, so the base differs by format.
-	//
-	// C writes through pd->file->*, which is sandboxed: its path is relative to
-	// the Simulator's data directory. Lua writes through
-	// playdate.simulator.writeToFile, which takes a path on the dev machine, so
-	// it writes into the scratch directory this process created and handed over
-	// as playdate.argv[2].
-	//
-	// On Linux these used to be the same directory, which is why one base worked
-	// for both and why the difference stayed invisible.
+	// C writes sandbox-relative to the data directory via pd->file; Lua's
+	// playdate.simulator.writeToFile takes a host path, into the scratch dir.
 	base, err := s.screenshotBase(resp.Format)
 	if err != nil {
 		result, wrapErr := handleRoundTripErr(err)
@@ -75,8 +64,7 @@ func (s *Server) getScreenshot(_ context.Context, _ *mcp.CallToolRequest, _ GetS
 	}, nil, nil
 }
 
-// screenshotBase is the directory a screenshot of the given format is written
-// into. See the comment at its call site for why they differ.
+// screenshotBase is the directory a screenshot of the given format is written into.
 func (s *Server) screenshotBase(format string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -84,8 +72,6 @@ func (s *Server) screenshotBase(format string) (string, error) {
 		return "", errNotRunning
 	}
 	if format == harness.FormatPNG {
-		// Without this an empty scratchDir joins into a bare relative path, and the
-		// failure reads as a missing file rather than as missing state.
 		if s.scratchDir == "" {
 			return "", errNoScratch
 		}
@@ -94,13 +80,8 @@ func (s *Server) screenshotBase(format string) (string, error) {
 	return s.dataDir, nil
 }
 
-// scratchReport describes the directory handed to the game as playdate.argv[2]
-// and what is currently in it.
-//
-// Written for the case where get_screenshot times out after a restart: the
-// scratch directory is the only thing restart changes, and whether the game
-// wrote anything into it separates "never got the command" from "could not
-// write the file".
+// scratchReport describes the scratch directory and its contents, separating
+// "never got the command" from "could not write the file".
 func (s *Server) scratchReport() string {
 	s.mu.Lock()
 	scratch := s.scratchDir

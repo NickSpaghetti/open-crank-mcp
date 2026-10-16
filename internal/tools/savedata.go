@@ -33,9 +33,7 @@ func (s *Server) readSaveData(_ context.Context, _ *mcp.CallToolRequest, in Read
 		}
 		var files []string
 		for _, e := range entries {
-			// "mcp" is the harness IPC directory, not save data - excluded
-			// so this listing stays focused on what a caller actually asked
-			// about.
+			// The harness IPC directory, not save data.
 			if e.Name() == "mcp" {
 				continue
 			}

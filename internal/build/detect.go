@@ -39,10 +39,8 @@ func DetectProjectType(sourceDir string) (ProjectType, error) {
 	return 0, fmt.Errorf("could not detect project type in %s: no CMakeLists.txt (C) or Source/main.lua (Lua) found", sourceDir)
 }
 
-// locatePDX finds the single .pdx produced by a C build. The SDK's own CMake
-// support names the output after PLAYDATE_GAME_NAME, set inside the game's
-// own CMakeLists.txt, so the caller can't know the filename in advance and
-// has to discover it after the build completes.
+// locatePDX finds the single .pdx produced by a C build. The SDK's CMake support
+// names it after the game's PLAYDATE_GAME_NAME, so it can't be predicted.
 func locatePDX(dir string) (string, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "*.pdx"))
 	if err != nil {

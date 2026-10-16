@@ -8,16 +8,8 @@ import (
 	"strings"
 )
 
-// ReadBundleID reads bundleID out of a built .pdx's pdxinfo file. A .pdx is
-// a directory on the Simulator target, not an archive, so pdxinfo is just
-// <pdxPath>/pdxinfo - a plain key=value text file.
-//
-// A missing bundleID is a real case, not a corrupt build: `pdc` happily compiles
-// a project whose Source/pdxinfo has no bundleID, or none at all, and synthesises
-// a pdxinfo carrying only pdxversion and buildtime. Several of the SDK's own
-// Lua examples ship that way. So the error says what to do about it, because
-// everything the harness does is keyed on the bundle ID and there is no way to
-// proceed without one.
+// ReadBundleID reads bundleID out of <pdxPath>/pdxinfo, a key=value text file.
+// pdc builds fine without a bundleID, so the error names the remedy.
 func ReadBundleID(pdxPath string) (string, error) {
 	path := filepath.Join(pdxPath, "pdxinfo")
 	f, err := os.Open(path)

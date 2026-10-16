@@ -13,23 +13,14 @@ import (
 	"github.com/NickSpaghetti/open-crank-mcp/internal/simulator"
 )
 
-// TestSetupContract proves setup's patched output is actually usable, not
-// just "files were written": starting from a bare, unwired game (no
-// mcp_harness reference at all - what a real user's project looks like
-// before running setup), it runs the real setup.Setup, builds the result
-// with the real SDK, drives it through a real Simulator to confirm the
-// harness responds, then runs setup.Teardown and confirms the project
-// still builds clean afterward. Skipped under the same condition as
-// TestSDKContract - needs the full simulator Docker image.
+// TestSetupContract runs setup on an unwired game, builds it with the real SDK,
+// pings the harness in a real Simulator, then tears down and rebuilds.
 func TestSetupContract(t *testing.T) {
 	if os.Getenv("OPEN_CRANK_SDK_CONTRACT") == "" {
 		t.Skip("OPEN_CRANK_SDK_CONTRACT not set - run `make sdk-contract-check` (container) or `make sdk-contract-check-native` (host SDK)")
 	}
 	paths := contractSDK(t)
 
-	// A separate display from TestSDKContract's :99 - these are
-	// independent test functions, each self-contained, not relying on
-	// execution order for shared setup.
 	startDisplay(t, ":98")
 
 	t.Run("Lua", func(t *testing.T) {
@@ -97,14 +88,8 @@ func TestSetupContract(t *testing.T) {
 		}
 	})
 
-	// Reproduces the SDK's own "Sprite Game" example's actual shape: no
-	// src/ directory at all - main.c and a second file with a direct input
-	// call both live at the project root. mcp_harness.h/.c still get
-	// copied into sourceDir/src/ (unchanged), so a bare #include
-	// "mcp_harness.h" from either file only resolves once
-	// include_directories(src) is added to CMakeLists.txt - this is what
-	// actually proves that fix against a real cmake/pdc build, not just
-	// Go-level string assertions.
+	// The SDK's "Sprite Game" shape: sources at the project root, harness copied
+	// into src/, so it only builds once include_directories(src) is added.
 	t.Run("C flat layout", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, filepath.Join(dir, "CMakeLists.txt"), cFlatFixtureCMakeLists)
@@ -131,10 +116,8 @@ func TestSetupContract(t *testing.T) {
 			t.Fatalf("setup.Teardown: %v", err)
 		}
 
-		// patchInputCalls' rewrite in game.c is never reversed (documented
-		// trade-off), so teardown here is correctly a full no-op - unlike
-		// the "C" subtest above, the harness files stay in place and the
-		// project must still build clean with them present.
+		// game.c's rewritten input call is never reversed, so teardown leaves the
+		// harness files in place and the project must still build.
 		if _, err := os.Stat(filepath.Join(dir, "src", "mcp_harness.c")); err != nil {
 			t.Fatalf("mcp_harness.c was removed even though game.c's rewritten call still needs it: %v", err)
 		}
@@ -156,16 +139,8 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-// runAndConfirmHarnessReachable launches pdxPath and pings the harness
-// through the real file-based protocol, proving setup's patched output
-// isn't just syntactically valid but actually responds as a working
-// harness would.
-// paths rather than a bare SDK directory, because both values this needs are
-// per-platform and only internal/sdk knows them. Building them here as
-// <sdk>/bin/PlaydateSimulator was correct on Linux and silently wrong on macOS,
-// where the executable lives inside a .app bundle - the macOS CI leg failed on
-// exactly that, with `stdbuf: .../bin/PlaydateSimulator: No such file or
-// directory`, on its first ever run.
+// runAndConfirmHarnessReachable launches pdxPath and pings the harness through
+// the real file protocol.
 func runAndConfirmHarnessReachable(t *testing.T, paths sdk.Paths, pdxPath, bundleID string) {
 	t.Helper()
 	dataDir := paths.DataDirCandidates(sdk.OSEnv(), bundleID)[0]

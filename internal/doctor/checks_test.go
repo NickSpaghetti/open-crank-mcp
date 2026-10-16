@@ -9,12 +9,8 @@ import (
 	"testing"
 )
 
-// fakePDC writes an executable that prints a known string, so the assertion is
-// about pass-through rather than about whatever a real tool happens to say.
-//
-// The first attempt at this used /bin/echo and asserted its output contained
-// "--version"; GNU echo treats that as its own flag and prints a version banner,
-// so the test failed for a reason that had nothing to do with the code.
+// fakePDC writes an executable that prints a known string. Not /bin/echo: GNU
+// echo treats --version as its own flag.
 func fakePDC(t *testing.T, prints string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -28,8 +24,6 @@ func fakePDC(t *testing.T, prints string) string {
 	return path
 }
 
-// cmd/smoke-check prints PDCVersion's return value verbatim, so swallowing the
-// output would silently empty its report. That is what this pins.
 func TestPDCVersionReturnsOutput(t *testing.T) {
 	out, err := PDCVersion(fakePDC(t, "3.1.1"))
 	if err != nil {
@@ -51,18 +45,11 @@ func TestPDCVersionReportsAMissingBinary(t *testing.T) {
 	}
 }
 
-// dynamicBinary finds something on this machine that really is dynamically
-// linked, or skips.
-//
-// A Go test binary is not a candidate: it is usually static, and ldd answers
-// "not a dynamic executable" with exit 1 - which is how the first version of
-// this test failed. The Simulator this check exists for is dynamic, so a dynamic
-// stand-in is the honest analogue.
+// dynamicBinary finds a dynamically linked binary on this machine, or skips. Not
+// the Go test binary: it is usually static, and ldd exits 1 on it.
 func dynamicBinary(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS != "linux" {
-		// Off Linux SharedLibraries only stats the path, so the test executable
-		// itself is a portable stand-in.
 		path, err := os.Executable()
 		if err != nil {
 			t.Fatalf("locating the test executable: %v", err)
@@ -79,9 +66,7 @@ func dynamicBinary(t *testing.T) string {
 	return ""
 }
 
-// The "everything resolves" direction. The opposite one - a genuinely missing
-// library - needs a deliberately broken binary to reproduce and is left to the
-// real Simulator, which is what cmd/smoke-check launches.
+// The missing-library direction is left to cmd/smoke-check's real Simulator.
 func TestSharedLibrariesAcceptsAResolvableBinary(t *testing.T) {
 	if err := SharedLibraries(dynamicBinary(t)); err != nil {
 		t.Errorf("SharedLibraries rejected a binary that does resolve: %v", err)

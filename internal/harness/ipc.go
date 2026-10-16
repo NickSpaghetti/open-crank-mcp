@@ -1,6 +1,5 @@
-// Package harness is the file-based IPC client for talking to either the
-// Lua or C harness (mcp/command.json in, mcp/response.json out). The
-// protocol is language-agnostic, so this client works with either.
+// Package harness is the file-based IPC client for the Lua or C harness
+// (mcp/command.json in, mcp/response.json out).
 package harness
 
 import (
@@ -13,28 +12,14 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// bootstrapPollInterval only governs the rare, one-time-per-launch case
-// where the directory a wait needs to watch doesn't exist yet (e.g.
-// WaitForDir's own parent, before the Simulator has created its data
-// directory). It never gates the per-tool-call hot path - SendCommand
-// always creates mcp/ before WaitForResponse is ever called, so that wait
-// never falls back to this.
+// bootstrapPollInterval is used only while the directory to watch does not
+// exist yet (e.g. before the Simulator creates its data directory).
 const bootstrapPollInterval = 1 * time.Millisecond
 
-// backstopInterval is how often awaitPath re-checks regardless of whether a
-// filesystem notification arrived. See its use for why a notification-driven
-// wait still needs one.
 const backstopInterval = 10 * time.Millisecond
 
-// awaitPath blocks until check() returns true, waking up only when path's
-// directory actually changes (via inotify, through fsnotify) rather than
-// waking up on a timer to ask "yet?" every interval. Real stress testing
-// against three real games (see docs/GOTCHAS.md) found a polling loop's
-// interval wasn't the round-trip latency bottleneck - the Simulator's own
-// ~30fps frame period was - but blocking on a real notification is still
-// strictly better than polling: zero wasted wakeups while waiting, and no
-// polling-interval-shaped detection delay stacked on top of whatever the
-// frame period already costs.
+// awaitPath blocks until check() returns true, waking on fsnotify events for
+// path's directory, with a periodic backstop re-check.
 func awaitPath(path string, timeout time.Duration, check func() bool) error {
 	deadline := time.Now().Add(timeout)
 	if check() {
@@ -67,24 +52,14 @@ func awaitPath(path string, timeout time.Duration, check func() bool) error {
 			if !ok {
 				return fmt.Errorf("watcher closed while waiting for %s", path)
 			}
-			// Clean both sides before comparing. This is string equality between a
-			// path fsnotify constructed and one a caller built, and the two only
-			// agree by convention.
+			// fsnotify's event path and the caller's only agree by convention.
 			if filepath.Clean(event.Name) == cleanPath && check() {
 				return nil
 			}
 		case <-ticker.C:
-			// A backstop, not the mechanism. fsnotify is still what makes this
-			// prompt; this only bounds how long a missed notification can cost.
-			//
-			// It exists because the notification is not guaranteed to arrive for
-			// every case that matters. On macOS the kqueue backend only sees writes
-			// to a file after it registers a per-file watch, which it does right
-			// after emitting Create - and WaitForResponse requires the file to be
-			// non-empty, so a harness that creates and fills a response inside that
-			// window produces no further event and the wait runs to its full
-			// timeout with no error to explain it. Cheap insurance against a class
-			// of platform-specific behaviour that cannot be tested from here.
+			// macOS kqueue only sees writes after its per-file watch is armed
+			// (just after Create), so a file created and filled in that window
+			// produces no further event.
 			if check() {
 				return nil
 			}
@@ -99,10 +74,8 @@ func awaitPath(path string, timeout time.Duration, check func() bool) error {
 	}
 }
 
-// newWatcherForExistingDir arms an fsnotify watch on dir, falling back to
-// a short bootstrap poll only if dir itself doesn't exist yet - a rare,
-// one-time race (e.g. the Simulator hasn't created its data directory
-// yet), not the repeated per-tool-call wait this change targets.
+// newWatcherForExistingDir arms an fsnotify watch on dir, polling until dir
+// exists or deadline passes.
 func newWatcherForExistingDir(dir string, deadline time.Time) (*fsnotify.Watcher, error) {
 	for {
 		watcher, err := fsnotify.NewWatcher()
@@ -138,16 +111,9 @@ func WaitForDir(path string, timeout time.Duration) error {
 	})
 }
 
-// SendCommand writes cmd as mcp/command.json under dataDir. The mcp
-// directory is normally already created by the harness's own init, but
-// this creates it if missing rather than depend on that ordering.
-//
-// Any response.json already sitting there is removed first. Without that, a
-// leftover from a round trip that already timed out is the first thing the next
-// WaitForResponse sees, and it returns it as this command's answer before the
-// harness has even read the command - measured at 2ms against a real game, with
-// the previous call's payload. Clearing it here is half the fix; the id check in
-// WaitForResponse is the other half, for the response that lands mid-wait.
+// SendCommand writes cmd as mcp/command.json under dataDir, first removing
+// any leftover response.json from a timed-out round trip so it cannot be
+// read as this command's answer.
 func SendCommand(dataDir string, cmd Command) error {
 	b, err := json.Marshal(cmd)
 	if err != nil {
@@ -169,40 +135,8 @@ func SendCommand(dataDir string, cmd Command) error {
 
 // WaitForResponse waits for the response to wantID to appear as
 // mcp/response.json under dataDir, reads and removes it, and returns it decoded.
-//
-// Its check function requires content that parses, not merely a non-empty file.
-// Both harnesses now publish by writing a temp file and renaming it into place, so
-// a response that exists is complete - but a game carrying an older vendored
-// harness still writes in place, where a reader can see a zero-length file (after
-// the truncating open) or a short one (mid-write). Neither is an answer, and
-// neither ends the wait.
-//
-// Whether a short read actually happens was measured rather than assumed, and it
-// did not reproduce: 240 calls against a real game returning a 512KB response, on
-// Linux/overlayfs with SDK 3.1.1, produced no partial reads. So this is latent
-// rather than live on that platform. It is handled anyway because the cost is a
-// branch, the previous handling was wrong in two independent ways (it ended the
-// wait early *and* deleted the evidence), and the platforms native mode will add
-// have not been measured at all.
-//
-// A response that does not stay removed would be worse than one that never
-// arrives, so removal happens for both outcomes that end interest in a file: the
-// answer we wanted, and a complete answer belonging to someone else.
-//
-// A response carrying some other id is discarded and the wait continues. That is
-// what the id was always for (docs/ROADMAP.md: "a stale leftover response from a
-// previous run is easy to detect and ignore") and it had never been implemented:
-// one round trip that outlived its timeout left its answer on disk, and the next
-// call returned it, silently, as its own. Reproduced against a real game -
-// set_crank timed out at 5.005s and the following press_button consumed its
-// answer in 3ms.
-//
-// An empty id is accepted rather than treated as a mismatch, and that is
-// load-bearing, not defensive: when the C harness fails to parse a command it
-// answers with an empty id, because it never gets as far as copying one
-// (mcp_parse_command bails before the id is read). Rejecting those would turn
-// every C-side parse failure into a five-second timeout instead of the error
-// message it is trying to hand back. Verified on the wire, not assumed.
+// Responses with another id are discarded. An empty id is accepted: the C
+// harness answers parse failures with no id because it never read one.
 func WaitForResponse(dataDir string, wantID string, timeout time.Duration) (Response, error) {
 	path := filepath.Join(dataDir, "mcp", "response.json")
 
@@ -218,28 +152,14 @@ func WaitForResponse(dataDir string, wantID string, timeout time.Duration) (Resp
 
 		var got Response
 		if err := json.Unmarshal(b, &got); err != nil {
-			// Content that does not parse is treated as not-ready-yet, not as an
-			// answer. The file is deliberately left alone and the wait continues:
-			// both harnesses publish by rename now, but a game carrying an older
-			// vendored harness still writes in place, and there a short read is
-			// content that is about to be finished. Deleting it would unlink a file
-			// the writer still has open, sending the completing write to an orphaned
-			// inode - so the answer would never arrive under its own name, and the
-			// harness has already consumed command.json and will not resend.
-			//
-			// The error is kept so a genuinely malformed response is still
-			// diagnosable when the deadline expires, rather than surfacing as a bare
-			// timeout with no clue what was on disk.
+			// Not ready yet: older vendored harnesses write in place, so this may
+			// be a short read. Deleting it would orphan the writer's open inode.
 			parseErr = fmt.Errorf("parsing response %q: %w", string(b), err)
 			return false
 		}
 		parseErr = nil
 
 		if got.ID != "" && wantID != "" && got.ID != wantID {
-			// Someone else's answer, and complete - so unlike the parse failure
-			// above it will never become ours, and leaving it would mean re-reading
-			// the same stale response until the deadline. Removed, and the wait
-			// continues.
 			_ = os.Remove(path)
 			return false
 		}
@@ -250,8 +170,6 @@ func WaitForResponse(dataDir string, wantID string, timeout time.Duration) (Resp
 	}
 
 	if err := awaitPath(path, timeout, check); err != nil {
-		// A recorded parse failure explains the timeout better than the timeout
-		// does: it means something was there and could not be read.
 		if parseErr != nil {
 			return Response{}, parseErr
 		}

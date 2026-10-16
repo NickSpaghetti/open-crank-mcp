@@ -1,17 +1,5 @@
-// Package sdk answers two questions that used to be answered by string
-// concatenation in four unconnected places: where is the Playdate SDK, and where
-// are the things inside it on this platform.
-//
-// It exists because the server now runs two ways. In the container the SDK is at
-// a known path in a known layout, and PLAYDATE_SDK_PATH is set for it. On a
-// developer's own machine none of that holds: the SDK is wherever they installed
-// it, the Simulator is an .app bundle on macOS and an .exe on Windows, and
-// nothing sets an environment variable.
-//
-// Everything here takes its filesystem and environment as parameters rather than
-// reaching for the real ones, and the per-platform layouts are values rather than
-// build-tagged files. That lets tests exercise every layout on every OS; the
-// Windows layout is also covered by the native integration test. See sdk_test.go.
+// Package sdk locates the Playdate SDK and the per-platform paths inside it.
+// Filesystem and environment are injected so every layout is testable on every OS.
 package sdk
 
 import (
@@ -24,13 +12,8 @@ import (
 
 // Env is the outside world, injected. Production callers use OSEnv.
 type Env struct {
-	// FS reads the absolute OS paths passed through fsKey. osPathFS in
-	// production, fstest.MapFS in tests.
-	FS fs.FS
-	// Getenv looks up an environment variable. os.Getenv in production.
-	Getenv func(string) string
-	// HomeDir returns the current user's home directory. os.UserHomeDir in
-	// production.
+	FS      fs.FS // keyed by fsKey(absolute path)
+	Getenv  func(string) string
 	HomeDir func() (string, error)
 }
 
@@ -43,9 +26,8 @@ func OSEnv() Env {
 	}
 }
 
-// osPathFS adapts absolute OS paths to fs.FS. Unlike os.DirFS("/"), it also
-// handles Windows drive-letter paths, which is needed for native Windows SDK
-// discovery and Simulator data-directory probing.
+// osPathFS adapts absolute OS paths to fs.FS. Unlike os.DirFS("/"), it handles
+// Windows drive-letter paths.
 type osPathFS struct{}
 
 func (osPathFS) Open(name string) (fs.File, error) {
@@ -56,50 +38,30 @@ func (osPathFS) Open(name string) (fs.File, error) {
 	return os.Open(path)
 }
 
-// Paths is a resolved SDK: where it is, how that was decided, and the absolute
-// paths of the two binaries this project runs out of it.
+// Paths is a resolved SDK: where it is, how that was decided, and its binaries.
 type Paths struct {
-	// Root is the SDK directory.
-	Root string
-	// RootSource names what found Root, for error messages and `make sdk-path`.
-	// Detection failing visibly is most of the value here.
-	RootSource string
-	// SimulatorBin is the executable itself, never an .app directory. On macOS
-	// that means the Mach-O inside the bundle; see paths_darwin.go for why that
-	// distinction is load-bearing.
+	Root       string
+	RootSource string // what found Root, for error messages and `make sdk-path`
+	// SimulatorBin is the executable itself, never an .app directory; see darwinLayout.
 	SimulatorBin string
-	// PDC is the compiler.
-	PDC string
-	// Tried lists every candidate considered, in order, whether or not
-	// resolution succeeded. "It looked here and here" is the only actionable
-	// thing to say when it fails.
-	Tried []string
+	PDC          string
+	Tried        []string // every candidate considered, in order, even on success
 
-	// goos records which platform layout produced these paths, so the data
-	// directory methods can use the same one. Unexported and tolerant of being
-	// unset: a Paths built as a struct literal in a test falls back to the host
-	// layout rather than panicking on nil functions.
-	goos string
+	goos string // layout that produced these paths; empty means host
 }
 
-// Sources for RootSource. Strings rather than an enum because they are only ever
-// shown to a human.
+// Sources for RootSource.
 const (
 	SourceEnv     = "PLAYDATE_SDK_PATH"
 	SourceConfig  = "SDKRoot in ~/.Playdate/config"
 	SourceDefault = "default install location"
 )
 
-// EnvVarSDKPath is what the container sets, and what a user with a non-standard
-// install can set. Checked first, so container behaviour is unchanged by any of
-// this.
+// EnvVarSDKPath is set by the container or a user with a non-standard install. Checked first.
 const EnvVarSDKPath = "PLAYDATE_SDK_PATH"
 
-// EnvVarSimulatorBin overrides the resolved Simulator executable outright.
-//
-// The escape hatch for the thing here most likely to be wrong: the name of the
-// .app bundle on macOS, which could not be verified without a real install. It
-// turns "this doesn't work on my Mac" into a one-line fix rather than a blocker.
+// EnvVarSimulatorBin replaces the Simulator path, so a root validates on pdc alone
+// when the bundle-name probe is wrong.
 const EnvVarSimulatorBin = "OPEN_CRANK_SIMULATOR_BIN"
 
 // Resolve locates the SDK and the binaries inside it, using the host's platform
@@ -108,17 +70,8 @@ func Resolve(env Env) (Paths, error) {
 	return resolveWith(env, hostLayout())
 }
 
-// resolveWith is Resolve against an explicit layout, so tests can ask for
-// darwin's or windows' answers on any machine.
-//
-// Order: PLAYDATE_SDK_PATH, then SDKRoot in ~/.Playdate/config, then the per-OS
-// default install locations. The environment variable winning outright is what
-// makes this a no-op inside the container.
-//
-// ~/.Playdate/config is not a guess. It is the SDK's own file, written by its
-// installer, and Panic's CMake support reads the same key out of it - see
-// c-harness/test/fixture-game/CMakeLists.txt, which greps for exactly this.
-//
+// resolveWith is Resolve against an explicit layout. Order: PLAYDATE_SDK_PATH,
+// SDKRoot in the SDK installer's ~/.Playdate/config, then default roots.
 // A returned error still carries a populated Paths.Tried.
 func resolveWith(env Env, lay layout) (Paths, error) {
 	var tried []string
@@ -139,8 +92,7 @@ type rootCandidate struct {
 	source string
 }
 
-// candidateRoots is the resolution order, as data. Empty entries are skipped so
-// callers do not have to check.
+// candidateRoots is the resolution order, as data. Empty entries are skipped.
 func candidateRoots(env Env, lay layout, tried *[]string) []rootCandidate {
 	var out []rootCandidate
 	add := func(root, source string) {
@@ -157,12 +109,8 @@ func candidateRoots(env Env, lay layout, tried *[]string) []rootCandidate {
 	return out
 }
 
-// configSDKRoot reads the SDKRoot key out of ~/.Playdate/config.
-//
-// The file is `key<whitespace>value` per line. Parsed by splitting on whitespace
-// rather than by column offset: the SDK's own CMake support does `cut -c9-`,
-// which works only because "SDKRoot" happens to be seven characters plus one
-// separator, and which breaks on any other key or a second space.
+// configSDKRoot reads the SDKRoot key out of ~/.Playdate/config, whose lines are
+// `key<whitespace>value`. Split on whitespace, not column offset like the SDK's `cut -c9-`.
 func configSDKRoot(env Env, tried *[]string) string {
 	home, err := env.HomeDir()
 	if err != nil {
@@ -185,34 +133,25 @@ func configSDKRoot(env Env, tried *[]string) string {
 }
 
 // validate confirms a candidate root actually holds the binaries, and fills in
-// their paths. A directory that exists but has no Simulator in it is not an SDK,
-// and saying so here beats a confusing failure at launch time.
+// their paths. "Missing" and "not an SDK" are reported differently.
 func validate(env Env, lay layout, root, source string, tried *[]string) (Paths, bool) {
-	// "not there" and "there but not an SDK" send a person looking in different
-	// places, so they are reported differently. Saying "no Simulator executable"
-	// about a directory that does not exist invites someone to go looking inside
-	// it.
 	if !isDir(env, root) {
 		*tried = append(*tried, fmt.Sprintf("%s (does not exist)", root))
 		return Paths{}, false
 	}
 
-	simBin, ok := lay.simulatorBin(env, root)
-	if !ok {
-		*tried = append(*tried, fmt.Sprintf("%s (no Simulator executable)", root))
-		return Paths{}, false
+	simBin := env.Getenv(EnvVarSimulatorBin)
+	if simBin == "" {
+		var ok bool
+		if simBin, ok = lay.simulatorBin(env, root); !ok {
+			*tried = append(*tried, fmt.Sprintf("%s (no Simulator executable)", root))
+			return Paths{}, false
+		}
 	}
 	pdc := lay.pdcBin(root)
 	if !exists(env, pdc) {
 		*tried = append(*tried, fmt.Sprintf("%s (no %s)", root, filepath.Base(pdc)))
 		return Paths{}, false
-	}
-
-	// Applied after validation, deliberately. An override should not have to name
-	// a whole valid SDK to correct one path inside it, and it has to still work
-	// when the bundle-name probing has guessed wrong.
-	if override := env.Getenv(EnvVarSimulatorBin); override != "" {
-		simBin = override
 	}
 
 	*tried = append(*tried, root+" (found)")
@@ -226,8 +165,7 @@ func validate(env Env, lay layout, root, source string, tried *[]string) (Paths,
 	}, true
 }
 
-// layout returns the platform layout these paths came from, falling back to the
-// host's. The fallback is what keeps a struct-literal Paths usable in tests.
+// layout returns the platform layout these paths came from, falling back to the host's.
 func (p Paths) layout() layout {
 	if p.goos == "" {
 		return hostLayout()
@@ -235,16 +173,8 @@ func (p Paths) layout() layout {
 	return layoutFor(p.goos)
 }
 
-// BuildEnv is os.Environ() with PLAYDATE_SDK_PATH set to the resolved root.
-//
-// Needed because a C game's own CMakeLists.txt reads $ENV{PLAYDATE_SDK_PATH}.
-// When the SDK came from the config file or a default location rather than the
-// environment, that variable is unset in this process, and the SDK's CMake
-// template falls through to a branch that shells out to bash, egrep, head and
-// cut. Setting it here means the first branch always wins, on every platform.
-//
-// The existing value is replaced rather than appended to, since a stale one in
-// the inherited environment would otherwise win.
+// BuildEnv is os.Environ() with PLAYDATE_SDK_PATH replaced by the resolved root.
+// Without it the SDK's CMake template falls back to shelling out to bash, egrep and cut.
 func (p Paths) BuildEnv() []string {
 	environ := os.Environ()
 	out := make([]string, 0, len(environ)+1)
@@ -256,38 +186,27 @@ func (p Paths) BuildEnv() []string {
 	return append(out, EnvVarSDKPath+"="+p.Root)
 }
 
-// fsKey converts an absolute OS path into a key for an fs.FS rooted at the
-// filesystem root.
-//
-// fs.FS paths are slash-separated and cannot start with a separator, so Unix
-// paths lose their leading slash. Windows drive letters remain as "C:/...";
-// osPathFS understands those as absolute paths, while synthetic filesystems use
-// the same key consistently in tests.
+// fsKey converts an absolute OS path into an fs.FS key: slash-separated with no
+// leading slash. Windows drive letters stay as "C:/...", which osPathFS understands.
 func fsKey(path string) string {
 	return strings.TrimPrefix(filepath.ToSlash(path), "/")
 }
 
-// exists reports whether path is present in env.FS.
+// Exists reports whether an absolute OS path exists in env.FS.
+func Exists(env Env, path string) bool { return exists(env, path) }
+
 func exists(env Env, path string) bool {
 	_, err := fs.Stat(env.FS, fsKey(path))
 	return err == nil
 }
 
-// isDir reports whether path is present in env.FS and is a directory.
 func isDir(env Env, path string) bool {
 	info, err := fs.Stat(env.FS, fsKey(path))
 	return err == nil && info.IsDir()
 }
 
-// Describe renders a resolved SDK for a human: where it is, which of the three
-// sources found it, and what was considered along the way.
-//
-// It lives here rather than in cmd/sdk-path because that makes it testable. The
-// command around it is a shell that prints this and exits, which is the same
-// shape as the other commands in this repo and excluded from mutation testing
-// for the same reason. The formatting is not incidental though: "which source
-// won" is the one thing a person debugging detection needs, and it is invisible
-// everywhere else.
+// Describe renders a resolved SDK for a human: where it is, which source found
+// it, and what was considered along the way.
 func (p Paths) Describe() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "root:       %s\n", p.Root)
@@ -295,8 +214,7 @@ func (p Paths) Describe() string {
 	fmt.Fprintf(&b, "simulator:  %s\n", p.SimulatorBin)
 	fmt.Fprintf(&b, "pdc:        %s\n", p.PDC)
 
-	// Only worth printing when something was ruled out. A single entry means the
-	// first candidate won, and listing it again under "considered" says nothing.
+	// A single entry means the first candidate won; nothing worth listing.
 	if len(p.Tried) > 1 {
 		b.WriteString("\nconsidered, in order:\n")
 		for _, t := range p.Tried {

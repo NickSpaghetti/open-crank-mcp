@@ -29,12 +29,8 @@ func testShell(t *testing.T) string {
 	return shell
 }
 
-// newTestServer builds a Server backed by a trivial stand-in process (not a
-// real PlaydateSimulator), the same approach internal/simulator's own tests
-// use. sdkPath points at a scratch directory whose bin/PlaydateSimulator is
-// actually `sh` (via a symlink), so code paths that relaunch through
-// s.sdkPath (restart_simulator) exercise a real, working Launch call instead
-// of just an error path.
+// newTestServer builds a Server backed by a stand-in `sh` process. The SDK's
+// Simulator is a symlink to sh, so restart_simulator exercises a real Launch.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
 	shPath := testShell(t)
@@ -61,29 +57,21 @@ func newTestServer(t *testing.T) *Server {
 	}
 
 	return &Server{
-		// The symlinked stand-in is named directly rather than derived from a
-		// layout: this fixture is about the Server's lifecycle handling, not about
-		// where a real SDK keeps its Simulator.
 		sdk: sdk.Paths{
 			Root:         sdkPath,
 			SimulatorBin: filepath.Join(sdkPath, "bin", "PlaydateSimulator"),
 			PDC:          filepath.Join(sdkPath, "bin", "pdc"),
 		},
 		sim: sim,
-		// Empty pdxPath means "launch with no game" (a supported mode -
-		// see internal/simulator.Launch) - sh then just gets dataDir as
-		// its lone arg, which it errors on internally trying to read as a
-		// script, but Launch() itself still succeeds since the process
-		// starts fine. That's all restart_simulator's success path needs.
+		// Empty pdxPath launches with no game: sh gets the scratch dir as a script
+		// path and fails, but the process starts, which is all restart needs.
 		pdxPath:  "",
 		dataDir:  dataDir,
 		bundleID: "com.example.test",
 	}
 }
 
-// startFakeHarness watches dataDir/mcp/command.json and, once it appears,
-// deletes it and writes resp as response.json - mimicking what a real C/Lua
-// harness's own update loop does, without needing either.
+// startFakeHarness answers one command.json with resp, as a real harness would.
 func startFakeHarness(t *testing.T, dataDir string, resp map[string]any) {
 	t.Helper()
 	mcpDir := filepath.Join(dataDir, "mcp")
@@ -104,11 +92,8 @@ func startFakeHarness(t *testing.T, dataDir string, resp map[string]any) {
 	}()
 }
 
-// startCapturingFakeHarness answers one command like startFakeHarness does, but
-// hands back what it was sent. The other two helpers delete command.json without
-// reading it, which is fine when the assertion is on the response - here the
-// assertion is on the request itself, because what press_button puts on the wire
-// when the caller omitted a duration is the whole behavior under test.
+// startCapturingFakeHarness answers one command like startFakeHarness and
+// returns what it was sent.
 func startCapturingFakeHarness(t *testing.T, dataDir string, resp map[string]any) <-chan map[string]any {
 	t.Helper()
 	mcpDir := filepath.Join(dataDir, "mcp")
@@ -140,13 +125,8 @@ func startCapturingFakeHarness(t *testing.T, dataDir string, resp map[string]any
 	return got
 }
 
-// startEchoingFakeHarness continuously watches dataDir/mcp/command.json and,
-// for each one seen, echoes its "id" field back as response.json before
-// deleting the command file - unlike startFakeHarness's single canned
-// response, this handles many command/response cycles, needed to exercise
-// concurrent roundTrip calls against the same fixed filenames. A short sleep
-// before writing the response widens the window a missing lock would need to
-// actually race in. Runs until the test finishes.
+// startEchoingFakeHarness answers every command by echoing its id, for
+// concurrent roundTrip tests. The sleep widens the window a missing lock would race in.
 func startEchoingFakeHarness(t *testing.T, dataDir string) {
 	t.Helper()
 	mcpDir := filepath.Join(dataDir, "mcp")
@@ -182,10 +162,7 @@ func startEchoingFakeHarness(t *testing.T, dataDir string) {
 }
 
 // renderContent flattens a tool result's text blocks, for asserting on the
-// message a recoverable failure hands back. Those messages are load-bearing here
-// rather than decoration - several of them are the only place a caller learns
-// what to do about the condition - so tests assert on their content, not just on
-// IsError.
+// message a recoverable failure hands back.
 func renderContent(t *testing.T, result *mcp.CallToolResult) string {
 	t.Helper()
 	var b strings.Builder
@@ -215,13 +192,8 @@ func (r *recordedCommands) all() [][]byte {
 	return append([][]byte(nil), r.raw...)
 }
 
-// startRecordingFakeHarness answers commands like startEchoingFakeHarness does and
-// also keeps every command JSON it saw.
-//
-// Needed because the interesting property for some tests is what the server put on
-// the wire, not what came back - and the handler has no return value that reveals
-// it. Asserting on the real bytes is the only way to catch a field that was meant
-// to be sent and was not.
+// startRecordingFakeHarness answers commands like startEchoingFakeHarness and
+// keeps every command JSON it saw, for asserting on what went on the wire.
 func startRecordingFakeHarness(t *testing.T, dataDir string) *recordedCommands {
 	t.Helper()
 	mcpDir := filepath.Join(dataDir, "mcp")

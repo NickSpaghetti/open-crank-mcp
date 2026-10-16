@@ -17,10 +17,8 @@ _Static_assert(kFileReadData == (1 << 1), "kFileReadData value changed");
 _Static_assert(kFileWrite == (1 << 2), "kFileWrite value changed");
 _Static_assert(kFileAppend == (2 << 2), "kFileAppend value changed");
 
-/* Never called - only needs to compile. If the SDK's declared signature
-   for any of these changes, the assignment stops being type-compatible
-   and the build fails right here, at the exact function, instead of a
-   confusing runtime failure after a PLAYDATE_SDK_VERSION bump. */
+/* Never called: a changed SDK signature fails the build here instead of at
+   runtime after an SDK bump. */
 static void check_signatures(struct playdate_sys *sys, struct playdate_file *file, struct playdate_graphics *gfx)
 {
     void (*check_getButtonState)(PDButtons *, PDButtons *, PDButtons *) = sys->getButtonState;
@@ -36,8 +34,6 @@ static void check_signatures(struct playdate_sys *sys, struct playdate_file *fil
     int (*check_write)(SDFile *, const void *, unsigned int) = file->write;
     int (*check_unlink)(const char *, int) = file->unlink;
     int (*check_mkdir)(const char *) = file->mkdir;
-    /* The harness publishes a response by renaming a temp file into place, so
-       rename is a real dependency and belongs pinned here like the rest. */
     int (*check_rename)(const char *, const char *) = file->rename;
 
     uint8_t *(*check_getDisplayFrame)(void) = gfx->getDisplayFrame;

@@ -5,31 +5,16 @@ import (
 	"strings"
 )
 
-// String renders the findings as prose.
-//
-// Prose and not JSON, deliberately. docs/mcp-schema.json is this project's
-// structured surface and it has a contract test guarding it; a second structured
-// output would be a second contract with nothing guarding it. The readers here
-// are a person and a model, and both read prose.
-//
-// Pure: no I/O, no clock, no environment. That is what lets every branch below -
-// including the ones a developer's own machine can never produce - be asserted
-// in report_test.go.
+// String renders the findings as prose for a person or a model. Pure, so every
+// branch is asserted in report_test.go.
 func (f Findings) String() string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "open-crank-mcp %s on %s\n\n", f.Version, f.GOOS)
 
 	if f.SDKErr != nil {
-		// Not phrased as a failure. On a machine that has just installed the
-		// plugin this is the ordinary state, and the useful thing is the remedy
-		// plus the list of places already looked - which Describe carries even
-		// on the error path, because Resolve fills in Tried before returning.
 		b.WriteString("Playdate SDK: not found\n\n")
-		// The error already lists every candidate and names the remedy, so
-		// Paths.Tried is deliberately not printed again underneath it. Indented
-		// wholesale, including its continuation lines, because a multi-line error
-		// that only indents its first line reads as two unrelated paragraphs.
+		// The error already lists every candidate, so Tried is not repeated.
 		writeIndented(&b, "  ", f.SDKErr.Error())
 		b.WriteString("\nEverything else is skipped: nothing can be checked without an SDK.\n")
 		f.writeFirstRun(&b)
@@ -74,13 +59,7 @@ func (f Findings) String() string {
 	return b.String()
 }
 
-// writeFirstRun adds the macOS first-run warning, and only ever as an inference.
-//
-// The wording matters more than the check. "The plist is absent" is what was
-// measured; "the Simulator has never run" is what it probably means. Saying the
-// second as though it were the first would be the kind of claim this project
-// keeps having to correct in its own documents, so it is hedged in the text
-// itself rather than in a comment nobody reading the output will see.
+// writeFirstRun adds the macOS first-run warning, worded as an inference.
 func (f Findings) writeFirstRun(b *strings.Builder) {
 	if !f.SimulatorRanKnown || f.SimulatorRan {
 		return
@@ -93,10 +72,8 @@ func (f Findings) writeFirstRun(b *strings.Builder) {
 		"  not suppress it; see the macOS entry in docs/GOTCHAS.md.\n")
 }
 
-// writeIndented writes text with every non-empty line prefixed.
-//
-// Blank lines are left bare rather than turned into trailing whitespace, which
-// keeps the output diffable and stops editors stripping it into a difference.
+// writeIndented writes text with every non-empty line prefixed, leaving blank
+// lines bare rather than adding trailing whitespace.
 func writeIndented(b *strings.Builder, prefix, text string) {
 	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
 		if line == "" {

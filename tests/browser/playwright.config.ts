@@ -1,21 +1,15 @@
 import { defineConfig } from '@playwright/test';
 
-// The container is expected to be up already, started by shared-check.sh --keep,
-// so there's no webServer block here. SHARED_URL exists for the case where the
-// container is reached somewhere other than localhost.
+// Expects the container started by shared-check.sh --keep, so no webServer block.
 export default defineConfig({
   testDir: '.',
   timeout: 30_000,
   expect: { timeout: 10_000 },
-  // Two browsers fighting over a single-listener audio stream would be a
-  // pointless source of flakes.
   workers: 1,
   reporter: [['list']],
   use: {
     baseURL: process.env.SHARED_URL ?? 'http://localhost:6080',
-    // Without this the audio element can never start, since headless Chromium
-    // blocks playback until a real user gesture. The click mapping is what's
-    // under test, not the browser's autoplay policy.
+    // Headless Chromium otherwise blocks playback until a real user gesture.
     launchOptions: {
       args: [
         '--autoplay-policy=no-user-gesture-required',

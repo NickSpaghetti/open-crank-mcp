@@ -80,10 +80,8 @@ static int fake_mkdir(const char *path)
     return mkdir(full, 0755);
 }
 
-/* Matches the real API's contract: 0 on success. The harness publishes its
-   response by renaming a temp file into place, so without this the response would
-   only ever arrive through the fallback path and these tests would not be
-   exercising what a real game does. */
+/* 0 on success, like the real API, so tests exercise the rename path rather
+   than the fallback. */
 static int fake_rename(const char *from, const char *to)
 {
     char full_from[600], full_to[600];
@@ -164,10 +162,8 @@ static void test_ping_roundtrip(void)
     assert(strstr(resp, "\"status\":\"ok\"") != NULL);
 }
 
-/* The response is published by renaming a temp file into place, so the temp path
-   must not be left behind. A lingering mcp/response.tmp.json would mean the rename
-   silently failed and the fallback wrote the response directly - which still works,
-   but loses the guarantee that a response on disk is complete. */
+/* A leftover temp file would mean the rename failed and the fallback wrote
+   the response directly. */
 static void test_response_published_by_rename_leaves_no_temp(void)
 {
     write_file("mcp/command.json", "{\"id\":\"req1t\",\"type\":\"ping\"}");
@@ -217,14 +213,8 @@ static void test_crank_override(void)
     assert(mcp_get_crank_docked(&fake_pd) == 1);
 }
 
-/* The same command without a dock mode, end to end through the harness: angle and
-   delta are overridden, the dock reading is not.
-
-   The fake is set to report *docked* first, deliberately. The old bool-shaped
-   protocol would have resolved a missing dock to false and forced undocked, so
-   asserting against a real value of 1 is what distinguishes "passed the real
-   reading through" from "happened to agree with the default". Against a fake that
-   reports 0 this test would pass either way. */
+/* No dock mode: angle and delta are overridden, the dock is not. The fake
+   reports docked so passthrough can't be confused with a default of 0. */
 static void test_crank_override_leaves_dock_alone(void)
 {
     g_fake_now_ms = 3000;
@@ -236,8 +226,6 @@ static void test_crank_override_leaves_dock_alone(void)
     assert(mcp_get_crank_change(&fake_pd) == 1.0f);
     assert(mcp_get_crank_docked(&fake_pd) == 1);
 
-    /* And forcing undocked still wins over a real docked reading, so the
-       passthrough above is a choice rather than an inability to override. */
     write_file("mcp/command.json", "{\"id\":\"req4c\",\"type\":\"crank\",\"crank_angle\":45.0,\"crank_delta\":1.0,\"crank_dock\":\"undocked\",\"duration_ms\":100000}");
     mcp_harness_update(&fake_pd);
     assert(mcp_get_crank_docked(&fake_pd) == 0);
@@ -245,10 +233,8 @@ static void test_crank_override_leaves_dock_alone(void)
     g_fake_crank_docked = 0;
 }
 
-/* hold_button's request, end to end through the harness: a press with no duration
-   field at all. mcp_harness_update runs mcp_override_expire at the top of every call,
-   so a zero deadline would be gone before any read - the same way it was for the crank
-   before the sentinel existed. Two further updates stand in for later frames. */
+/* hold_button's request: a press with no duration. Two further updates stand
+   in for later frames. */
 static void test_press_with_no_duration_holds(void)
 {
     g_fake_now_ms = 4000;
@@ -267,8 +253,7 @@ static void test_press_with_no_duration_holds(void)
     assert((current & kButtonA) != 0);
 }
 
-/* reset_input's request. Sets a held button and a held crank - neither of which can
-   expire - and requires one command to give both back. */
+/* reset_input's request: one command gives back a held button and crank. */
 static void test_reset_clears_every_override(void)
 {
     g_fake_now_ms = 6000;

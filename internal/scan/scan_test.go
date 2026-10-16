@@ -21,9 +21,7 @@ func TestIsSpaceAndIsWord(t *testing.T) {
 			t.Errorf("IsWord(%q) = false, want true", c)
 		}
 	}
-	// ASCII only, on purpose - see the doc comment. A UTF-8 identifier byte
-	// must not count, or the port would start matching identifiers the
-	// patterns it replaced never did.
+	// ASCII only: UTF-8 identifier bytes must not count.
 	for _, c := range []byte{'-', '.', ' ', '>', 0xC3, 0xA9} {
 		if IsWord(c) {
 			t.Errorf("IsWord(%#x) = true, want false", c)
@@ -45,17 +43,13 @@ func TestPrecededByKeyword(t *testing.T) {
 		{name: "at_the_start_of_content", content: "typedef PlaydateAPI *R;", token: "PlaydateAPI", keyword: "typedef", want: true},
 		{name: "absent", content: "if (event == kEventInit)", token: "kEventInit", keyword: "case"},
 		{
-			// Nothing but whitespace in front of the token, which a file
-			// starting with a blank line produces. The backward walk has to
-			// stop at offset 0 rather than read the byte before it.
+			// The backward walk must stop at offset 0.
 			name:    "only_whitespace_before_the_token",
 			content: "\n\tPlaydateAPI *pd;",
 			token:   "PlaydateAPI",
 			keyword: "typedef",
 		},
 		{
-			// Preceded by a non-word byte partway into the content, which is
-			// the ordinary case inside a switch.
 			name:    "after_a_newline",
 			content: "switch (event) {\n\tcase kEventInit:",
 			token:   "kEventInit",
@@ -63,15 +57,12 @@ func TestPrecededByKeyword(t *testing.T) {
 			want:    true,
 		},
 		{
-			// The keyword has to be a whole token itself, or "lowercase x"
-			// would read as a case label.
 			name:    "keyword_is_the_tail_of_a_longer_word",
 			content: "lowercase kEventInit:",
 			token:   "kEventInit",
 			keyword: "case",
 		},
 		{
-			// A different identifier ending in the keyword's letters.
 			name:    "identifier_ending_in_the_keyword",
 			content: "mytypedef PlaydateAPI *R;",
 			token:   "PlaydateAPI",
@@ -103,8 +94,7 @@ func TestLineNumber(t *testing.T) {
 		{offset: 4, want: 2},
 		{offset: 8, want: 3},
 		{offset: len(content), want: 4},
-		// Past the end rather than panicking: callers pass offsets from
-		// content they have already rewritten.
+		// Past the end clamps rather than panicking.
 		{offset: len(content) + 10, want: 4},
 	}
 
@@ -114,7 +104,6 @@ func TestLineNumber(t *testing.T) {
 		}
 	}
 
-	// CRLF counts lines the same way.
 	if got := LineNumber("one\r\ntwo\r\n", 5); got != 2 {
 		t.Errorf("LineNumber() = %d on CRLF content, want 2", got)
 	}
@@ -142,9 +131,7 @@ func TestSamePath(t *testing.T) {
 		{path: "src/main.c", rel: "src/main.c", want: true},
 		{path: "${CMAKE_CURRENT_SOURCE_DIR}/src/main.c", rel: "src/main.c", want: true},
 		{path: "../shared/src/main.c", rel: "src/main.c", want: true},
-		// A directory in front of rel is fine, that is the whole point.
 		{path: "src/main.c", rel: "main.c", want: true},
-		// Anchored on a separator, so a longer filename is not a match.
 		{path: "src/domain.c", rel: "main.c"},
 		{path: "src/mymain.c", rel: "main.c"},
 	}

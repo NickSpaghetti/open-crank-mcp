@@ -7,51 +7,25 @@ import (
 	"io/fs"
 )
 
-// Identifying which harness a game is carrying, without anyone having to
-// remember to bump a number.
-//
-// The harness is a *copy*. `setup` writes it into a game's own source tree, and
-// from that moment the game's copy and this repo's canonical version can drift
-// with nothing to notice. That is not hypothetical: renaming the game-log file
-// during the performance review made every already-set-up game report an empty
-// log, silently, because a copy from before the change kept writing the old one.
-//
-// A hand-maintained version constant would have caught it, and would also be one
-// more thing to forget - and forgetting it reproduces exactly the bug it exists to
-// prevent. So the version is not written by hand at all: it is a content
-// fingerprint of the canonical harness source, computed from the bytes embedded in
-// this binary, and stamped into each copy as `setup` writes it. Change any harness
-// source and every stamp is different, automatically.
-//
-// It also catches strictly more than a counter would. A locally hand-edited copy
-// drifts too, which is worth knowing, so the warning built on this says "differs
-// from the harness this server ships" rather than claiming to know which.
+// The harness version is a content fingerprint of the embedded canonical
+// sources, stamped into each copy by `setup`, so no number needs bumping.
 
-// VersionPlaceholder is what the canonical sources carry where the fingerprint
-// goes. Deliberately a shape no comment or prose would contain, because the
-// stamping guard counts occurrences and a stray mention in a comment would break
-// it.
+// VersionPlaceholder marks where the fingerprint is stamped. The stamping
+// guard counts occurrences, so it must not appear in prose.
 const VersionPlaceholder = "@HARNESS_VERSION@"
 
-// Canonical paths within the embedded harness FS (opencrank.HarnessFS). Named
-// here because the fingerprint is defined over exactly these files; the embed
-// package documents the same names as part of its contract.
+// Canonical paths within the embedded harness FS (opencrank.HarnessFS).
 const (
 	LuaSourcePath = "lua/mcp_harness.lua"
 	CHeaderPath   = "c-harness/mcp_harness.h"
 	CSourcePath   = "c-harness/mcp_harness.c"
 )
 
-// fingerprintLen keeps the stamp short enough to read in a response or an error
-// message. This distinguishes versions of one file that this project wrote; it is
-// not defending against anyone constructing a collision.
+// fingerprintLen keeps the stamp readable; this is not collision-resistant.
 const fingerprintLen = 12
 
-// fingerprintOf hashes the given canonical sources together.
-//
-// Each file's name and length are folded in before its bytes, so moving text
-// between two files of a pair still changes the result - a plain concatenation
-// would not.
+// fingerprintOf hashes the given sources together, folding in each file's
+// name and length so moving text between files changes the result.
 func fingerprintOf(fsys fs.FS, paths ...string) (string, error) {
 	h := sha256.New()
 	for _, p := range paths {
@@ -77,10 +51,7 @@ func CFingerprint(fsys fs.FS) (string, error) {
 }
 
 // FingerprintFor returns the fingerprint to stamp into the named canonical
-// source, or "" for a file that carries no stamp.
-//
-// The C source is stampless on purpose - the C pair's stamp lives in the header,
-// where the `#define` a game compiles against belongs.
+// source, or "" for a file that carries no stamp (the C pair's lives in the header).
 func FingerprintFor(fsys fs.FS, sourcePath string) (string, error) {
 	switch sourcePath {
 	case LuaSourcePath:
@@ -92,12 +63,8 @@ func FingerprintFor(fsys fs.FS, sourcePath string) (string, error) {
 	}
 }
 
-// Fingerprints returns every fingerprint this binary considers current, for
-// checking a reported one against.
-//
-// Both are returned because the server does not otherwise know whether the game
-// answering it is C or Lua, and it does not need to: matching either means the
-// game is carrying a current harness.
+// Fingerprints returns every fingerprint this binary considers current. Both
+// are returned since the server does not know whether the game is C or Lua.
 func Fingerprints(fsys fs.FS) ([]string, error) {
 	lua, err := LuaFingerprint(fsys)
 	if err != nil {

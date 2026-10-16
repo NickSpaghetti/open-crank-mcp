@@ -15,8 +15,6 @@ func decode(t *testing.T, s string) map[string]any {
 	return m
 }
 
-// OpenCode's four differences, each asserted, because each is a plausible thing
-// to render in the other clients' shape and have look right.
 func TestOpenCodeShape(t *testing.T) {
 	out, err := Render("opencode", []string{"/opt/bin/open-crank-mcp"})
 	if err != nil {
@@ -38,11 +36,6 @@ func TestOpenCodeShape(t *testing.T) {
 	}
 }
 
-// OpenCode defaults `timeout` to 5000ms and nothing here resolves at start-up,
-// so no timeout should be emitted at all. Asserted rather than left implicit
-// because an earlier design did emit one - the MCP command used to download a
-// binary on first use - and reinstating it without that reason would be a number
-// nobody could explain.
 func TestOpenCodeEmitsNoTimeout(t *testing.T) {
 	out, err := Render("opencode", []string{"/opt/bin/open-crank-mcp"})
 	if err != nil {
@@ -55,8 +48,6 @@ func TestOpenCodeEmitsNoTimeout(t *testing.T) {
 	}
 }
 
-// Claude Code and Cursor split the command from its arguments and have no type
-// discriminator.
 func TestCommandAndArgsClients(t *testing.T) {
 	for _, client := range []string{"claude", "cursor"} {
 		t.Run(client, func(t *testing.T) {
@@ -79,10 +70,6 @@ func TestCommandAndArgsClients(t *testing.T) {
 	}
 }
 
-// The common case: one command, no arguments. An empty "args": [] would be
-// accepted by both clients and is untidy rather than broken - but it is also the
-// difference between the boundary being tested and not, and the same helper
-// renders the argv-bearing case above.
 func TestCommandAndArgsClientsOmitArgsWhenThereAreNone(t *testing.T) {
 	for _, client := range []string{"claude", "cursor"} {
 		t.Run(client, func(t *testing.T) {
@@ -103,7 +90,6 @@ func TestRenderRejectsAnUnknownClient(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown client was accepted")
 	}
-	// The message has to list what is known, since the alternative is guessing.
 	for _, client := range Clients() {
 		if !strings.Contains(err.Error(), client) {
 			t.Errorf("error %q does not mention the known client %q", err, client)

@@ -1,8 +1,5 @@
-// Package contracttest builds the C and Lua fixture games and drives them
-// through a real PlaydateSimulator, verifying the harness protocol against
-// the actual SDK rather than a fake. Skipped unless PLAYDATE_SDK_PATH is
-// set (i.e. unless run inside the full simulator Docker image) - the
-// plain `go test ./...` job never has that environment.
+// Package contracttest drives the C and Lua fixture games through a real
+// PlaydateSimulator. Skipped unless OPEN_CRANK_SDK_CONTRACT is set.
 package contracttest
 
 import (
@@ -48,32 +45,21 @@ func TestSDKContract(t *testing.T) {
 	luaPdx := buildLuaFixture(t, repoRoot)
 
 	t.Run("C harness", func(t *testing.T) {
-		// The fixture creates one sprite with a collide rect and one
-		// without. querySpritesInRect (the C API's only bulk sprite query)
-		// only matches sprites with a collide rect set, so only the
-		// collidable one should show up here, and entities_complete must
-		// be false - proving the approximation's documented limitation is
-		// real, not just a design note.
+		// querySpritesInRect, the C API's only bulk sprite query, skips sprites
+		// without a collide rect, so only one of the fixture's two shows up.
 		runContractCheck(t, paths, cPdx, "dev.open-crank-mcp.contractcheck", 1, false, false)
 	})
 	t.Run("Lua harness", func(t *testing.T) {
-		// getAllSprites() is a true, complete enumeration - both the
-		// fixture's sprites should show up regardless of collide rects.
+		// getAllSprites() enumerates every sprite.
 		runContractCheck(t, paths, luaPdx, "dev.open-crank-mcp.contractchecklua", 2, true, true)
 	})
 }
 
-// paths rather than a bare SDK directory, because both values this needs are
-// per-platform and only internal/sdk knows them. Building them here as
-// <sdk>/bin/PlaydateSimulator was correct on Linux and silently wrong on macOS,
-// where the executable lives inside a .app bundle - the macOS CI leg failed on
-// exactly that, with `stdbuf: .../bin/PlaydateSimulator: No such file or
-// directory`, on its first ever run.
+// Takes sdk.Paths because the Simulator binary and data dir locations are
+// per-platform (inside a .app bundle on macOS).
 func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, wantEntityCount int, wantEntitiesComplete, checkGameLogs bool) {
 	t.Helper()
-	// The first candidate is where the Simulator will put it, on every platform
-	// this supports. Predicted rather than probed because this waits for the
-	// directory to appear, so it cannot look for one that already exists.
+	// Predicted rather than probed: the directory doesn't exist until launch.
 	dataDir := paths.DataDirCandidates(sdk.OSEnv(), bundleID)[0]
 	defer os.RemoveAll(dataDir)
 
@@ -92,12 +78,8 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 
 	resp := mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "1", Type: harness.CmdPing}))
 
-	// The stamped fingerprint has to survive the whole path: substituted by
-	// setup.CopyHarnessFile, compiled or loaded into the game, and reported back
-	// over the file protocol by a real Simulator. Unit tests cover each step; only
-	// this covers the join, and a silent break here is what would let a stale
-	// harness stop being detectable. Either harness's fingerprint is accepted,
-	// which is the same rule the server itself applies.
+	// The stamped fingerprint must survive stamping, compiling and the file
+	// protocol end to end. Either harness's fingerprint is accepted, as in the server.
 	current, err := harness.IsCurrentFingerprint(opencrank.HarnessFS, resp.HarnessVersion)
 	if err != nil {
 		t.Fatalf("fingerprinting the embedded harness: %v", err)
@@ -116,41 +98,22 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
 		ID: "4", Type: harness.CmdRelease, Button: "a", DurationMs: 10000}))
 
-	// a_down_count/a_up_count are persistent counters, not the raw
-	// pushed/released bits (which are one-frame-only and this query is a
-	// separate round trip from the press/release that caused them, so it
-	// usually lands several frames later) - proving press_button now
-	// synthesizes a real edge, not just "currently held", in both
-	// harnesses. See mcp_override_update_edges (C) / updateButtonEdges
-	// (Lua). A short sleep first guarantees this query itself doesn't
-	// land on the exact same frame the release's edge first appears -
-	// the C fixture's own counter increments after mcp_harness_update
-	// returns, so report_state (invoked from inside that same call) would
-	// otherwise sometimes read the counter one increment too early.
+	// Persistent counters, since pushed/released bits last one frame. The sleep
+	// avoids reading the C fixture's counter on the frame before it increments.
 	time.Sleep(300 * time.Millisecond)
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "4b", Type: harness.CmdState}))
 	assertStateField(t, resp, "a_down_count", float64(1))
 	assertStateField(t, resp, "a_up_count", float64(1))
 
-	// A press with no duration holds, across many frames.
-	//
-	// This is hold_button's request, and it is the assertion that fails against the
-	// harnesses as they were: a press used to take now+duration unconditionally, so a
-	// zero deadline was already past by the time any frame read it. Verified by
-	// reverting mcp_override_apply_press before this landed - it failed here.
-	//
-	// The sleep is what gives it teeth. Both harnesses expire overrides at the top of
-	// every frame, so a query landing on the same frame as the command would pass even
-	// under the old behaviour. 300ms is ~9 frames at 30fps.
+	// A press with no duration holds across frames. The sleep spans several frames
+	// so an override expiring at frame start would be caught.
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
 		ID: "4d", Type: harness.CmdPress, Button: "a"}))
 	time.Sleep(300 * time.Millisecond)
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "4e", Type: harness.CmdState}))
 	assertStateField(t, resp, "current", float64(32)) // kButtonA bit, still held
 
-	// And a release ends it - the other half of hold_button/release_button. Asserted on
-	// a_up_count rather than the released bit, which is one frame wide and would need
-	// this query to land on exactly the right frame.
+	// A release ends it. Asserted on a_up_count since the released bit is one frame wide.
 	before := stateMap(t, resp)["a_up_count"]
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
 		ID: "4f", Type: harness.CmdRelease, Button: "a", DurationMs: 200}))
@@ -162,15 +125,8 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 			"button stop being pressed with no ButtonUp callback", got)
 	}
 
-	// What the game's own dock reading is before anything overrides it.
-	//
-	// Asserted to be true rather than merely recorded, because the value is what
-	// gives the "leave the dock alone" check below its teeth: the old protocol
-	// forced *undocked* on every crank command, so against a Simulator that
-	// reported undocked anyway, a passthrough and a wrongly-forced override look
-	// identical. If a future SDK starts reporting the crank undocked at rest, this
-	// fails and says why - which is the outcome to want, because the alternative is
-	// a test that quietly stops proving anything.
+	// The real dock reading must be docked at rest, or the passthrough check below
+	// can't tell a passthrough from a forced undock.
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "4c", Type: harness.CmdState}))
 	realDocked := stateMap(t, resp)["crank_docked"]
 	if realDocked != true {
@@ -186,10 +142,7 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 	assertStateField(t, resp, "crank_angle", 123.0)
 	assertStateField(t, resp, "crank_docked", true)
 
-	// A crank command that does not ask about the dock must move the angle and
-	// leave the dock reading exactly as the game would see it. Asserted against the
-	// baseline captured above rather than against a hardcoded false, so this cannot
-	// pass by agreeing with a default.
+	// A crank command that leaves the dock unchanged must pass the real reading through.
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
 		ID: "6b", Type: harness.CmdCrank,
 		CrankAngle: 200.0, CrankDock: harness.DockUnchanged, DurationMs: 10000}))
@@ -199,31 +152,22 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 		t.Errorf("crank_dock=unchanged changed the dock reading from %v to %v", realDocked, got)
 	}
 
-	// And forcing undocked still overrides, so the passthrough above is a decision
-	// rather than an inability to set it.
+	// Forcing undocked still overrides.
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
 		ID: "6d", Type: harness.CmdCrank,
 		CrankAngle: 200.0, CrankDock: harness.DockUndocked, DurationMs: 10000}))
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6e", Type: harness.CmdState}))
 	assertStateField(t, resp, "crank_docked", false)
 
-	// A crank with no duration holds. This is the case an agent produces by
-	// omitting duration_ms, and it used to be the one that silently did nothing:
-	// both harnesses expire overrides at the top of every frame, and a deadline of
-	// now+0 is already past by the time any frame reads it, so set_crank reported
-	// success and the game never saw the angle. Run against a real Simulator
-	// because it is a frame-timing bug, and the unit tests drive the clock by hand.
-	//
-	// The sleep is what gives this teeth. Without it the query could land on the
-	// same frame as the command and pass even under the old behavior.
+	// A crank with no duration holds across frames; the sleep spans several so an
+	// override expiring at frame start would be caught.
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
 		ID: "6f", Type: harness.CmdCrank, CrankAngle: 42.0, CrankDock: harness.DockUnchanged}))
 	time.Sleep(300 * time.Millisecond)
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6g", Type: harness.CmdState}))
 	assertStateField(t, resp, "crank_angle", 42.0)
 
-	// Held is not stuck: a later crank replaces it, and that one expires normally.
-	// Also puts the crank back to passthrough for everything below.
+	// A later crank replaces a held one and expires normally, restoring passthrough.
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{
 		ID: "6h", Type: harness.CmdCrank,
 		CrankAngle: 300.0, CrankDock: harness.DockUnchanged, DurationMs: 200}))
@@ -234,16 +178,8 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 			"a duration-less crank is meant to be replaceable, not permanent", got)
 	}
 
-	// reset gives a held crank back, which nothing else can do.
-	//
-	// The crank has no release. set_crank always activates the override and a
-	// duration-less one never expires, so before CmdReset existed there was no command in
-	// this protocol that could return the real crank reading to a game. Held button too,
-	// in the same call, since "hand input back to the player" is one action.
-	//
-	// Baseline captured first rather than compared against a hardcoded 0: the assertion
-	// is "the game reads what it would really read", and hardcoding a value would pass by
-	// agreeing with a default if reset silently did nothing.
+	// reset is the only way to release a held crank (and held buttons). Compared
+	// against a captured baseline, not a hardcoded value.
 	resp = mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "6j", Type: harness.CmdState}))
 	realAngle := stateMap(t, resp)["crank_angle"]
 
@@ -293,10 +229,7 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 		t.Fatalf("entities has %d entries, want %d: %+v", len(resp.Entities), wantEntityCount, resp.Entities)
 	}
 
-	// Every response above arrived, so every one of them was published by rename.
-	// A leftover temp file would mean the rename failed and the fallback wrote the
-	// response directly - still working, but without the guarantee that a response
-	// on disk is complete, which is the whole point of publishing that way.
+	// A leftover temp file means the rename failed and the non-atomic fallback ran.
 	if _, err := os.Stat(filepath.Join(dataDir, "mcp", "response.tmp.json")); err == nil {
 		t.Errorf("mcp/response.tmp.json was left behind; responses are not being published by rename")
 	}
@@ -307,15 +240,9 @@ func runContractCheck(t *testing.T, paths sdk.Paths, pdxPath, bundleID string, w
 	}
 }
 
-// checkGameLogsContract exercises get_game_logs against the real Lua fixture
-// (lua/test-fixture/Source/main.lua): a print() call at init should already
-// be captured, and triggering the fixture's deliberate error (via the
-// "crank" command with its magic sentinel angle) should both surface a
-// traceback AND prove mcp.run() kept the harness alive - the whole point of
-// this fix, not just the log text. Reads mcp/game_logs.jsonl directly, the
-// same direct-file-access path get_game_logs itself uses (see
-// internal/tools/gamelogs.go), rather than going through a command/response
-// round trip.
+// checkGameLogsContract checks the Lua fixture's print() and deliberate error
+// (triggered by a sentinel crank angle) reach mcp/game_logs.jsonl, and that the
+// harness survives the error.
 func checkGameLogsContract(t *testing.T, dataDir string) {
 	t.Helper()
 	logsPath := filepath.Join(dataDir, "mcp", "game_logs.jsonl")
@@ -336,25 +263,13 @@ func checkGameLogsContract(t *testing.T, dataDir string) {
 	checkCallbackErrorContract(t, dataDir)
 	checkLogRotationContract(t, dataDir)
 
-	// The real assertion: the harness's own polling loop must still be
-	// alive after that uncaught error, not frozen along with the game's
-	// own broken frame logic.
+	// The polling loop must survive the uncaught error.
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "10", Type: harness.CmdPing}))
 }
 
 // checkCallbackErrorContract covers an error raised inside a callback the *harness*
-// invokes, as opposed to inside the game's frame logic.
-//
-// wrapUpdate has always protected the frame logic. It did not protect mcp.update(),
-// which is where the harness calls the game's own AButtonDown/AButtonUp - so an
-// error there escaped, went unrecorded by the very channel that advertises
-// "uncaught-error tracebacks", and stopped the polling loop permanently. Measured
-// before the fix: the traceback reached stdout only, game_logs held one unrelated
-// entry, and a ping issued afterwards was never answered.
-//
-// Both halves are asserted, because either alone would be satisfied by a broken
-// implementation: the traceback has to be captured, and the harness has to still be
-// answering afterwards.
+// invokes (e.g. the game's AButtonDown from mcp.update()): the traceback must be
+// logged and the harness must keep answering.
 func checkCallbackErrorContract(t *testing.T, dataDir string) {
 	t.Helper()
 	logsPath := filepath.Join(dataDir, "mcp", "game_logs.jsonl")
@@ -371,24 +286,13 @@ func checkCallbackErrorContract(t *testing.T, dataDir string) {
 			"it is escaping the harness the way it did before callGameCallback existed", logsPath)
 	}
 
-	// The polling loop has to have survived it. A stale response would fail the id
-	// check inside WaitForResponse rather than being mistaken for this one's answer.
+	// The polling loop must survive it.
 	mustSucceed(t, mustRoundTrip(t, dataDir, harness.Command{ID: "8c3", Type: harness.CmdPing}))
 }
 
 // checkLogRotationContract proves the harness rotates its log by renaming the full
-// generation aside, not by discarding it.
-//
-// This is the one assertion that could not be made anywhere else. The first
-// implementation truncated at the size cap, so a rotation left zero history - worst
-// at exactly the moment the log is read, since a traceback is always appended after
-// whatever caused it. Unit tests can only check the reader's half; the writer's half
-// is Lua running in a real Simulator, and the size cap makes it reachable only by
-// actually filling a generation.
-//
-// The fixture floods past the cap on a sentinel crank angle, printing a marker
-// before and after. Both markers being readable afterwards is the property: the old
-// one can only still exist if it was moved rather than dropped.
+// generation aside, not by discarding it. The fixture floods past the cap on a
+// sentinel crank angle with a marker before and after; both must survive.
 func checkLogRotationContract(t *testing.T, dataDir string) {
 	t.Helper()
 
@@ -409,8 +313,7 @@ func checkLogRotationContract(t *testing.T, dataDir string) {
 			"a rotation that leaves nothing behind is the bug this guards", prevPath, err)
 	}
 
-	// Read the way get_game_logs does - both generations, oldest first - and require
-	// the pre-rotation marker to have survived alongside the post-rotation one.
+	// Both generations, oldest first, as get_game_logs reads them.
 	older := readGameLogEntries(t, prevPath)
 	newer := readGameLogEntries(t, filepath.Join(dataDir, "mcp", "game_logs.jsonl"))
 
@@ -425,19 +328,8 @@ func checkLogRotationContract(t *testing.T, dataDir string) {
 	}
 }
 
-// checkStdoutIsLineBuffered proves the Simulator's own startup diagnostics reach us
-// without waiting for a block buffer to fill.
-//
-// `Loading: <pdx>` is the assertion rather than the fixture's print() because it is
-// what was actually measured to change: through this same code path, captured output
-// went from 223 bytes (the GTK warning alone) to 288 bytes including this line, with
-// stdbuf the only difference. A Lua game's print() still does not arrive here, which
-// is exactly why get_game_logs is not retired - see lineBufferedCommand and
-// docs/GOTCHAS.md.
-//
-// Worth having because the line is small: without line buffering it sits unflushed,
-// and Stop() is a hard kill that discards it. That is the same mechanism that hides
-// the one message explaining a Simulator which quits during startup.
+// checkStdoutIsLineBuffered proves the Simulator's startup line `Loading: <pdx>`
+// arrives without a block buffer filling. A Lua print() still doesn't reach stdout.
 func checkStdoutIsLineBuffered(t *testing.T, sim *simulator.Simulator) {
 	t.Helper()
 	const want = "Loading:"
@@ -480,7 +372,6 @@ func waitForGameLogEntry(t *testing.T, path, wantType, wantMessageContains strin
 	for time.Now().Before(deadline) {
 		b, err := os.ReadFile(path)
 		if err == nil {
-			// The tool's own decoder, not a second one written for the test.
 			if entries, err := tools.ParseGameLogs(b); err == nil {
 				for _, e := range entries {
 					if e.Type == wantType && bytes.Contains([]byte(e.Message), []byte(wantMessageContains)) {
@@ -523,15 +414,8 @@ func buildLuaFixture(t *testing.T, repoRoot string) string {
 	return result.PdxPath
 }
 
-// installHarness puts a harness source into a fixture the same way the setup tool
-// puts it into a real game - from the embedded copy, through the same stamping
-// path - rather than copying the file off disk.
-//
-// The difference matters. A hand-copied fixture carries an unsubstituted version
-// placeholder, so it would be the one harness copy in this project whose drift
-// check cannot work, in the very suite whose job is to catch protocol drift
-// against a real Simulator. Going through setup.CopyHarnessFile also means these
-// tests exercise the stamping itself end to end.
+// installHarness copies a harness into a fixture through setup.CopyHarnessFile,
+// as setup does, so the version placeholder gets stamped.
 func installHarness(t *testing.T, canonicalPath, dst string) {
 	t.Helper()
 	if err := setup.CopyHarnessFile(opencrank.HarnessFS, canonicalPath, dst); err != nil {
@@ -540,8 +424,6 @@ func installHarness(t *testing.T, canonicalPath, dst string) {
 }
 
 // mustRoundTrip sends cmd and waits for the response to that exact command.
-// Every call site was already a send immediately followed by a receive, and the
-// id now has to be threaded from one to the other, so they are one helper.
 func mustRoundTrip(t *testing.T, dataDir string, cmd harness.Command) harness.Response {
 	t.Helper()
 	if err := harness.SendCommand(dataDir, cmd); err != nil {
@@ -554,8 +436,7 @@ func mustRoundTrip(t *testing.T, dataDir string, cmd harness.Command) harness.Re
 	return resp
 }
 
-// mustSucceed is the check no tool used to make: the harness reporting a failure
-// through status/error, which both harnesses genuinely do.
+// mustSucceed fails the test if the harness reported a failure via status/error.
 func mustSucceed(t *testing.T, resp harness.Response) harness.Response {
 	t.Helper()
 	if resp.Failed() {
@@ -564,9 +445,7 @@ func mustSucceed(t *testing.T, resp harness.Response) harness.Response {
 	return resp
 }
 
-// stateMap decodes the game-defined state payload. It stays raw on the wire
-// because its shape belongs to the game, so a test that wants to look inside is
-// the thing that decodes it.
+// stateMap decodes the game-defined state payload, which stays raw on the wire.
 func stateMap(t *testing.T, resp harness.Response) map[string]any {
 	t.Helper()
 	if len(resp.State) == 0 {
@@ -588,11 +467,8 @@ func assertStateField(t *testing.T, resp harness.Response, field string, want an
 	}
 }
 
-// assertRawScreenshot checks both the raw dump's size and, decoded, its
-// content. The fixture clears its display to kColorBlack at init and never
-// draws anything else, so the decoded image should be entirely black. This
-// is what pins down internal/screenshot's undocumented bit polarity against
-// the real Simulator, not just self-consistent synthetic input.
+// assertRawScreenshot checks the raw dump's size and that it decodes all black,
+// as the fixture draws, pinning the SDK's undocumented bit polarity.
 func assertRawScreenshot(t *testing.T, dataDir string) {
 	t.Helper()
 	path := filepath.Join(dataDir, "mcp", "screenshot.raw")

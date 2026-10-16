@@ -34,8 +34,7 @@ func TestGetGameLogsWhenFileMissingReturnsEmpty(t *testing.T) {
 	}
 }
 
-// writeGameLogs writes entries the way the Lua harness now does: one JSON
-// object per line, appended.
+// writeGameLogs writes entries as the Lua harness does: one JSON object per line.
 func writeGameLogs(t *testing.T, dataDir string, entries []GameLogEntry) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -104,9 +103,8 @@ func TestGetGameLogsTailNLargerThanAvailableReturnsEverything(t *testing.T) {
 	}
 }
 
-// A file caught mid-append ends in a partial line. That is normal here - nothing
-// locks this file and the game keeps writing to it - so the complete entries
-// before it must still be returned.
+// A file read mid-append ends in a partial line; the complete entries before it
+// must still be returned.
 func TestGetGameLogsSkipsTornFinalLine(t *testing.T) {
 	s := newTestServer(t)
 	content := `{"type":"print","message":"one","ms":1}` + "\n" +
@@ -126,8 +124,6 @@ func TestGetGameLogsSkipsTornFinalLine(t *testing.T) {
 	}
 }
 
-// Corruption anywhere but the last line is a real error, not something to skip:
-// only a trailing partial write is explainable by the read racing the harness.
 func TestGetGameLogsRejectsMalformedInteriorLine(t *testing.T) {
 	s := newTestServer(t)
 	content := "not json\n" + `{"type":"print","message":"one","ms":1}` + "\n"
@@ -141,9 +137,7 @@ func TestGetGameLogsRejectsMalformedInteriorLine(t *testing.T) {
 	}
 }
 
-// A traceback is a legitimate multi-KB entry, and bufio.Scanner's default line
-// limit is 64KB - low enough to be worth proving we raised it, since the entry
-// that would hit it is exactly the one you need most.
+// bufio.Scanner's default line limit is 64KB; a traceback can exceed it.
 func TestGetGameLogsHandlesVeryLongTraceback(t *testing.T) {
 	s := newTestServer(t)
 	long := strings.Repeat("stack frame line\t", 8000)
@@ -159,9 +153,6 @@ func TestGetGameLogsHandlesVeryLongTraceback(t *testing.T) {
 	}
 }
 
-// Blank lines are skipped rather than parsed. They are reachable: the harness
-// truncates this file when it passes its size cap, and a reader can catch the
-// moment between truncation and the next append.
 func TestGetGameLogsSkipsBlankLines(t *testing.T) {
 	s := newTestServer(t)
 	content := "\n" + `{"type":"print","message":"one","ms":1}` + "\n\n   \n" +
@@ -184,9 +175,8 @@ func TestGetGameLogsSkipsBlankLines(t *testing.T) {
 	}
 }
 
-// A game whose vendored harness predates this server writes the old file and
-// nothing else. Returning an empty list there is the silent failure this whole
-// change set exists to remove, so it is an error naming the remedy instead.
+// A game whose vendored harness predates JSONL logs gets an error naming the
+// remedy, not an empty list.
 func TestGetGameLogsErrorsWhenOnlyTheLegacyFileExists(t *testing.T) {
 	s := newTestServer(t)
 	legacy := filepath.Join(s.dataDir, "mcp", legacyGameLogsFile)
@@ -204,18 +194,13 @@ func TestGetGameLogsErrorsWhenOnlyTheLegacyFileExists(t *testing.T) {
 	if len(out.Entries) != 0 {
 		t.Fatalf("getGameLogs().Entries = %v, want none - the old format is deliberately not read", out.Entries)
 	}
-	// The message has to name the fix, not just the symptom: this is the only
-	// place the caller learns that re-running setup is what resolves it.
 	text := renderContent(t, result)
 	if !strings.Contains(text, "setup") {
 		t.Fatalf("error text = %q, want it to name the setup tool as the remedy", text)
 	}
 }
 
-// A current harness deletes the legacy file, but a game that has just been
-// re-setup and not yet relaunched can briefly have both. The current file wins,
-// with no error - otherwise the tool would refuse to work for a game that is
-// already fixed.
+// A re-setup game not yet relaunched can have both files; the current one wins.
 func TestGetGameLogsPrefersCurrentFileOverLegacy(t *testing.T) {
 	s := newTestServer(t)
 	legacy := filepath.Join(s.dataDir, "mcp", legacyGameLogsFile)
@@ -237,8 +222,6 @@ func TestGetGameLogsPrefersCurrentFileOverLegacy(t *testing.T) {
 	}
 }
 
-// writePrevGameLogs writes the rotated generation, the way the harness's rename
-// leaves it.
 func writePrevGameLogs(t *testing.T, dataDir string, entries []GameLogEntry) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -256,9 +239,7 @@ func writePrevGameLogs(t *testing.T, dataDir string, entries []GameLogEntry) {
 	}
 }
 
-// Both generations are returned, oldest first. Chronological order is the whole
-// point: tail_n means "the most recent N", which is wrong if the halves are
-// swapped.
+// Both generations are returned, oldest first, so tail_n means the most recent N.
 func TestGetGameLogsReadsBothGenerationsInOrder(t *testing.T) {
 	s := newTestServer(t)
 	writePrevGameLogs(t, s.dataDir, []GameLogEntry{
@@ -285,9 +266,7 @@ func TestGetGameLogsReadsBothGenerationsInOrder(t *testing.T) {
 	}
 }
 
-// The scenario that made truncation unacceptable, in miniature: the game crashed
-// shortly after a rotation, so the traceback is alone in the current generation and
-// everything leading up to it is in the rotated one. Both have to come back.
+// A crash just after rotation leaves its run-up in the rotated generation.
 func TestGetGameLogsKeepsHistoryAcrossARotation(t *testing.T) {
 	s := newTestServer(t)
 	writePrevGameLogs(t, s.dataDir, []GameLogEntry{
@@ -310,8 +289,7 @@ func TestGetGameLogsKeepsHistoryAcrossARotation(t *testing.T) {
 	}
 }
 
-// tail_n counts across the boundary, not per file. Asking for 3 of 4 must not
-// return 3 from each generation, nor 3 from the wrong one.
+// tail_n counts across the generation boundary, not per file.
 func TestGetGameLogsTailNSpansGenerations(t *testing.T) {
 	s := newTestServer(t)
 	writePrevGameLogs(t, s.dataDir, []GameLogEntry{
@@ -337,9 +315,7 @@ func TestGetGameLogsTailNSpansGenerations(t *testing.T) {
 	}
 }
 
-// A rotation is a rename followed by the append that triggered it, so a reader can
-// land in the gap and find only the rotated generation. That is real history, not
-// an empty log.
+// A reader can land between rotation's rename and the next append.
 func TestGetGameLogsReadsPrevGenerationAlone(t *testing.T) {
 	s := newTestServer(t)
 	writePrevGameLogs(t, s.dataDir, []GameLogEntry{{Type: "print", Message: "only-older", Ms: 1}})
@@ -356,9 +332,7 @@ func TestGetGameLogsReadsPrevGenerationAlone(t *testing.T) {
 	}
 }
 
-// A torn line can only be at the very end of the *current* file. One in the
-// rotated generation means real corruption - rotation happens between appends, so
-// that file is always line-complete - and must be reported rather than skipped.
+// Corruption before the last line of the rotated generation is reported.
 func TestGetGameLogsRejectsMalformedPrevGeneration(t *testing.T) {
 	s := newTestServer(t)
 	path := filepath.Join(s.dataDir, "mcp", gameLogsPrevFile)
@@ -372,8 +346,6 @@ func TestGetGameLogsRejectsMalformedPrevGeneration(t *testing.T) {
 	}
 }
 
-// The stale-harness detection has to keep working when a rotated file is absent
-// and only the pre-JSONL format exists.
 func TestGetGameLogsStillDetectsLegacyWithNoGenerations(t *testing.T) {
 	s := newTestServer(t)
 	legacy := filepath.Join(s.dataDir, "mcp", legacyGameLogsFile)

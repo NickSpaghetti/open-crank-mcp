@@ -14,15 +14,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Long enough for the Simulator to fail on startup and short enough not to be
-// felt. Its SDL/audio initialisation failures land well inside this.
+// startupGrace catches the Simulator quitting during startup (e.g. SDL/audio
+// init failures).
 const startupGrace = 750 * time.Millisecond
 
-// How long to wait for the running game to reveal its data directory by creating
-// mcp/ in it. Generous, because it is only ever paid in full when the answer is
-// "this game has no harness", and cheap otherwise: the probe returns the moment
-// the directory appears, which for a harnessed game is usually already true by
-// the time the startup grace above has elapsed.
+// dataDirGrace is only paid in full for a game with no harness; a harnessed
+// game creates mcp/ almost immediately.
 const dataDirGrace = 3 * time.Second
 
 type LaunchSimulatorInput struct {
@@ -32,15 +29,12 @@ type LaunchSimulatorInput struct {
 type LaunchSimulatorOutput struct {
 	BundleID string `json:"bundle_id"`
 	DataDir  string `json:"data_dir"`
-	// DataDirSource says how DataDir was arrived at: observed by finding the
-	// harness's own directory, taken from an override, or merely assumed. A
-	// caller that sees "assumed" and then hits timeouts has its explanation.
+	// DataDirSource is "observed" or "assumed"; "assumed" explains later timeouts.
 	DataDirSource string `json:"data_dir_source"`
 }
 
-// Where the Lua harness writes its screenshot, relative to the scratch directory
-// below. The C harness does not use this: it writes through pd->file->*, which is
-// already sandbox-relative.
+// Where the Lua harness writes its screenshot, relative to the scratch
+// directory. The C harness writes sandbox-relative instead.
 const luaScreenshotRelDir = "mcp"
 
 func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in LaunchSimulatorInput) (*mcp.CallToolResult, LaunchSimulatorOutput, error) {
@@ -54,37 +48,23 @@ func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in L
 		return nil, LaunchSimulatorOutput{}, fmt.Errorf("reading bundle ID: %w", err)
 	}
 
-	// A directory this process owns, passed to the game as playdate.argv[2].
-	//
-	// It used to be the sandboxed data directory, which meant predicting that
-	// directory before the game had run. It never had to be: the Lua harness uses
-	// this only as a base for playdate.simulator.writeToFile, and that call takes
-	// a path on the dev machine rather than a sandbox-relative one. So the guess
-	// was load-bearing for no reason. A scratch directory removes it entirely.
-	//
+	// Passed to the game as playdate.argv[2]. writeToFile takes a host path, so
+	// this need not be the sandboxed data directory.
 	scratch, err := newScratchDir(bundleID)
 	if err != nil {
 		return nil, LaunchSimulatorOutput{}, err
 	}
 
-	// ToSlash because the Lua harness joins this with a hardcoded "/". Windows
-	// file APIs accept forward slashes, so normalising here is enough, and it is
-	// the only place it can be done: `setup` vendors a *copy* of the harness into
-	// each game, so a fix on the Lua side would never reach a project that was set
-	// up before it.
+	// ToSlash because the Lua harness joins this with "/", and already-vendored
+	// harness copies cannot be fixed. Windows accepts forward slashes.
 	sim, err := simulator.Launch(s.simulatorBin(), filepath.ToSlash(in.PdxPath), filepath.ToSlash(scratch))
 	if err != nil {
 		os.RemoveAll(scratch)
 		return nil, LaunchSimulatorOutput{}, fmt.Errorf("launching simulator: %w", err)
 	}
 
-	// Starting the process says nothing about whether it stayed. The Simulator
-	// quits during startup for reasons that have nothing to do with the game -
-	// notably a missing PulseAudio, since it runs with SDL_AUDIODRIVER=pulseaudio
-	// and refuses to run without it. Reporting success for a Simulator that has
-	// already gone sends whoever asked looking at their game instead of reading
-	// the one message that explains it, which never reaches any log this server
-	// exposes.
+	// The Simulator can quit during startup for reasons unrelated to the game
+	// (e.g. SDL_AUDIODRIVER names an audio backend that is not available).
 	time.Sleep(startupGrace)
 	if sim.Exited() {
 		_ = sim.Wait()
@@ -96,13 +76,8 @@ func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in L
 			"the simulator quit during startup:\n%s", strings.TrimSpace(sim.Output()))
 	}
 
-	// Now that the game is running, ask where its data actually went rather than
-	// predicting it. See sdk.FindDataDir: the harness creates mcp/ inside the
-	// sandboxed directory, which makes the right answer observable.
-	// Polled rather than probed once: the harness creates mcp/ during its own
-	// init, which may not have happened yet. The loop exits the moment it
-	// appears, so a harnessed game normally pays one iteration and an unharnessed
-	// one pays the full grace period exactly once per launch.
+	// Observe the data directory via the mcp/ dir the harness creates in its
+	// sandbox (see sdk.FindDataDir), polling since harness init may lag.
 	env := sdk.OSEnv()
 	var (
 		dataDir string
@@ -135,22 +110,14 @@ func (s *Server) launchSimulator(_ context.Context, _ *mcp.CallToolRequest, in L
 		return nil, out, nil
 	}
 
-	// Deliberately not an error, and deliberately loud. Launching a game whose
-	// harness is not installed yet is a normal step - the flow is build, launch,
-	// setup, relaunch - so failing here would break it. But if the directory is
-	// genuinely wrong, every harness-dependent tool after this times out with
-	// nothing naming the cause, so the diagnosis goes out now, on the first call,
-	// while it is still attached to the thing that caused it.
+	// Not an error: launch-before-setup is a normal flow. But a wrong data dir
+	// makes every later tool time out, so diagnose it now.
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: sdk.DataDirDiagnostic(bundleID, tried)}},
 	}, out, nil
 }
 
 // newScratchDir creates the directory handed to the game as playdate.argv[2].
-//
-// Shared by launch and restart because they drifted once: restart passed the
-// data directory here long after launch stopped doing so, so a restarted Lua
-// game wrote its screenshots somewhere the server never looked.
 func newScratchDir(bundleID string) (string, error) {
 	scratch, err := os.MkdirTemp("", "open-crank-"+bundleID+"-")
 	if err != nil {
