@@ -30,8 +30,8 @@ has been executed.
 
 | Guide | What it covers |
 |---|---|
-| [as a plugin](guides/plugin.md) | Your editor installs the server: no clone, no `make`, no path to write down. Claude Code and Cursor install it as a plugin; OpenCode gets a generated config. Native mode only, so Linux and macOS. |
-| [container mode](guides/container-mode.md) | Docker, carrying its own SDK, headless. The default, and the only mode CI exercises end to end. |
+| [as a plugin](guides/plugin.md) | Your editor installs the server: no clone, no `make`, no path to write down. Claude Code and Cursor install it as a plugin; OpenCode gets a generated config. Native mode only: Linux, macOS and Windows x64. |
+| [container mode](guides/container-mode.md) | Docker, carrying its own SDK, headless. The default. |
 | [native mode](guides/native-mode.md) | Your own SDK, a real Simulator window, no container and no bind mounts. |
 | [connecting a client](guides/connecting.md) | Pointing Claude Code, OpenCode or Cursor at either mode. |
 | [shared session](guides/shared-session.md) | One long-lived container an agent drives and you watch at the same time, over VNC, with audio. Optional. |
@@ -63,8 +63,7 @@ lives.
 
 **Container mode** builds an image that carries its own SDK and runs the
 Simulator headlessly inside it. Nothing is installed on your machine but Docker.
-This is the default. CI exercises it alongside native Linux, macOS, and Windows
-checks.
+This is the default.
 
 **Native mode** runs the server directly against a Playdate SDK you installed
 yourself, with no container at all. The Simulator is an ordinary window on your
@@ -80,27 +79,24 @@ the other.
 Checkpoints 1-11 done. Both modes work: the harnesses, the Go server, all the MCP
 tools, the container profiles, and native SDK detection with per-OS paths.
 
-Native mode is verified by running on Linux and Windows. On macOS the toolchain
-and this repo's own checks are verified on 26.5.1, Apple Silicon, and the SDK path
-values come from a probe on a real install. A full native playtest there is not
-claimed.
+Native mode works on Linux and Windows. On macOS the server builds, finds the SDK
+and starts the Simulator, but a fresh Simulator blocks games behind a first-run
+dialog (see [GOTCHAS.md](docs/GOTCHAS.md)), so a full playtest there is not
+claimed. Windows is experimental.
 
-The project is at `0.1.2-rc`, held in `plugin/plugin.json`. Pushing a `v*` tag
-publishes digest-pinned binaries for `linux/amd64`, `darwin/amd64`,
-`darwin/arm64` and `windows/amd64`, so the
-[releases page](https://github.com/NickSpaghetti/open-crank-mcp/releases) is now
-the ordinary route and building from source is a choice. Releases created before
-Windows support was added do not include a Windows asset; a new tag is needed to
-publish one.
+The project is at `0.1.3-rc`, held in `plugin/plugin.json`. Pushing a `v*` tag
+publishes binaries for `linux/amd64`, `darwin/amd64`, `darwin/arm64` and
+`windows/amd64`, so the
+[releases page](https://github.com/NickSpaghetti/open-crank-mcp/releases) is the
+ordinary route and building from source is a choice.
 
-Editor-plugin packaging has landed. The plugin follows
-[Agent Plugins](https://agent-plugins.org) 1.0.0 and carries five skills, so
-Claude Code and Cursor both install the server and the guidance for driving it.
-See [installing as a plugin](guides/plugin.md). OpenCode gets a generated config
-instead, because its v1 plugin API cannot register a server.
+The editor plugin follows [Agent Plugins](https://agent-plugins.org) 1.0.0 and
+carries five skills, so Claude Code and Cursor both install the server and the
+guidance for driving it. See [installing as a plugin](guides/plugin.md). OpenCode
+gets a generated config instead, because its v1 plugin API cannot register a
+server.
 
-See [`docs/ROADMAP.md`](docs/ROADMAP.md) for exactly what is built, what is
-verified and how, and what is left.
+See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is built and what is left.
 
 ## Requirements
 
@@ -111,48 +107,24 @@ verified and how, and what is left.
 
 **Native mode**
 
-- The Playdate SDK, installed by you. `~/.Playdate/config` or the default
-  install location is enough; no environment variable is required.
-- Go, to build the server binary.
-- `cmake` and a C compiler, but only for building C games. A Lua-only game needs
+- The Playdate SDK, installed by you. No environment variable is required.
+- A release binary, or Go to build one.
+- A C toolchain and `cmake`, but only for building C games. A Lua-only game needs
   neither.
-- Whatever shared libraries the Simulator itself needs. The authoritative list is
-  the `apt` line in the `native` job of
-  [`.github/workflows/ci.yml`](.github/workflows/ci.yml), which is kept correct
-  because that job would fail otherwise. On Arch that is one package,
-  `webkit2gtk-4.1` from `extra`. macOS needs none of this.
+- On Linux, the shared libraries the Simulator needs.
 
-Which of those your machine already has differs by OS. See
-[Native requirements](#native-requirements).
-
-**Windows native mode**
-
-- Go and the Windows Playdate SDK (the SDK installer’s default
-  `%USERPROFILE%\Documents\PlaydateSDK` location is detected automatically).
-- For C games, Visual Studio Build Tools with the **Desktop development with C++**
-  workload. CMake 3.19 or newer is required; the server uses it from `PATH` or
-  finds the Visual Studio-bundled copy through `vswhere`.
-- Run the same SDK-backed tests as CI locally with
-  `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-windows-native.ps1`.
-
-Windows native mode is experimental, verified against SDK 3.1.2. New plugin
-releases include Windows x64; existing releases predate that asset, so use the
-PowerShell build/test instructions above until a new release is published.
+What that means per OS is under [Native requirements](#native-requirements).
 
 ## Native requirements
 
-What a stock machine already has, and what you install. The Windows native test
-script above runs the Windows-specific checks; the following details cover the
-Mac and Linux requirements.
+What a stock machine already has, and what you install.
 
 ### macOS
-
-Verified on macOS 26.5.1, Apple Silicon.
 
 | Need | On a stock Mac | For what |
 |---|---|---|
 | Playdate SDK | install it | everything |
-| Go 1.26.5 or newer | install it | `make go-build` |
+| Go 1.26.5 or newer | install it | `make go-build`, if not using a release binary |
 | `cmake` | install it | C games only |
 | Xcode Command Line Tools | `xcode-select --install` | C games only |
 | `jq` | already there, from macOS 15 | `make plugin-upstream-check` |
@@ -176,9 +148,7 @@ Simulator runs native on Apple Silicon. Only
 [container mode](guides/container-mode.md) emulates, and that is the Linux SDK
 inside the image, not this one.
 
-No extra shared libraries. The Simulator is a self-contained `.app` bundle. The
-`webkit2gtk-4.1` and `apt` list in the requirements above is a Linux concern with
-no macOS equivalent.
+No extra shared libraries. The Simulator is a self-contained `.app` bundle.
 
 The system `bash` is 3.2 and Apple is not going to move it. Scripts in `scripts/`
 have to stay 3.2 compatible. No `mapfile`, no associative arrays. Nothing to
@@ -189,15 +159,46 @@ Docker is not needed for native mode. It is only for
 
 ### Linux
 
-Not written up yet. The cross-platform list under [Requirements](#requirements)
-covers it. The authoritative package list is the `apt` line in the `native` job of
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+| Need | For what |
+|---|---|
+| Playdate SDK | everything |
+| Go 1.26.5 or newer | `make go-build`, if not using a release binary |
+| `cmake` and `build-essential` | C games only |
+| The Simulator's shared libraries | the Simulator |
+
+On Debian or Ubuntu the libraries are:
+
+```
+libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0 libgtk-3-0 libnotify4 libnss3
+libxss1 libxtst6 at-spi2-core libsecret-1-0 libpulse0
+```
+
+On Arch it is one package, `webkit2gtk-4.1` from `extra`.
+
+Detection checks `SDKRoot` in `~/.Playdate/config`, then `~/PlaydateSDK`, which
+is where Panic's instructions extract the tarball.
 
 ### Windows
 
-Verified on Windows 11 with SDK 3.1.2 and Visual Studio Build Tools 2026. For C
-games, the native test uses MSVC and CMake; the server finds Visual Studio's
-bundled CMake through `vswhere` if it is not on `PATH`.
+Experimental.
+
+| Need | For what |
+|---|---|
+| Windows Playdate SDK | everything |
+| Go 1.26.5 or newer | building from source, if not using a release binary |
+| Visual Studio Build Tools, **Desktop development with C++** workload | C games only |
+| CMake 3.19 or newer | C games only. Found on `PATH`, or the copy bundled with Visual Studio through `vswhere`. |
+
+The Windows installer writes no `~/.Playdate/config`, so detection checks
+`%USERPROFILE%\Documents\PlaydateSDK` (the installer's default), then
+`%LOCALAPPDATA%\Programs\PlaydateSDK`, then `~\PlaydateSDK`. Windows on ARM64 is
+not supported.
+
+To run the Windows tests against your SDK:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-windows-native.ps1
+```
 
 ## Building
 
@@ -224,7 +225,7 @@ Build locally. Don't push the image anywhere.
 make go-build
 ```
 
-Produces `./open-crank-mcp`. This repo never touches the SDK in this mode: you
+Produces `./open-crank-mcp`. Skip this if you are using a release binary. This repo never touches the SDK in this mode: you
 installed it, under your own acceptance of Panic's licence, and the server only
 reads the path. The redistribution question is structurally absent rather than
 mitigated.
@@ -303,8 +304,8 @@ one fact drift.
 - The image is always `linux/amd64`, since Panic ships no ARM64 Linux SDK, so an Apple
   Silicon Mac or arm64 Linux host runs it under emulation and needs Rosetta or qemu
   binfmt enabled. Same section as above.
-- Audio starts only when you click the Playdate's volume slider, because nothing in the
-  SDK can set it and nothing can read it. See
+- Audio is silent until you raise the Playdate's volume slider in the VNC view. A fresh
+  Simulator starts at zero, and the slider is the only volume control. See
   [Volume](guides/container-mode.md#volume).
 
 **Native mode only**
@@ -333,7 +334,7 @@ says which is which.
 | Command | Does |
 |---|---|
 | `make build` | Builds the image. Fetches the Playdate SDK, pinned by `PLAYDATE_SDK_VERSION`. |
-| `make up` | Headless container under Xvfb. What the MCP tools need and nothing more. |
+| `make up` | Headless container under Xvfb, idle. MCP clients don't need it: each starts its own with `docker compose run`. |
 | `make up-visual` | Linux, native X11 window and host audio. |
 | `make up-visual-wsl` | Windows 11 through WSL2, using WSLg's display and audio. |
 | `make up-vnc` | Browser fallback, any OS. Occupies the terminal. |
@@ -360,27 +361,32 @@ make shared-load
 
 ### Tests and checks
 
-`make test` runs the four host-only checks first, so a broken parser or a Go typo
+`make test` runs the five host-only checks first, so a broken parser or a Go typo
 fails in seconds instead of after several container boots. The order is
-`no-regex`, `go-test`, `test-shared-unit`, `mutation-test`, then everything that
-needs Docker. It skips `shared-check` and `test-shared-types` only because
-`test-shared-browser` already runs both. `go-build-cross`, `sdk-path`, the
-`-native` targets and `mutation-test-diff` are not part of it.
+`no-regex`, `check-doc-links`, `go-test`, `test-shared-unit`, `mutation-test`,
+then everything that needs Docker. It skips `shared-check` and
+`test-shared-types` only because `test-shared-browser` already runs both.
+`go-build-cross`, `sdk-path`, the `-native` targets, `mutation-test-diff` and the
+weekly upstream checks are not part of it.
 
 | Command | Needs | Covers |
 |---|---|---|
 | `make go-build` / `go-test` | Go | The server, tools and harness IPC. `go-build` also emits `./open-crank-mcp`, which is what a native client runs. |
 | `make go-build-cross` | Go | Builds and vets for linux, darwin and windows, so a platform-specific construct outside a build-tag file fails here rather than on someone else's machine. |
-| `scripts/test-windows-native.ps1` | Windows, Go, Playdate SDK | Runs Windows Go tests and vet, then builds and drives C/Lua fixtures through MCP and the Windows Simulator. Also run by `windows-native` CI. |
+| `scripts/test-windows-native.ps1` | Windows, Go, Playdate SDK | Runs Windows Go tests and vet, then builds and drives C/Lua fixtures through MCP and the Windows Simulator. |
 | `make no-regex` | git, grep | Fails if any Go file imports `regexp`. There is no allowlist. Patterns are replaced by `internal/scan`, which reads source a byte at a time and knows a comment from code; see the note above the target for why. Grep on the command line is fine. |
 | `make test-shared-unit` | awk, bash | The volume-slider parser and the window geometry formula, against synthetic pixel columns. No container. |
 | `make mutation-test` | Go | Mutates the code and checks the tests notice, so a line that runs without being asserted on doesn't pass for covered. Thresholds in `.gremlins.yaml`. |
 | `make mutation-test-scan` / `mutation-test-rest` | Go | The same run split in two, which is what CI uses. `internal/scan` is byte-loop code where a flipped comparison hangs the loop instead of failing it, and gremlins sizes its per-mutant timeout from the scope's own baseline. Split out, a hang there costs 3s instead of 60s. `make mutation-test` locally still does the whole module. |
 | `make mutation-test-diff` | Go, git | Mutates only the lines that changed against `MUTATION_DIFF_REF`. Seconds instead of minutes, which is what the pre-commit hook runs. Not a substitute for the full run: a change can weaken a test for code it does not touch. |
 | `make hooks` | git | Points `core.hooksPath` at `.githooks`, enabling the pre-commit hook. Bypass one commit with `--no-verify`. |
-| `make check-doc-links` | bash, grep | Every relative Markdown link and heading anchor in the docs resolves. No network: external URLs are not fetched, so a dead third-party link never blocks a commit. The pre-commit hook runs it on every commit, including Markdown-only ones, which used to run nothing at all. |
+| `make check-doc-links` | bash, grep | Every relative Markdown link and heading anchor in the docs resolves. No network: external URLs are not fetched, so a dead third-party link never blocks a commit. The pre-commit hook runs it on every commit, including Markdown-only ones. |
+| `make plugin-check` | Go | The plugin manifests: versions agree, and they satisfy the vendored Agent Plugins 1.0.0 schemas plus the rules a schema cannot express. Offline. `go test ./...` already runs it. |
+| `make plugin-upstream-check` | curl, jq | Notices the vendored schemas being edited or a newer spec version being published. Runs weekly, not per-PR. |
+| `make sdk-pin-check` | curl | Notices `PLAYDATE_SDK_VERSION` falling behind what Panic ships. Runs weekly, not per-PR. |
+| `make playwright-version-check` | make, sed | `PLAYWRIGHT_IMAGE` and the `@playwright/test` version in `tests/browser` agree. |
 | `make mcp-schema` | Go | Regenerates `docs/mcp-schema.json` from the running server. Run it after changing a tool's name, description or input/output types, and commit the result. The diff is how a change to what every client is served gets reviewed. |
-| `make mcp-schema-check` | Go | Fails if that file no longer matches what the server serves, and if any schema is one a client would reject (a bare `true`, a nullable input union, a closed set with no `enum`). `go test ./...` already runs it, in CI and in the pre-commit hook. |
+| `make mcp-schema-check` | Go | Fails if that file no longer matches what the server serves, and if any schema is one a client would reject (a bare `true`, a nullable input union, a closed set with no `enum`). `go test ./...` already runs it. |
 | `make mcp-auto-test` | Docker | Specmatic's MCP auto-test against the real tool surface over HTTP: it generates inputs from each tool's own declared schema, mutates them, and checks the server rejects what it should. No spec file, so nothing to keep in sync. See the script for what it covers and what it cannot. |
 | `make test-c-harness` | Docker | The C harness, compiled and exercised against the SDK. |
 | `make smoke-check` | Docker | The SDK is where the image expects it and the Simulator starts. |
@@ -394,8 +400,8 @@ needs Docker. It skips `shared-check` and `test-shared-types` only because
 
 ### Flags
 
-Five, plus two overrides. `-doctor` is the one to reach for when something is
-wrong; `-http` you almost certainly do not want.
+Five. `-doctor` is the one to reach for when something is wrong; `-http` you
+almost certainly do not want.
 
 | Flag | Default | What it does |
 |---|---|---|
@@ -420,12 +426,12 @@ Container mode:
 
 | Variable | Default | Applies to |
 |---|---|---|
-| `PLAYDATE_SDK_VERSION` | `3.1.1` | `build`, and every target that builds |
+| `PLAYDATE_SDK_VERSION` | `3.1.2` | `build`, and every target that builds |
 | `GAME_DIR` | required | `up-shared`. Must be absolute. |
 | `SIM_ZOOM` | `1` | `up-vnc`, `up-shared`. Simulator zoom level. |
 | `VNC_GEOMETRY` | `1280x800` | `up-vnc`, `up-shared`. Workspace size. |
 | `BIND_ADDR` | `127.0.0.1` | Host address for the published ports |
-| `VNC_PORT` | `6080` | `up-vnc`, `up-shared`. Every URL in this README assumes the default. |
+| `VNC_PORT` | `6080` | `up-vnc`, `up-shared`. |
 | `AUDIO_PORT` | `8000` | `up-vnc`, `up-shared`. The MP3 stream. |
 | `SHARED_DATA_DIR` | `./.shared-data` | `up-shared`. Where the Simulator's sandboxed Data directory is mounted, so `game_logs.jsonl` is readable from the host. |
 | `SOURCE_DIR` / `PDX_PATH` | `/your-game/Source`, `/your-game/your-game.pdx` | `shared-watch`, if your project isn't laid out that way |

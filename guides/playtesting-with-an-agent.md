@@ -28,7 +28,7 @@ Pick the verb that matches what a player would do.
 |---|---|---|
 | `press_button` | taps and releases | Menus, confirming, firing once |
 | `hold_button` | stays down until released | Walking, steering, charging a shot |
-| `release_button` | lets go, then back to real input | Ending a hold |
+| `release_button` | forces the button up briefly, then hands it back to real input | Ending a hold |
 | `set_crank` | holds the angle until replaced | A crank is a position; a real one stays where you left it |
 | `reset_input` | drops every override at once | Handing the game back, and the only way to release a held crank |
 
@@ -41,8 +41,8 @@ more. It stays down until `release_button` or `reset_input`, so pair it with one
 duration when you want it to lapse back to what the game would really read, or
 call `reset_input`.
 
-One more thing about the crank. `crank_dock` defaults to leaving the dock alone,
-and the Simulator reports the crank **docked** at rest. A game that only reads
+`crank_dock` defaults to leaving the dock alone, and the Simulator reports the
+crank **docked** at rest. A game that only reads
 the crank while undocked will ignore an angle you set. Pass
 `crank_dock: "undocked"` in that case.
 
@@ -79,12 +79,11 @@ Useful patterns:
 - Write a deliberately malformed save and check the game survives it.
 - Play, read the save back, and confirm what was written matches the state.
 
-The game has to be running, since the harness resolves the data directory.
+The Simulator has to be running, since the data directory is resolved at launch.
 
 ## Writing the prompt
 
-What you tell the agent matters more than the tool list. Some things worth
-saying explicitly.
+What you tell the agent matters more than the tool list. Say these explicitly.
 
 **Name the state fields.** An agent that knows `lives` and `level` exist will
 use them. One that has to discover them by calling `get_game_state` and reading
@@ -108,8 +107,6 @@ A prompt that works:
 > `get_game_logs`. Report what you did and anything that looked wrong.
 
 ## What it is bad at
-
-Worth knowing so you check these yourself.
 
 - **Anything on a timer.** The agent acts between frames, not on them. It cannot
   reliably test something with a one-frame window.

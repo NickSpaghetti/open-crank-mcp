@@ -1,9 +1,8 @@
 # Troubleshooting
 
-Symptoms first, in the order they tend to bite.
-
-Each entry says what you see, what causes it, and what to do. The investigation
-behind most of them is in [`docs/GOTCHAS.md`](../docs/GOTCHAS.md).
+Symptoms first, in the order they tend to bite. Each entry says what you see,
+what causes it, and what to do. The background is in
+[`docs/GOTCHAS.md`](../docs/GOTCHAS.md).
 
 ## Every tool times out after five seconds
 
@@ -48,10 +47,10 @@ Two shapes it declines to rewrite: a receiver it cannot reach, like
 
 ## get_game_logs is empty, or complains about game_logs.json
 
-The game was set up before the log file was renamed. Its vendored harness copy
-is old and still writes the previous format.
+The game's vendored harness copy is old and writes `game_logs.json` instead of
+`game_logs.jsonl`.
 
-Re-run `setup`. It is safe to re-run and this is the whole fix.
+Re-run `setup` and rebuild.
 
 ## get_status reports a harness_warning
 
@@ -69,32 +68,31 @@ without `stop_simulator`, it keeps running, and the next `launch_simulator`
 starts a second one alongside it. Both poll the same command file.
 
 ```
-pkill -9 -f 'bin/PlaydateSimulato[r]'                                        # native
-docker compose exec simulator-shared pkill -9 -f 'bin/PlaydateSimulato[r]'   # container
+pkill -9 -f 'bin/PlaydateSimulato[r]'                                        # native, Linux and macOS
+taskkill /F /IM PlaydateSimulator.exe                                        # native, Windows
+docker compose exec simulator-shared pkill -9 -f 'bin/PlaydateSimulato[r]'   # shared container
 ```
 
 The bracket is not a typo. `pkill -f` matches every process's whole command
 line, including the shell running the `pkill`. Without it you kill your own
 shell instead, silently, and you conclude the Simulator was never running.
 
-`-9` is required. The Simulator ignores `SIGTERM`, which is why the server's own
-`stop_simulator` uses `SIGKILL` too. Natively, note this also kills a Simulator you
+`-9` is required. The Simulator ignores `SIGTERM`, which is why
+`stop_simulator` uses `SIGKILL` too. Natively, this also kills a Simulator you
 started by hand.
 
 ## The Simulator will not start at all
 
-Not "starts and quits". It never starts, usually with exit status 127 before any of
-Panic's own code runs. That is a missing shared library rather than anything about
-the Simulator.
+Not "starts and quits". On Linux it never starts, usually with exit status 127
+before any of Panic's own code runs. That is a missing shared library.
 
 ```
 open-crank-mcp -doctor
 ```
 
 The `shared libraries` line names what is unresolved. On Arch the whole list is
-one package, `webkit2gtk-4.1`; elsewhere the authoritative list is the `apt` line
-in the `native` job of `.github/workflows/ci.yml`, which stays correct because
-that job would fail otherwise.
+one package, `webkit2gtk-4.1`. The Debian and Ubuntu list is under
+[Linux](../README.md#linux) in the README.
 
 On macOS the check can only confirm the binary exists. The dynamic loader there
 resolves lazily and reports at launch, so use `-doctor -doctor-launch` to actually
@@ -105,7 +103,7 @@ start it and read what it says.
 It reports `dsp: No such audio device` and stops before doing anything.
 
 The Simulator treats SDL initialisation as fatal and will not start without an
-audio driver. On a CI runner or a server over SSH there is none.
+audio driver. A CI runner or a server over SSH has none.
 
 ```
 SDL_AUDIODRIVER=dummy
@@ -117,11 +115,11 @@ it.
 ## cmake fails on a stale CMakeCache.txt
 
 You built the same game in both container and native mode. cmake records
-absolute paths, and the container sees your game at `/workspace` while a native
+absolute paths, and the container sees your game at `/your-game` while a native
 run sees its real path.
 
-`build_game` detects this specific failure, clears the cache, says so in its
-output, and reconfigures. The message is expected rather than alarming.
+`build_game` detects this failure, clears the cache, says so in its output, and
+reconfigures. The message is expected.
 
 ## No SDK found, or the wrong one
 
@@ -146,10 +144,9 @@ on a click that never comes. `Loading: <game>.pdx/` appears on stdout, so the
 launch looks fine.
 
 `open-crank-mcp -doctor` warns about this before you hit it, on any Mac where the
-Simulator appears never to have run. That is an inference, not a measurement: the
-Simulator rewrites `~/Library/Preferences/date.play.simulator.plist` on every
-launch, so an absent plist means it has almost certainly never started. A
-deleted one would read the same way, though.
+Simulator appears never to have run, meaning
+`~/Library/Preferences/date.play.simulator.plist` does not exist. A deleted plist
+reads the same way.
 
 Dismiss it once by hand. The documented setting does not suppress it, and the
 symptoms differ between C and Lua games, which makes it easy to misdiagnose.

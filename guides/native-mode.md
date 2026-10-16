@@ -7,29 +7,29 @@ The Simulator is an ordinary window on your desktop, with your audio, and no
 bind mounts or root-owned build output. See
 [container-mode.md](container-mode.md) for the other mode.
 
-No `make up`. There is no container to start: an MCP client launches the server
-binary directly, and the server launches the Simulator.
+There is no `make up`. An MCP client launches the server binary directly, and
+the server launches the Simulator.
+
+Use a binary from the
+[releases page](https://github.com/NickSpaghetti/open-crank-mcp/releases), or
+build one:
 
 ```
-make go-build     # produces ./open-crank-mcp
+make go-build     # produces ./open-crank-mcp (open-crank-mcp.exe on Windows)
 make sdk-path     # confirm it finds your SDK
 ```
 
-Then point a client at the binary: see [connecting.md](connecting.md). The
-Simulator appears as an ordinary window when a game launches, using your display
-and your audio, so none of the container display profiles in
-[container-mode.md](container-mode.md) apply.
+Then point a client at the binary: see [connecting.md](connecting.md). None of
+the container display profiles in [container-mode.md](container-mode.md) apply.
 
-Two checks worth running once, if you want to know the environment is sound
-before involving an agent:
+To check the environment before involving an agent:
 
 ```
 make smoke-check-native        # libraries resolve, pdc runs, the Simulator starts
 make sdk-contract-check-native # the MCP tools driving a real Simulator
 ```
 
-On Windows, the same native integration checks are available with the SDK-backed
-PowerShell script used by CI:
+On Windows, run the PowerShell script instead:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\test-windows-native.ps1

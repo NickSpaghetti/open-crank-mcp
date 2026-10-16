@@ -3,27 +3,30 @@
 Everything runs in a Docker image that carries its own SDK. Nothing is installed
 on your machine but Docker.
 
-This is the default mode and the only one CI exercises end to end. See
-[native-mode.md](native-mode.md) for the other.
+This is the default mode. See [native-mode.md](native-mode.md) for the other.
+
+An MCP client starts its own headless container per connection, with
+`docker compose run` (see [connecting.md](connecting.md)). You only build the
+image:
 
 ```
-make up
+make build
 ```
 
-Runs the Simulator headlessly under Xvfb by default. No display required.
-Audio uses SDL2's `dummy` driver, since nothing needs real sound in
-headless/automated use. Screenshots come from the Playdate API's real
-framebuffer, not a window capture. Headless mode covers every tool this
-server exposes.
+The container runs the Simulator under Xvfb, so no display is required. Audio
+uses SDL2's `dummy` driver. Screenshots come from the Playdate API's
+framebuffer, not a window capture. Headless mode covers every tool this server
+exposes. `make up` starts the same headless container by hand.
 
 ## Three constraints that come with the container
 
-None has a fix; all are worth knowing before they surprise you. Native mode has
-none of them.
+None has a fix. Native mode has none of them.
 
-**The game directory is fixed when the container starts.** It is a bind mount, chosen
-by `GAME_DIR` at `make up` time, so switching to a different game means `make down` and
-starting again with a new one.
+**The game directory is fixed when the container starts.** It is a bind mount: the
+`-v` path in the client's command, or `GAME_DIR` for the
+[shared session](shared-session.md). Switching games means changing that path and
+starting a new container. For the shared session that is `make down`, then
+`make up-shared` with a new `GAME_DIR`.
 
 **Output is written as root.** The container runs as root, so `build_game` leaves
 root-owned `build/` and `.pdx` output inside your game directory, and `.shared-data/` is
@@ -39,12 +42,10 @@ costs nothing. On an Apple Silicon Mac or an arm64 Linux box, the whole containe
 under emulation. That works but is slower. Expect the first `make build` to take
 several minutes, most of it fetching the SDK and the Go toolchain.
 
-This is a fact about the Linux SDK in the container, not about macOS. Panic ships the
-**macOS** SDK as a universal binary. `lipo -archs` on its `pdc` and its Simulator
-reports `x86_64 arm64`, so [native mode](native-mode.md) on an Apple Silicon Mac runs
-the Simulator natively and never touches Rosetta. On one Mac, container mode emulates
-and native mode does not. If the emulation overhead is what bothers you, native mode is
-the way around it.
+This is about the Linux SDK in the container, not about macOS. Panic ships the
+**macOS** SDK as a universal binary, so [native mode](native-mode.md) on an Apple
+Silicon Mac runs the Simulator without Rosetta. If the emulation overhead bothers
+you, native mode avoids it.
 
 Emulation has to be available, or the container build fails outright:
 
@@ -53,21 +54,17 @@ Emulation has to be available, or the container build fails outright:
 - **Linux (arm64):** install qemu-user binfmt support, e.g.
   `docker run --privileged --rm tonistiigi/binfmt --install amd64`.
 
-Without the pin, Docker builds an arm64 image while the Dockerfile installs the amd64 Go
-toolchain regardless, and the mismatch surfaces at the cgo step as
-`gcc: error: unrecognized command-line option '-m64'`. If you see that, you are on a
-compose file that predates the pin.
+Without the pin, Docker builds an arm64 image around the amd64 Go toolchain, and the
+cgo step fails with `gcc: error: unrecognized command-line option '-m64'`.
 
 ## Seeing and hearing it
 
-For a visual, sighted spot check with real audio, there are three profiles.
-Pick the one that matches how you run Docker. All three are optional.
-Nothing here is required for the MCP server's own tools, which only use the
-headless path above.
+To watch and listen, there are three profiles. Pick the one that matches how you
+run Docker. All three are optional. The MCP tools only use the headless path
+above.
 
 None of this applies to native mode, where the Simulator is already a window on
-your desktop using your own audio. These profiles exist to get a picture and a
-sound *out of a container*, which is a problem native mode does not have.
+your desktop using your own audio.
 
 ### Linux (X11 socket forwarding)
 
@@ -76,14 +73,11 @@ make up-visual
 ```
 
 Forwards your host's X11 socket, so the Simulator window shows up, and
-routes audio to your host's PulseAudio/PipeWire server, so you can hear it.
+routes audio to your host's PulseAudio/PipeWire server. The Simulator is still in
+the container. This is not native mode.
 
-Despite the older name for this section, it is not native mode: the Simulator is
-still in the container, reaching out to your display. Native mode is
-[native-mode.md](native-mode.md).
-Needs an X11 auth cookie for your display. `scripts/ensure-xauth.sh`
-generates one automatically the first time (creates or reuses
-`~/.Xauthority` via `xauth generate`). No manual `xhost` step.
+Needs an X11 auth cookie for your display. `scripts/ensure-xauth.sh` creates or
+reuses `~/.Xauthority` with `xauth generate`. No manual `xhost` step.
 
 ### Windows 11 (WSL2 + Docker Desktop)
 
@@ -95,9 +89,8 @@ Run this from inside a WSL2 distro's shell, not PowerShell. Windows 11's
 WSLg already exposes a display and a PulseAudio-compatible audio socket at
 `/mnt/wslg` for this. This profile mounts them through.
 
-Untested against a real Windows machine so far. Built from documented WSLg
-integration patterns. If it doesn't work, the mounts and env vars in the
-`simulator-visual-wsl` service in `docker-compose.yml` are the place to fix
+Untested on a real Windows machine. If it does not work, the mounts and env vars
+in the `simulator-visual-wsl` service in `docker-compose.yml` are the place to fix
 it.
 
 ### Any OS, universal fallback (VNC + audio stream)
@@ -136,7 +129,7 @@ directly. Use it on a network you trust.
 | Variable | Default | Effect |
 |---|---|---|
 | `BIND_ADDR` | `127.0.0.1` | Host address for both published ports. `0.0.0.0` serves every interface. |
-| `VNC_PORT` | `6080` | Host port for the browser view. Every URL below assumes the default. |
+| `VNC_PORT` | `6080` | Host port for the browser view. The URLs here assume the default. |
 | `AUDIO_PORT` | `8000` | Host port for the MP3 stream. |
 
 ### Simulator defaults
@@ -157,9 +150,8 @@ where a stray scroll over the background switches to an empty one, and the
 keybindings, one of which unmaps every window at once. They also collided
 with the Simulator's own `Ctrl-1`/`Ctrl-2`/`Ctrl-3` and `Shift-Ctrl-C`.
 
-The "test on real hardware" and "join the developer email list" modals are
-suppressed through the Simulator's own INI, using key names found in the
-Simulator binary's strings.
+The "test on real hardware" and "join the developer email list" dialogs are
+turned off through the Simulator's own INI.
 
 ### Volume
 
@@ -172,14 +164,9 @@ It works by scanning the slider off the framebuffer once a second, because that
 is the only place the Simulator's volume exists. See
 [shared-session.md](shared-session.md#volume-why-the-slider-is-read-off-the-framebuffer).
 
-One thing no design can avoid. Browsers refuse to start audio until the page has
-seen a user gesture. Clicking to connect to the display is enough, and in
-practice you have clicked something before you care about sound. The gesture only
-unlocks the browser. The slider still decides.
+Browsers refuse to start audio until the page has seen a user gesture. Clicking
+to connect to the display is enough. The gesture only unlocks the browser. The
+slider still decides.
 
-Use this on macOS *if you are running the containerized Simulator*. Getting a
-picture and sound out of a Linux VM on macOS otherwise means XQuartz plus a
-PulseAudio-over-TCP bridge, which is real ongoing complexity and slow. That
-comparison is only about reaching into a container, and is not an argument
-against native mode: there, the Simulator is a macOS application with a window
-and CoreAudio, and none of this apparatus exists.
+On macOS, VNC is the way to see a containerized Simulator. The alternative is
+XQuartz plus a PulseAudio-over-TCP bridge. In native mode none of this applies.
