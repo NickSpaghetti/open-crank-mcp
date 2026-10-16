@@ -193,10 +193,13 @@ mutation-test-rest:
 # Only the lines changed against a ref, for the pre-commit hook. Not a
 # replacement for the full run, which sees tests weakened for untouched code.
 # An all-skipped run is a pass: gremlins reports "no mutants" as 0% efficacy.
+# diff.context=0 because gremlins v0.6.0 treats each hunk's added lines as one
+# contiguous range, which sweeps in unchanged code between separate edits.
 MUTATION_DIFF_REF ?= HEAD
 
 mutation-test-diff:
-	@out=$$(go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) \
+	@out=$$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.context GIT_CONFIG_VALUE_0=0 \
+		go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) \
 		unleash --diff $(MUTATION_DIFF_REF) 2>&1); rc=$$?; \
 	echo "$$out" | tail -4; \
 	if echo "$$out" | grep -q "Killed: 0, Lived: 0, Not covered: 0"; then \
