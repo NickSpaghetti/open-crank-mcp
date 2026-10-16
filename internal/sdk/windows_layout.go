@@ -2,27 +2,13 @@ package sdk
 
 import "path/filepath"
 
-// The Windows layout, verified against SDK 3.1.2 and a native Simulator run.
-//
-// Three things that probe established, each of which contradicted the first
-// guess here:
-//
-//   - There is no ~/.Playdate/config at all. `Get-Content` on it returned
-//     nothing. Resolution has to fall through to a default location, which it
-//     does, but it means the config step is dead weight on this platform rather
-//     than the primary signal it is on macOS.
-//   - The SDK installs to %USERPROFILE%\Documents\PlaydateSDK, not under
-//     %LOCALAPPDATA%\Programs.
-//   - The Simulator's own directory is under %LOCALAPPDATA%, not %APPDATA%.
-//
-// Not build-tagged, on purpose: see layout.go.
+// windowsLayout is the Windows layout, checked against SDK 3.1.2. The installer
+// writes no ~/.Playdate/config, so resolution relies on default roots.
 func windowsLayout() layout {
 	return layout{
 		name: "windows",
 
-		// Documents first: that is where the installer actually put it. The
-		// %LOCALAPPDATA%\Programs path was the original guess and did not exist
-		// on the machine checked, so it drops to second rather than being removed.
+		// The installer puts the SDK under Documents.
 		defaultRoots: func(env Env) []string {
 			var out []string
 			if profile := env.Getenv("USERPROFILE"); profile != "" {
@@ -46,12 +32,8 @@ func windowsLayout() layout {
 			return filepath.Join(root, "bin", "pdc.exe")
 		},
 
-		// In-SDK first. A native Windows run confirmed that the Simulator writes
-		// per-game data under this directory.
-		//
-		// %LOCALAPPDATA%\Playdate Simulator does exist on Windows and is kept as
-		// a fallback. What is in it is unknown: it may be settings rather than
-		// game data. %APPDATA% was the original guess and holds nothing at all.
+		// The Simulator writes game data inside the SDK. %LOCALAPPDATA%\Playdate Simulator
+		// exists but its contents are unknown, so it is only a fallback.
 		dataDirCandidates: func(env Env, root, bundleID string) []string {
 			out := []string{filepath.Join(root, "Disk", "Data", bundleID)}
 			if local := env.Getenv("LOCALAPPDATA"); local != "" {

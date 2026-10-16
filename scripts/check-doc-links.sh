@@ -1,33 +1,10 @@
 #!/usr/bin/env bash
-# Resolves every relative Markdown link in the docs and fails on one that points at a
-# file or heading that isn't there.
-#
-# Why it exists. The README was split into guides/, and a link that survives a move
-# looks identical to one that doesn't - both are blue, and nothing reads them. The
-# extraction left three phrases pointing at nothing ("as below", "the profiles above")
-# plus a `See "Volume" above` in the README aimed at a section that had moved into a
-# guide. Those were prose rather than links, so this would not have caught them; what it
-# does catch is the next step of the same mistake, which is writing the link and getting
-# the target or the anchor wrong. Anchors especially: GitHub's slug rules are not
-# guessable, and `#any-os-universal-fallback-vnc--audio-stream` has a double hyphen
-# because a `+` vanished between two spaces. That was written by hand and only this
-# check knows whether it is right.
-#
-# Deliberately not a link *reachability* check. External URLs are not fetched: a network
-# call would make this fail on a plane, and a dead third-party URL is not something a
-# commit should be blocked on.
-#
-# grep and awk rather than a Go program, on the same reasoning as the no-regex rule in
-# the Makefile: command-line grep is fine, and this is text processing over a handful of
-# files rather than logic that wants a test suite of its own.
+# Fails on a relative Markdown link whose file or heading anchor doesn't exist.
+# External URLs are not fetched, so a dead third-party site never blocks a commit.
 set -uo pipefail
 
-# Files come from git rather than a bare find, so an uncommitted new guide is checked
-# while an ignored working copy (a worktree, a vendored tree) is not. Same reasoning as
-# the no-regex target.
-#
-# A read loop rather than `mapfile -t`: mapfile is bash 4.0+, and macOS ships bash 3.2.
-# NUL-delimited, so a path with a space in it survives.
+# From git, so untracked guides are checked and ignored trees aren't. A read loop
+# because macOS ships bash 3.2, which has no mapfile.
 files=()
 while IFS= read -r -d '' file; do
   files+=("$file")
@@ -38,19 +15,12 @@ if [ "${#files[@]}" -eq 0 ]; then
   exit 1
 fi
 
-# GitHub's heading-to-anchor rule, as far as it matters here: lowercase, drop anything
-# that is not alphanumeric, space or hyphen, then spaces to hyphens. Backticks and
-# punctuation vanish, which is why `CMakeCache.txt` becomes `cmakecachetxt`.
-#
-# Not exhaustive - it does not deduplicate repeated headings the way GitHub appends -1,
-# and it does not handle Setext underlined headings, neither of which this repo uses. It
-# would report a false failure rather than a false pass if either turned up, which is
-# the right direction.
+# GitHub's heading-to-anchor rule: lowercase, drop all but alphanumerics, spaces and
+# hyphens, then spaces to hyphens. No -1 dedup or Setext headings; either fails, not passes.
 slugs_of() {
   awk '
     /^#+[ \t]/ {
       sub(/^#+[ \t]+/, "")
-      # Trailing hashes, for anyone writing `## Heading ##`.
       sub(/[ \t]+#+[ \t]*$/, "")
       line = tolower($0)
       out = ""
@@ -78,16 +48,9 @@ report() {
 for file in "${files[@]}"; do
   dir=$(dirname "$file")
 
-  # Every ](target) in the file. -o so one line with several links yields several
-  # matches; the target is everything up to the closing paren.
   while IFS= read -r target; do
     [ -n "$target" ] || continue
 
-    # Leave external and mail links alone: not fetched, on purpose.
-    case "$target" in
-      http://*|https://*|mailto:*|\#*) ;;
-      *) ;;
-    esac
     case "$target" in
       http://*|https://*|mailto:*) continue ;;
     esac
@@ -102,9 +65,7 @@ for file in "${files[@]}"; do
     if [ -z "$path" ]; then
       resolved="$file"
     elif [ "${path#/}" != "$path" ]; then
-      # Absolute paths would resolve against the filesystem root when clicked
-      # locally and against the repo root on GitHub, which is two different targets
-      # for one link. Nothing here uses one; say so rather than guess.
+      # Absolute paths resolve to the filesystem root locally but the repo root on GitHub.
       report "$file: link target '$target' is absolute; use a path relative to $dir"
       continue
     else
@@ -116,7 +77,6 @@ for file in "${files[@]}"; do
       continue
     fi
 
-    # A link to a directory is fine and has no anchors to check.
     if [ -d "$resolved" ]; then
       if [ -n "$anchor" ]; then
         report "$file: link target '$target' names an anchor on a directory"
@@ -126,8 +86,7 @@ for file in "${files[@]}"; do
 
     [ -n "$anchor" ] || continue
 
-    # Not anchors: GitHub uses these suffixes to pick which of a pair of images to
-    # show per theme. The file still has to exist - that check ran above.
+    # Not anchors: GitHub's per-theme image suffixes.
     case "$anchor" in
       gh-light-mode-only | gh-dark-mode-only) continue ;;
     esac
@@ -140,8 +99,6 @@ for file in "${files[@]}"; do
 
     if ! slugs_of "$resolved" | grep -qxF -- "$anchor"; then
       report "$file: link target '$target' names a heading that does not exist in $resolved"
-      # Naming the near misses, because an anchor is almost always a slug typo rather
-      # than a missing section, and the correct one is tedious to derive by hand.
       slugs_of "$resolved" | grep -F -- "${anchor%%-*}" | head -3 |
         while IFS= read -r near; do
           printf '    did you mean #%s ?\n' "$near" >&2

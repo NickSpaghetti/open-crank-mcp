@@ -20,16 +20,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// readSaveDataOutputSchema overrides the auto-inferred schema for
-// ReadSaveDataOutput. Its Data field is `any` (a save file's shape isn't
-// known ahead of time), which the default inference renders as the JSON
-// Schema value `true` (spec-legal - "any value is valid" - but rejected
-// by at least one real MCP client's stricter schema validator, which
-// failed its entire tools/list fetch over this single property).
-// jsonschema-go collapses any all-empty schema to `true` as a shorthand
-// (see its Schema.MarshalJSON), so an empty override doesn't avoid this -
-// the override needs some real content, hence the description, to stay
-// a schema object.
+// readSaveDataOutputSchema avoids the inferred `true` schema for the `any`
+// Data field, which a real MCP client's validator rejected. jsonschema-go
+// collapses an empty schema to `true`, so the override needs a description.
 func readSaveDataOutputSchema() *jsonschema.Schema {
 	s, err := jsonschema.For[ReadSaveDataOutput](&jsonschema.ForOptions{
 		TypeSchemas: map[reflect.Type]*jsonschema.Schema{
@@ -42,22 +35,9 @@ func readSaveDataOutputSchema() *jsonschema.Schema {
 	return s
 }
 
-// closedSetSchema infers In's input schema and pins the named properties to the exact
-// values they accept, as JSON Schema `enum`.
-//
-// The values were only ever named in prose before - "one of a, b, up, down, left,
-// right" in a description - and a description is not a constraint. Two things follow
-// from making it one. A client can reject press_button("A") before it is sent, rather
-// than the server being the first thing that notices; and anything generating inputs
-// from the schema produces valid ones. That second one is not hypothetical: Specmatic's
-// auto-test called teardown with language "MIRMU" and setup with a random source_dir,
-// because a random string is what a schema saying `type: string` asks for. See
-// docs/GOTCHAS.md.
-//
-// The handler-side validation stays. It is what produces the message that names the
-// alternatives, it covers the values a schema cannot express (crank_dock's empty string
-// meaning "unchanged"), and a constraint worth declaring is worth enforcing where the
-// work happens too.
+// closedSetSchema infers In's input schema and pins the named properties to
+// the values they accept, as JSON Schema `enum`, so schema-driven clients
+// cannot send arbitrary strings.
 func closedSetSchema[In any](enums map[string][]any) *jsonschema.Schema {
 	s, err := jsonschema.For[In](nil)
 	if err != nil {
@@ -66,9 +46,7 @@ func closedSetSchema[In any](enums map[string][]any) *jsonschema.Schema {
 	for property, values := range enums {
 		prop, ok := s.Properties[property]
 		if !ok {
-			// A panic rather than a silent skip: this runs at registration, so it
-			// fails on the first connection rather than shipping a schema whose
-			// constraint quietly went missing when a field was renamed.
+			// Panic so a renamed field fails at registration, not silently.
 			panic(fmt.Sprintf("closedSetSchema: %T has no property %q to constrain", *new(In), property))
 		}
 		prop.Enum = values
@@ -76,9 +54,7 @@ func closedSetSchema[In any](enums map[string][]any) *jsonschema.Schema {
 	return s
 }
 
-// asAny widens a list of allowed values for jsonschema's Enum field, which is []any
-// because JSON Schema allows any type in an enum. Takes ~string so a named string type
-// (setup.Language) needs no conversion at the call site.
+// asAny widens values for jsonschema's []any Enum field.
 func asAny[T ~string](values []T) []any {
 	out := make([]any, len(values))
 	for i, v := range values {
@@ -91,42 +67,25 @@ const responseTimeout = 5 * time.Second
 
 var errNotRunning = errors.New("simulator not running - call launch_simulator first")
 
-// errHarness marks a failure the harness itself reported, as opposed to one this
-// server ran into. Like errNotRunning it is recoverable and model-visible: the
-// caller can read it and react, so it must not surface as an opaque protocol
-// error.
+// errHarness marks a failure the harness itself reported. Like errNotRunning
+// it is surfaced as a model-visible result, not a protocol error.
 var errHarness = errors.New("harness reported an error")
 
 // Only reachable as a bug: every path that sets s.sim also sets s.scratchDir.
 var errNoScratch = errors.New("simulator is running with no screenshot scratch directory")
 
-// Server holds everything a tool handler might need across separate tool
-// calls - which simulator (if any) is running, its data directory, and a
-// counter for correlating harness command IDs. Guarded by mu since it
-// outlives any single tool call.
+// Server holds state shared across tool calls, guarded by mu.
 //
-// harnessMu is a separate lock serializing any interaction with the
-// harness's shared, fixed-filename IPC channel (mcp/command.json,
-// mcp/response.json, and any fixed path a response references, e.g.
-// mcp/screenshot.png|raw). The MCP go-sdk dispatches tool calls
-// concurrently by default (jsonrpc2.Async, called for every request but
-// "initialize"), but this protocol supports exactly one outstanding
-// request at a time - without this lock, two concurrent calls can read
-// back each other's responses, or one get_screenshot call can overwrite
-// the fixed screenshot file before another has read it. Always acquired
-// before mu, never after, so there's no lock-ordering risk between them.
+// harnessMu serializes use of the harness's fixed-filename IPC files: the MCP
+// go-sdk dispatches tool calls concurrently, but the protocol allows one
+// outstanding request. Always acquired before mu, never after.
 type Server struct {
-	// Set once by NewServer and never written again, so they are read without
-	// the lock. Grouped and said out loud because the opposite was happening:
-	// the SDK path was read under mu at two call sites, which reads as a claim
-	// that something mutates it.
+	// Set once by NewServer and never written again, so read without the lock.
 	sdk       sdk.Paths
 	harnessFS fs.FS
 
-	// sdkErr is why resolution failed, or nil. Held rather than fatal, so the
-	// server still completes the MCP handshake and can say what went wrong
-	// through a tool result. A process that exits before the handshake surfaces
-	// in a client as "server failed to start", which names nothing.
+	// sdkErr is held rather than fatal so the server still completes the MCP
+	// handshake and can report the problem through a tool result.
 	sdkErr error
 
 	mu        sync.Mutex
@@ -139,50 +98,28 @@ type Server struct {
 	bundleID string
 	nextID   int
 
-	// scratchDir is a directory this process owns, handed to the game as
-	// playdate.argv[2] for the Lua harness to write screenshots into. Separate
-	// from dataDir because it does not have to be the sandbox: writeToFile takes
-	// a host path. Removed when the Simulator stops.
+	// scratchDir is a directory this process owns, passed to the game as
+	// playdate.argv[2] for Lua screenshots. Removed when the Simulator stops.
 	scratchDir string
 
-	// harnessVersion is what the last successful round trip reported, and
-	// harnessVersionSeen is whether there has been one. Two fields rather than
-	// treating "" as unknown, because "" is a real answer: it is what a harness
-	// older than the version marker reports. Conflating "nothing has asked yet"
-	// with "the game answered and it is stale" would be the same silent-conflation
-	// mistake this change set exists to remove, in miniature.
+	// harnessVersionSeen distinguishes "not asked yet" from "", which is what a
+	// harness older than the version marker reports.
 	harnessVersion     string
 	harnessVersionSeen bool
 }
 
-// simulatorBin is the Simulator executable inside the resolved SDK. A method
-// rather than a field so the two call sites that used to build this path under
-// mu (launch and restart) have one place to get it from.
-//
-// It no longer builds the path: internal/sdk resolved it, which is what makes
-// the macOS .app bundle and the Windows .exe work without either call site
-// knowing they exist.
 func (s *Server) simulatorBin() string {
 	return s.sdk.SimulatorBin
 }
 
-// NewServer takes an SDK already resolved by the caller, the reason resolution
-// failed if it did, and the harness sources the `setup` tool writes into a game
-// (normally opencrank.HarnessFS).
-//
-// All injected rather than read here, so a test can supply a fake SDK layout and
-// an fstest.MapFS without touching the environment or the filesystem.
+// NewServer takes an already-resolved SDK, the resolution error if any, and
+// the harness sources `setup` writes into a game (normally opencrank.HarnessFS).
 func NewServer(paths sdk.Paths, sdkErr error, harnessFS fs.FS) *Server {
 	return &Server{sdk: paths, sdkErr: sdkErr, harnessFS: harnessFS}
 }
 
 // requireSDK reports the SDK, or a model-visible result explaining why there
-// isn't one. Same shape as notRunningResult: a tool the agent can react to,
-// rather than an opaque protocol failure.
-//
-// Every path internal/sdk tried is included, because "it looked here and here"
-// is the only actionable thing to say when detection fails on a machine nobody
-// here can see.
+// isn't one.
 func (s *Server) requireSDK() (sdk.Paths, *mcp.CallToolResult) {
 	if s.sdkErr == nil {
 		return s.sdk, nil
@@ -192,9 +129,7 @@ func (s *Server) requireSDK() (sdk.Paths, *mcp.CallToolResult) {
 		s.sdkErr, sdk.EnvVarSDKPath))
 }
 
-// errorResult is a recoverable, model-visible error - the caller can see it and
-// react (e.g. call launch_simulator), rather than the whole tool call failing as
-// an opaque protocol error.
+// errorResult is a recoverable, model-visible error rather than a protocol error.
 func errorResult(text string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		IsError: true,
@@ -217,10 +152,7 @@ func handleRoundTripErr(err error) (*mcp.CallToolResult, error) {
 }
 
 // clearScratchLocked removes the screenshot scratch directory, if any. Caller
-// holds mu.
-//
-// Best-effort: a leftover directory under the OS temp dir is untidy, not broken,
-// and failing a stop_simulator call over it would be worse than the leak.
+// holds mu. Best-effort: a leftover temp dir is not worth failing a stop over.
 func (s *Server) clearScratchLocked() {
 	if s.scratchDir == "" {
 		return
@@ -248,16 +180,9 @@ func (s *Server) roundTrip(cmd harness.Command) (harness.Response, error) {
 	return s.roundTripLocked(cmd)
 }
 
-// roundTripLocked is roundTrip's body, assuming the caller already holds
-// harnessMu. Used directly by handlers (getScreenshot) that need to
-// extend the critical section past the round trip itself, to also cover
-// a subsequent read of a fixed path the response references.
-//
-// A harness that answers with a failure status is returned as errHarness, not as
-// a successful response the caller has to remember to inspect. Both harnesses
-// have always reported real failures this way - "failed to parse command",
-// "getDisplayFrame returned NULL", "entities list did not fit" - and every tool
-// used to discard them and report success.
+// roundTripLocked is roundTrip for callers already holding harnessMu, such as
+// getScreenshot, which must also read the fixed path the response references.
+// A harness failure status is returned as errHarness.
 func (s *Server) roundTripLocked(cmd harness.Command) (harness.Response, error) {
 	s.mu.Lock()
 	if s.sim == nil {
@@ -277,9 +202,7 @@ func (s *Server) roundTripLocked(cmd harness.Command) (harness.Response, error) 
 		return harness.Response{}, err
 	}
 
-	// Recorded even when the harness reported a failure below: which harness
-	// answered is true regardless of what it said, and a stale harness is a
-	// plausible reason for the failure.
+	// Recorded even on failure: a stale harness is a plausible cause.
 	s.mu.Lock()
 	s.harnessVersion = resp.HarnessVersion
 	s.harnessVersionSeen = true
@@ -293,8 +216,6 @@ func (s *Server) roundTripLocked(cmd harness.Command) (harness.Response, error) 
 
 // RegisterAll wires every tool onto server.
 func RegisterAll(server *mcp.Server, s *Server) {
-	// The closed sets, declared once each and shared by the tools that take them, so a
-	// new button or language cannot reach one tool's schema and miss another's.
 	languageEnum := map[string][]any{"language": asAny(crankSetup.Languages)}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -378,8 +299,6 @@ func RegisterAll(server *mcp.Server, s *Server) {
 			"the way a real crank does - reset_input is what hands it back. Optionally overrides the docked " +
 			"state too: crank_dock takes \"docked\" or \"undocked\", and omitting it leaves the dock reading " +
 			"whatever the game would really see.",
-		// The enum lists the three modes but cannot say "or leave it out": that is what
-		// the field being optional means, and it is the ordinary case.
 		InputSchema: closedSetSchema[SetCrankInput](map[string][]any{
 			"crank_dock": asAny(harness.DockModes),
 		}),

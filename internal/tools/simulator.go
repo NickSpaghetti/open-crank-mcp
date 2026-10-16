@@ -40,19 +40,8 @@ type RestartSimulatorOutput struct {
 	DataDir  string `json:"data_dir"`
 }
 
-// restartSimulator holds mu across the whole stop-then-relaunch, rather than
-// taking it three times around the outside of each step.
-//
-// The lock used to be released between Stop and Launch, which left a window
-// where s.sim pointed at a process that had already been killed: two concurrent
-// restarts could both get past the nil check and both launch, leaving one
-// Simulator running that nothing holds a handle to and therefore nothing can
-// ever stop. The MCP go-sdk dispatches tool calls concurrently by default, so
-// "two at once" is the normal case here rather than a hypothetical.
-//
-// Holding it across a Stop/Wait/Launch means other tools block for as long as
-// that takes, which is the intended behaviour: there is no useful answer any of
-// them could give about a simulator that is mid-restart.
+// restartSimulator holds mu across the whole stop-then-relaunch so concurrent
+// tool calls (the go-sdk dispatches them in parallel) cannot both launch.
 func (s *Server) restartSimulator(_ context.Context, _ *mcp.CallToolRequest, _ RestartSimulatorInput) (*mcp.CallToolResult, RestartSimulatorOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -86,11 +75,8 @@ type GetStatusOutput struct {
 	Running          bool   `json:"running"`
 	BundleID         string `json:"bundle_id,omitempty"`
 	HarnessReachable bool   `json:"harness_reachable"`
-	// HarnessWarning is set when the game's vendored harness copy does not match
-	// what this binary ships. Only the warning is exposed, not the raw
-	// fingerprint and not a nullable "unknown": a nullable field in a tool schema
-	// is what broke a real client once (see readSaveDataOutputSchema), and the
-	// tri-state belongs inside the server rather than in the caller's lap.
+	// HarnessWarning is set when the game's harness copy does not match this
+	// binary's. Not a nullable field: that schema shape broke a real client.
 	HarnessWarning string `json:"harness_warning,omitempty"`
 }
 
@@ -112,22 +98,12 @@ func (s *Server) getStatus(_ context.Context, _ *mcp.CallToolRequest, _ GetStatu
 	return nil, out, nil
 }
 
-// harnessDriftWarning describes a game whose vendored harness copy is not the one
-// this binary ships, or returns "" when it is.
-//
-// Deliberately not a harness round trip of its own: get_status has to keep
-// answering while a game's frame loop is wedged, which is most of what it is for,
-// so it reports what some earlier call already observed.
-//
-// The fingerprints are recomputed per call rather than cached. This is a SHA-256
-// over about 20KB of embedded bytes, on a tool a human or agent invokes
-// occasionally, so caching it would be machinery in exchange for nothing
-// measurable.
+// harnessDriftWarning describes a game whose vendored harness copy is not the
+// one this binary ships, or returns "". It uses the last observed version rather
+// than a round trip, so get_status still answers when the game is wedged.
 func (s *Server) harnessDriftWarning(reported string) string {
 	current, err := harness.IsCurrentFingerprint(s.harnessFS, reported)
 	if err != nil {
-		// The embedded harness could not be read, which is a broken binary rather
-		// than a stale game. Say that instead of blaming the game.
 		return fmt.Sprintf("could not fingerprint this server's own embedded harness: %v", err)
 	}
 	if current {

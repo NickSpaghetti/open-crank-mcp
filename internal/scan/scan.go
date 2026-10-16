@@ -1,31 +1,16 @@
-// Package scan holds the byte-level source scanning this project uses in place
-// of regular expressions.
-//
-// The reason is in https://regexlicensing.org/: a pattern that reads a source
-// file as a flat byte string can't tell code from a comment or a string
-// literal, and can't be widened to accept ordinary spacing without becoming
-// unreadable. internal/setup hit both walls patching real games, in ways that
-// either damaged files or silently failed to patch them - see the edge-case
-// tests there for the specific ones.
-//
-// Everything here is mechanism only. Whether a given argument or identifier
-// means anything is the caller's decision, which keeps the policy in
-// internal/setup where it can be read next to the thing it patches.
+// Package scan is byte-level source scanning used instead of regular
+// expressions, which can't tell code from comments or string literals.
 package scan
 
 import "strings"
 
-// IsSpace reports whether c is a byte C and CMake both treat as whitespace.
-// Carriage return is included, so a file written on Windows scans the same as
-// one written anywhere else.
+// IsSpace reports whether c is a byte C and CMake both treat as whitespace,
+// including \r so CRLF files scan the same.
 func IsSpace(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
-// IsWord reports whether c can appear in an identifier. ASCII only, matching
-// what Go's regexp \w accepted before this package replaced it - a scanner
-// using unicode.IsLetter here would start matching identifiers the old
-// patterns never did, which is a behavior change rather than a port.
+// IsWord reports whether c is an ASCII identifier byte.
 func IsWord(c byte) bool {
 	return c == '_' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
@@ -44,8 +29,7 @@ func PrecededByKeyword(content string, at int, keyword string) bool {
 	return i-len(keyword) == 0 || !IsWord(content[i-len(keyword)-1])
 }
 
-// LineNumber returns the 1-based line the given byte offset falls on, for
-// pointing a user at something in their own file.
+// LineNumber returns the 1-based line the given byte offset falls on.
 func LineNumber(content string, offset int) int {
 	if offset > len(content) {
 		offset = len(content)
@@ -55,9 +39,8 @@ func LineNumber(content string, offset int) int {
 
 var cSourceExtensions = []string{".c", ".cc", ".cpp", ".cxx", ".s", ".asm", ".m"}
 
-// IsCSourceFile reports whether a path names something a C toolchain compiles.
-// Case-insensitive on the extension only: ".S" and ".s" are both assembly, but
-// the rest of the path belongs to a filesystem that may not be.
+// IsCSourceFile reports whether a path names something a C toolchain compiles,
+// matching the extension case-insensitively.
 func IsCSourceFile(path string) bool {
 	lower := strings.ToLower(path)
 	for _, ext := range cSourceExtensions {

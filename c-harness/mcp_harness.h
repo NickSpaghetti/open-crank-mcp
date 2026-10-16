@@ -4,21 +4,12 @@
 #include <stddef.h>
 #include "pd_api.h"
 
-/* Which canonical harness this copy came from, reported in every response so the
-   Go side can tell whether a game's vendored copy has drifted.
-
-   Not maintained by hand: the `setup` tool substitutes a content fingerprint of
-   the canonical sources (this header and mcp_harness.c together) as it writes
-   this file into a game, so every harness change produces a new value with
-   nothing to remember. The literal below is what ships in this repo; a copy still
-   carrying it was not installed by `setup`, which the server reports as its own
-   case. See internal/harness/version.go. */
+/* Content fingerprint of this harness, stamped by `setup` and reported in every
+   response so the server can detect a drifted copy. Not maintained by hand. */
 #define MCP_HARNESS_VERSION "@HARNESS_VERSION@"
 
-/* The IPC files, relative to the game's sandboxed data directory.
-
-   MCP_RESPONSE_TMP_PATH exists so a response can be published by rename rather
-   than written in place - see the end of mcp_harness_update. */
+/* IPC files, relative to the game's data directory. Responses are written to
+   the tmp path and renamed into place. */
 #define MCP_COMMAND_PATH      "mcp/command.json"
 #define MCP_RESPONSE_PATH     "mcp/response.json"
 #define MCP_RESPONSE_TMP_PATH "mcp/response.tmp.json"
@@ -42,10 +33,8 @@ typedef struct {
     int duration_ms;
     float crank_angle;
     float crank_delta;
-    /* Resolved from the command's crank_dock string by mcp_parse_command:
-       crank_docked_set says whether the dock state should be overridden at all,
-       crank_docked what to force it to. Two ints in the struct, one
-       self-describing string on the wire - see internal/harness/protocol.go. */
+    /* From the wire's crank_dock string: whether to override the dock state,
+       and what to force it to. */
     int crank_docked;
     int crank_docked_set;
 } McpCommand;
@@ -60,24 +49,15 @@ typedef struct {
     int height;
     int row_bytes;
     char state[4096];
-    /* Raw JSON array string, built by mcp_build_entities_json. Empty means
-       "not requested", matching how an empty state means the same thing. */
+    /* Raw JSON array; empty means "not requested". */
     char entities[8192];
-    /* Always false for this harness: querySpritesInRect (the only bulk
-       sprite query the C API has) only matches sprites with a collide
-       rect set, so this can never be a complete list the way Lua's
-       getAllSprites() is. See mcp_build_entities_json. */
+    /* Always false: querySpritesInRect, the C API's only bulk sprite query,
+       only sees sprites with a collide rect. */
     int entities_complete;
 } McpResponse;
 
-/* Sentinel expiry meaning "never". Negative so it can never collide with a real
-   deadline, which is always now_ms + a duration and therefore non-negative.
-
-   Applies to buttons and the crank alike: a non-positive duration on any override
-   means "hold it until something replaces it". The two are not symmetric at the
-   *tool* layer - press_button substitutes a real duration and hold_button does not -
-   but that is policy, and it lives in Go. This file only implements the mechanism,
-   which is one rule. */
+/* Expiry meaning "never", set by a non-positive duration on any override.
+   Negative so it can't collide with a real deadline. */
 #define MCP_NO_EXPIRY (-1L)
 
 typedef struct {
@@ -88,16 +68,10 @@ typedef struct {
     float crank_override_angle;
     float crank_override_delta;
     int crank_override_docked;
-    /* Separate from crank_override_active: a crank override always takes over
-       angle and delta, but takes over the dock state only when a command asked
-       it to. Without the split, moving the angle would force a dock reading the
-       game never asked for, and "docked" is the crank's resting state on real
-       hardware, so that is not a harmless default to pick. */
+    /* The dock state is overridden only when a command asks, not whenever the
+       angle is. */
     int crank_override_docked_active;
-    /* MCP_NO_EXPIRY means the crank override is held until something replaces
-       it, rather than until a deadline. See mcp_override_apply_crank. */
     long crank_override_expires_at_ms;
-    /* Edge tracking for mcp_override_update_edges - see its definition. */
     int last_effective_pressed[6];
     int override_was_active_last_frame[6];
     PDButtons pending_pushed;
@@ -112,15 +86,8 @@ int mcp_json_escape_string(const char *in, char *out, size_t out_len);
 
 void mcp_override_init(McpOverrideState *ov);
 
-/* Drops every override - all six buttons and the crank - so the game reads real
-   input again. The only way back to passthrough for a crank held with no expiry.
-
-   Deliberately not mcp_override_init: that memsets, which would also clear
-   last_effective_pressed and override_was_active_last_frame, and a button that was
-   being held would then go from pressed to not-pressed with no released edge for the
-   game to see. Clearing only the override flags leaves the edge tracking intact, so
-   the next mcp_override_update_edges synthesizes the up edges by itself - the reset
-   looks to a game exactly like letting go. */
+/* Drops every override so the game reads real input again. Unlike
+   mcp_override_init it keeps edge tracking, so held buttons get a released edge. */
 void mcp_override_reset(McpOverrideState *ov);
 void mcp_override_apply_press(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms);
 void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms);
@@ -128,17 +95,9 @@ void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
                               int docked_set, int docked, int duration_ms, long now_ms);
 void mcp_override_expire(McpOverrideState *ov, long now_ms);
 
-/* Computes this frame's pending_pushed/pending_released from the override
-   state and the real current button bitmask, comparing against last
-   frame's effective (override-or-real) pressed state per button. Call
-   once per frame, after mcp_override_expire and before any new
-   press/release command is applied - so a fresh command's edge only
-   shows up starting the *next* frame's call, not the same frame it
-   arrived on (predictable latency, avoids depending on read-order within
-   a frame). Buttons never touched by an override are left alone: their
-   real pushed/released bits pass through mcp_override_get_button_state
-   unchanged, so there's no risk of double-firing a real edge the SDK
-   already reported on its own. */
+/* Computes this frame's synthetic pushed/released edges for overridden buttons.
+   Call once per frame after mcp_override_expire and before applying new
+   commands, so a command's edge shows up on the next frame. */
 void mcp_override_update_edges(McpOverrideState *ov, PDButtons real_current);
 
 void mcp_override_get_button_state(const McpOverrideState *ov,
@@ -152,27 +111,16 @@ int mcp_override_get_crank_docked(const McpOverrideState *ov, int real_docked);
    is not exactly one of the six known buttons. */
 int mcp_button_index(PDButtons button);
 
-/* Glue: calls through the PlaydateAPI it's given.
-
-   pd->system is `const struct playdate_sys*` in the real Simulator, and
-   verified in practice (not just by the type) to live in memory that's
-   actually read-only - casting the const away and writing through it
-   segfaults for real, it isn't just nominally unsafe. So unlike the Lua
-   harness (which patches playdate.buttonIsPressed etc. directly, since
-   Lua's table is genuinely mutable), a C game must call these wrapper
-   functions instead of pd->system->getButtonState/getCrankAngle/etc.
-   directly for overrides to take effect. That's a real, load-bearing
-   difference in how invasive wiring in each harness is - documented here
-   rather than left to be discovered as a mystery crash. */
+/* pd->system lives in read-only memory in the Simulator (writing through it
+   segfaults), so a C game must read input through the mcp_get_* wrappers for
+   overrides to take effect. */
 
 void mcp_harness_init(PlaydateAPI *pd);
 void mcp_harness_update(PlaydateAPI *pd);
 void mcp_harness_register_state(const char *(*fn)(void));
 
-/* Builds a JSON array of every sprite querySpritesInRect finds over the
-   full screen rect (only sprites with a collide rect set - see the
-   entities_complete comment on McpResponse) into out. Returns the
-   written length, or -1 if it didn't fit. */
+/* Builds a JSON array of the sprites querySpritesInRect finds on screen.
+   Returns the written length, or -1 if it didn't fit. */
 int mcp_build_entities_json(PlaydateAPI *pd, char *out, size_t out_len);
 
 void mcp_get_button_state(PlaydateAPI *pd, PDButtons *current, PDButtons *pushed, PDButtons *released);

@@ -10,18 +10,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// Validates the portable pair against the published 1.0.0 schemas.
-//
-// Both files, not just the manifest. The manifest's schema is closed
-// (additionalProperties: false), which is what catches a Claude Code field
-// leaking into it; the MCP schema is a oneOf over three transport variants,
-// which is what catches a missing `type`. Neither failure is visible by reading
-// the file.
-//
-// Against vendored copies rather than a live fetch - see plugin/schemas/README.md
-// for why, and `make plugin-upstream-check` for the job that notices upstream
-// moving. No new dependency: jsonschema-go already drives the tool schemas in
-// internal/tools.
+// Validates the portable pair against the vendored 1.0.0 schemas.
 func validateAgainstSchema(t *testing.T, schemaPath, docPath string) {
 	t.Helper()
 
@@ -62,22 +51,9 @@ func TestPortableMCPConfigMatchesTheSchema(t *testing.T) {
 	validateAgainstSchema(t, "plugin/schemas/1.0.0/mcp.schema.json", "plugin/mcp.json")
 }
 
-// stripLookaheadPattern removes the one pattern in the 1.0.0 schemas that Go
-// cannot compile, so the other ninety-odd percent of the schema still validates.
-//
-// plugin.schema.json constrains `name` with
-// ^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$ - a negative lookahead,
-// which RE2 does not implement, so jsonschema-go refuses to resolve the whole
-// document and nothing at all gets checked. Dropping just that key is strictly
-// better than skipping the file.
-//
-// The rule it expresses is not lost: TestPortableNameSatisfiesTheSpecPattern
-// checks it directly below, by hand rather than with a pattern, which is what
-// `make no-regex` requires of Go in this repo anyway.
-//
-// Narrow on purpose. It removes one named key rather than every pattern it
-// cannot compile, so a future schema revision that adds another unsupported one
-// fails loudly here instead of being silently skipped.
+// stripLookaheadPattern drops the `name` pattern, a negative lookahead RE2 can't
+// compile, which would stop jsonschema-go resolving the whole schema.
+// TestPortableNameSatisfiesTheSpecPattern checks that rule by hand.
 func stripLookaheadPattern(t *testing.T, schemaBytes []byte) []byte {
 	t.Helper()
 
@@ -107,9 +83,6 @@ func stripLookaheadPattern(t *testing.T, schemaBytes []byte) []byte {
 
 // The `name` rule from plugin.schema.json, checked by hand because the schema
 // expresses it with a lookahead Go cannot compile.
-//
-// It matters beyond conformance: `name` is the skill namespace, so a name a
-// client rejects is a plugin whose skills cannot be invoked.
 func TestPortableNameSatisfiesTheSpecPattern(t *testing.T) {
 	name, _ := readJSON(t, "plugin/plugin.json")["name"].(string)
 	if name == "" {

@@ -1,7 +1,5 @@
-// Package screenshot decodes the C harness's raw framebuffer dump into a
-// PNG. The Lua harness has no raw framebuffer accessor and already produces
-// a real PNG directly via simulator.writeToFile, so this package only ever
-// handles the C path.
+// Package screenshot decodes the C harness's raw framebuffer dump into a PNG.
+// The Lua harness writes a PNG itself, so only the C path comes through here.
 package screenshot
 
 import (
@@ -13,9 +11,7 @@ import (
 )
 
 const (
-	// Width, Height, and RowBytes mirror the SDK's LCD_COLUMNS, LCD_ROWS,
-	// and LCD_ROWSIZE, pinned via _Static_assert in
-	// c-harness/test/test_sdk_contract.c.
+	// The SDK's LCD_COLUMNS, LCD_ROWS and LCD_ROWSIZE, pinned in c-harness/test/test_sdk_contract.c.
 	Width    = 400
 	Height   = 240
 	RowBytes = 52
@@ -23,12 +19,8 @@ const (
 	rawSize = Height * RowBytes
 )
 
-// setBitIsWhite is the raw framebuffer's bit polarity: whether a set bit
-// means a white pixel (true) or a black pixel (false). The SDK's docs and
-// headers give the row layout (MSB-first, 52-byte stride) but never state
-// this. It's pinned empirically by internal/contracttest's C harness
-// screenshot assertion, which clears the fixture's display to a known
-// color before screenshotting.
+// setBitIsWhite is the framebuffer's bit polarity, which the SDK never documents.
+// Pinned empirically by internal/contracttest.
 const setBitIsWhite = true
 
 // DecodeRawToPNG decodes a raw Playdate framebuffer dump (1 bit per pixel,
@@ -47,13 +39,8 @@ func DecodeRawToPNG(raw []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// unpackGray expands the 1-bpp dump into an 8-bit grayscale image.
-//
-// Split out from the PNG encoding above so the two halves can be benchmarked
-// separately, because their relative cost is the whole question about this
-// function: the obvious complaint is that it touches every one of the 96,000
-// pixels individually, and measuring says that loop is the cheap half and zlib
-// is the rest. See decode_bench_test.go.
+// unpackGray expands the 1-bpp dump into an 8-bit grayscale image. Separate from
+// encoding so the two can be benchmarked; zlib dominates (decode_bench_test.go).
 func unpackGray(raw []byte) (*image.Gray, error) {
 	if len(raw) != rawSize {
 		return nil, fmt.Errorf("raw screenshot is %d bytes, want %d (%d rows * %d bytes/row)", len(raw), rawSize, Height, RowBytes)

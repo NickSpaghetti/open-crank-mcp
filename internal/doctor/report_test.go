@@ -8,8 +8,7 @@ import (
 	"github.com/NickSpaghetti/open-crank-mcp/internal/sdk"
 )
 
-// okFindings is a machine where everything is fine, as the base for varying one
-// thing at a time.
+// okFindings is a healthy machine, the base for varying one thing at a time.
 func okFindings() Findings {
 	return Findings{
 		Version: "0.1.0",
@@ -25,10 +24,8 @@ func okFindings() Findings {
 	}
 }
 
-// Describe emits a blank line before its "considered, in order" block when more
-// than one candidate was tried, so an SDK found on the second try is what
-// exercises writeIndented's blank-line branch. Without a case like this the
-// indenting helper is only ever fed single-paragraph text.
+// An SDK found on the second try makes Describe emit a blank line, exercising
+// writeIndented's blank-line branch.
 func TestReportIndentsAMultiParagraphSDKBlock(t *testing.T) {
 	f := okFindings()
 	f.SDK.Tried = []string{"/home/u/.Playdate/config (SDKRoot key)", "/home/u/PlaydateSDK (found)"}
@@ -40,8 +37,6 @@ func TestReportIndentsAMultiParagraphSDKBlock(t *testing.T) {
 	if !strings.Contains(got, "    /home/u/PlaydateSDK (found)") {
 		t.Errorf("candidate entries kept their own indent under the prefix:\n%s", got)
 	}
-	// The blank line separating the two paragraphs must stay blank, not become
-	// a line of trailing spaces.
 	if strings.Contains(got, "  \n") {
 		t.Errorf("a blank line was padded with the indent prefix:\n%q", got)
 	}
@@ -67,10 +62,6 @@ func TestReportHealthyMachine(t *testing.T) {
 	}
 }
 
-// The first-run case, and the one this project is most likely to be blamed for.
-// The wording is asserted, not just the presence of a warning: it has to read as
-// an inference, because what was measured is an absent file and what is claimed
-// is a history.
 func TestReportMacFirstRunIsPhrasedAsInference(t *testing.T) {
 	f := okFindings()
 	f.GOOS = "darwin"
@@ -98,9 +89,6 @@ func TestReportMacThatHasRunSaysNothing(t *testing.T) {
 	}
 }
 
-// "Not found" is the ordinary state on a fresh install, so the report says what
-// to do and stops rather than reporting four more failures caused by the same
-// missing thing.
 func TestReportNoSDK(t *testing.T) {
 	f := Findings{
 		Version: "0.1.0",
@@ -115,13 +103,11 @@ func TestReportNoSDK(t *testing.T) {
 	if !strings.Contains(got, "nothing can be checked without an SDK") {
 		t.Errorf("no-SDK report does not explain why the rest is missing:\n%s", got)
 	}
-	// Every line of the error indented, continuation lines included.
 	for _, want := range []string{"  could not find a Playdate SDK", "    /a", "    /b", "  Set PLAYDATE_SDK_PATH"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("no-SDK report is not indented as expected, missing %q:\n%s", want, got)
 		}
 	}
-	// The checks that cannot run must not appear as though they passed.
 	for _, unwanted := range []string{"shared libraries: ok", "launch:"} {
 		if strings.Contains(got, unwanted) {
 			t.Errorf("no-SDK report claims %q despite having no SDK:\n%s", unwanted, got)
@@ -129,11 +115,7 @@ func TestReportNoSDK(t *testing.T) {
 	}
 }
 
-// The heading must not appear over an empty list. Unreachable in production,
-// since DataDirCandidates always returns at least the in-SDK path - but the
-// boundary is what a mutation survives on, and a report that printed "Game data
-// would be looked for in, in order:" followed by nothing would be worse than
-// printing nothing at all.
+// Unreachable in production, since DataDirCandidates always returns at least one path.
 func TestReportOmitsTheDataDirHeadingWhenThereAreNone(t *testing.T) {
 	f := okFindings()
 	f.DataDirs = nil
@@ -163,9 +145,6 @@ func TestReportFailedChecks(t *testing.T) {
 	}
 }
 
-// "Launched and passed" and "never launched" are different facts, and collapsing
-// them would let a report claim a Simulator starts when nothing tried to start
-// it. This is what Findings.Launched exists for.
 func TestReportDistinguishesLaunchedFromSkipped(t *testing.T) {
 	skipped := okFindings().String()
 	f := okFindings()

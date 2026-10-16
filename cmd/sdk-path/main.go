@@ -1,12 +1,5 @@
 // Command sdk-path prints the Playdate SDK that internal/sdk resolves, and which
-// of its sources found it.
-//
-// SDK detection is otherwise invisible: it happens once at startup and only
-// shows up as tool behaviour. When it picks the wrong SDK, or none, this is the
-// shortest path to seeing why, without needing to start a server.
-//
-// The rendering lives in sdk.Paths.Describe so it can be tested; this is the
-// shell around it.
+// of its sources found it, for debugging SDK detection without a server.
 package main
 
 import (

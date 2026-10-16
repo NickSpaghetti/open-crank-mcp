@@ -1,24 +1,13 @@
 #!/usr/bin/env bash
-# Fails when PLAYDATE_SDK_VERSION is behind the SDK Panic currently ships.
-#
-# The sweep next to this one builds against `latest` and proves the harness still
-# works on it. That is compatibility, not currency: it passed every week while
-# 3.1.2 shipped and said nothing, because nothing was broken. What the pin being
-# stale actually did was make the Simulator show an update modal over its own
-# volume slider, which the shared suite read as a missing widget. This says it in
-# words instead.
-#
-# Weekly rather than per-PR. A new SDK is news about Panic's release schedule, not
-# about the pull request in front of you, and a PR should not go red for either
-# that or a briefly unreachable download server. Same placement and same reasoning
-# as scripts/plugin-upstream-check.sh.
+# Fails when PLAYDATE_SDK_VERSION is behind the SDK Panic currently ships. A stale
+# pin makes the Simulator show an update modal over its volume slider.
+# Weekly, not per-PR: Panic's release schedule shouldn't turn a PR red.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly MAKEFILE="$SCRIPT_DIR/../Makefile"
 
-# Panic publishes a `latest` alias that 302s to the real file. Following it is the
-# authoritative answer, and it is the same URL the Dockerfile fetches.
+# Panic's `latest` alias 302s to the real versioned file.
 readonly LATEST_URL=https://download.panic.com/playdate_sdk/Linux/PlaydateSDK-latest.tar.gz
 
 pinned=$(awk '$1 == "PLAYDATE_SDK_VERSION" { print $3; n++ } END { exit n == 1 ? 0 : 1 }' \
@@ -32,7 +21,7 @@ resolved=$(curl -sSIL --max-time 30 -o /dev/null -w '%{url_effective}' "$LATEST_
 	exit 1
 }
 
-# .../PlaydateSDK-3.1.2.tar.gz -> 3.1.2, by trimming rather than matching.
+# .../PlaydateSDK-3.1.2.tar.gz -> 3.1.2
 name=${resolved##*/}
 latest=${name#PlaydateSDK-}
 latest=${latest%.tar.gz}

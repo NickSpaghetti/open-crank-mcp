@@ -1,17 +1,5 @@
 // Command smoke-check confirms the Playdate SDK's shared libraries resolve, pdc
-// runs, and PlaydateSimulator launches without crashing or logging an error.
-// The environment-health check: run it when the SDK moves, the image changes, or
-// a host install is new.
-//
-// The checks themselves live in internal/doctor, because `open-crank-mcp -doctor`
-// answers the same question for someone who installed this as an editor plugin
-// and has neither this binary nor a Makefile. This is the shell around them, and
-// it keeps the one thing that is genuinely its own: the throwaway Xvfb, which is
-// about the environment a check runs in rather than the check. A desktop already
-// has a display; a container does not.
-//
-// display_*.go is what remains platform-specific here. The ldd-versus-stat split
-// moved with the check it belongs to.
+// runs, and PlaydateSimulator launches cleanly, wrapping internal/doctor's checks.
 package main
 
 import (
@@ -31,11 +19,6 @@ func main() {
 }
 
 func run() error {
-	// Resolved rather than read from the environment. This used to require
-	// PLAYDATE_SDK_PATH and build its paths by string concatenation, which was
-	// invisible while the only caller was the container that always sets it - and
-	// which made `make smoke-check-native` impossible to use for the exact thing
-	// it exists to check.
 	paths, err := sdk.Resolve(sdk.OSEnv())
 	if err != nil {
 		return err

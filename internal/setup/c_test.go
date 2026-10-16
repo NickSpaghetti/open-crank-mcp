@@ -6,13 +6,6 @@ import (
 	"testing"
 )
 
-// TestPatchInputCallsReplacesDirectSDKCalls reproduces a real gap found
-// testing against the Playdate SDK's own bundled "Sprite Game" example:
-// setupC wired in mcp_harness_init/update correctly, but the game's own
-// input-reading code called pd->system->getButtonState directly (as any
-// real, pre-existing C game does) - meaning press_button silently did
-// nothing, since pd->system is write-protected in memory and only the
-// mcp_get_* wrapper functions see the override.
 func TestPatchInputCallsReplacesDirectSDKCalls(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "src", "game.c")
@@ -79,13 +72,7 @@ func TestPatchInputCallsIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestPatchInputCallsAddsMissingInclude reproduces the second half of the
-// real gap found testing against the SDK's own "Sprite Game" example:
-// game.c (a file other than the one setupC designates as "the"
-// eventHandler file) got its direct SDK calls rewritten to mcp_get_*, but
-// never got #include "mcp_harness.h" added - it only "compiled" as an
-// implicit-declaration warning, since nothing else in the project already
-// included it.
+// A non-eventHandler file whose calls get rewritten needs its own include.
 func TestPatchInputCallsAddsMissingInclude(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "game.c")
@@ -113,9 +100,6 @@ void checkButtons(void) {
 	}
 }
 
-// TestPatchInputCallsDoesNotDuplicateExistingInclude covers a file that
-// already has the literal include (missile-command's aim.c, hand-wired
-// before this tool existed) - patchInputCalls shouldn't add a second one.
 func TestPatchInputCallsDoesNotDuplicateExistingInclude(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "aim.c")
@@ -226,14 +210,7 @@ func TestTeardownCStripsIncludeDirectories(t *testing.T) {
 	}
 }
 
-// TestSetupAndTeardownCFlatLayoutRoundTrip reproduces the SDK's own
-// "Sprite Game" example's actual shape: no src/ directory at all - the
-// eventHandler file and a second file with direct input calls both live
-// at the project root. Without patchCMakeIncludeDirectories and
-// patchInputCalls' own #include insertion, a bare #include
-// "mcp_harness.h" (always copied into sourceDir/src/) can't resolve from
-// either file, and game.c's rewritten calls have no declaration in scope
-// at all.
+// The SDK's "Sprite Game" shape: sources at the project root, no src/.
 func TestSetupAndTeardownCFlatLayoutRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "CMakeLists.txt"),
@@ -281,9 +258,7 @@ void checkButtons(void) {
 	if err != nil {
 		t.Fatalf("Teardown: %v", err)
 	}
-	// patchInputCalls' rewrite in game.c is never reversed (same
-	// documented trade-off as TestSetupThenTeardownCWithInputCallsIsANoOp),
-	// so teardown here is correctly a full no-op.
+	// game.c's rewritten input calls make teardown a full no-op.
 	if len(teardownResult.FilesRemoved) != 0 || len(teardownResult.FilesPatched) != 0 {
 		t.Fatalf("Teardown() = %+v, want a full no-op - mcp_get_button_state() is still called in game.c", teardownResult)
 	}
@@ -369,15 +344,7 @@ func TestPatchCMakeListsNoMatchDoesNotGuess(t *testing.T) {
 	}
 }
 
-// TestTeardownCPreservesHandWrittenReferences reproduces a real bug found
-// testing against missile-command's C port (hand-wired before this tool
-// existed): CMakeLists.txt and main.c reference mcp_harness.c/.h in plain,
-// unmarked form. An earlier version of this fix preserved the files but
-// still stripped CMakeLists.txt's reference (the only signal it can act
-// on, since it has no markers) - that "compiled" but crashed at runtime,
-// since shared libraries link with undefined symbols by default. Teardown
-// must be a full no-op here: nothing removed, CMakeLists.txt untouched,
-// main.c untouched.
+// Unmarked references make teardown a full no-op, CMakeLists included.
 func TestTeardownCPreservesHandWrittenReferences(t *testing.T) {
 	dir := t.TempDir()
 	cmakePath := filepath.Join(dir, "CMakeLists.txt")
@@ -550,11 +517,6 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {
 	}
 }
 
-// TestPatchEventHandlerInitRecognizesPreExistingHandWiring covers a
-// project wired by hand before this tool existed (no marker comments,
-// e.g. missile-command's own C port at the time this was built) - the
-// include and init call are already there, just unmarked, and shouldn't
-// be duplicated.
 func TestPatchEventHandlerInitRecognizesPreExistingHandWiring(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.c")
@@ -585,13 +547,8 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {
 
 func TestPatchUpdateCallbackRecognizesPreExistingHandWiringAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
-	// Mirrors missile-command's actual C structure: the PlaydateAPI
-	// pointer is declared (non-static, extern'd via a header) in a
-	// different file than the update callback that uses it - so it's
-	// never textually present in mainPath's own content, only used by
-	// name. patchUpdateCallback must not report a false manual step when
-	// the call is already there, regardless of whether its heuristic can
-	// find the variable's declaration.
+	// The PlaydateAPI pointer is declared in another file, extern'd via a
+	// header, so the variable search can't see it here.
 	mainPath := filepath.Join(dir, "src", "main.c")
 	mustWrite(t, mainPath, `#include "pd_api.h"
 #include "entity.h"
@@ -720,13 +677,7 @@ func TestSetupAndTeardownCRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSetupThenTeardownCWithInputCallsIsANoOp documents a deliberate
-// trade-off: patchInputCalls' pd->system->getButtonState replacements are
-// never reversed by teardown (no clean way to mark a mid-expression
-// substitution the way whole-line inserts use comment markers), so once
-// setup has converted any input call, teardown becomes a full no-op for
-// that project going forward - the same conservative choice already
-// applied to hand-written init/update calls, not a bug.
+// Rewritten input calls are unmarked and never reversed, so teardown is a no-op.
 func TestSetupThenTeardownCWithInputCallsIsANoOp(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "CMakeLists.txt"),
@@ -769,15 +720,7 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
 	}
 }
 
-// setUpdateCallback naming a function that is defined in no .c file at all -
-// e.g. it lives in a header as a static inline, or the project is mid-refactor.
-// The callback's own definition is what patchUpdateCallback needs in order to
-// insert a first statement into it, so with no definition anywhere this has to
-// report a manual step rather than guess or fail.
-//
-// Covered because findFunctionInSourceDir, which this branch depends on, now
-// walks via the shared walkCSources helper - so the "walked everything and found
-// nothing" answer is worth asserting rather than assuming.
+// A callback defined in no .c file (e.g. a static inline in a header).
 func TestPatchUpdateCallbackReportsManualStepWhenCallbackDefinedNowhere(t *testing.T) {
 	dir := t.TempDir()
 	mainPath := filepath.Join(dir, "src", "main.c")
@@ -790,8 +733,6 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg) {
     return 0;
 }
 `)
-	// A second .c file, so the walk has something to read and reject rather
-	// than finding an empty directory.
 	mustWrite(t, filepath.Join(dir, "src", "other.c"), `#include "pd_api.h"
 static void unrelated(void) { }
 `)
@@ -809,10 +750,7 @@ static void unrelated(void) { }
 	if !strings.Contains(manualStep, "update_from_a_header") {
 		t.Fatalf("patchUpdateCallback() manualStep = %q, want it to name the callback it could not find", manualStep)
 	}
-	// Specifically the "no definition anywhere" message, not the
-	// "found it but no PlaydateAPI pointer is visible" one. Both name the
-	// callback, so asserting on the name alone passes either way - which is
-	// exactly what mutation testing caught here.
+	// Both manual steps name the callback, so check this one's wording.
 	if !strings.Contains(manualStep, "own definition") {
 		t.Fatalf("patchUpdateCallback() manualStep = %q, want the could-not-find-the-definition message", manualStep)
 	}

@@ -17,9 +17,6 @@ func envWith(home string, files fstest.MapFS) sdk.Env {
 	}
 }
 
-// The whole point of taking goos as a parameter rather than a build tag: the
-// darwin branch is exercised here on whatever platform CI happens to be, which
-// is where internal/sdk/layout.go already landed for the same reason.
 func TestSimulatorEverRan(t *testing.T) {
 	const home = "/Users/someone"
 	prefs := home + "/" + simulatorPrefs
@@ -46,8 +43,7 @@ func TestSimulatorEverRan(t *testing.T) {
 			wantKnown: true,
 		},
 		{
-			// Not "has never run" - unknowable. Reporting false/true here would
-			// put a macOS warning in front of every Linux user.
+			// Unknowable off macOS, not "never ran".
 			name:      "linux, not applicable",
 			goos:      "linux",
 			files:     fstest.MapFS{},
@@ -73,8 +69,6 @@ func TestSimulatorEverRan(t *testing.T) {
 }
 
 // A home directory that cannot be determined is "unknown", never "never ran".
-// The difference matters: unknown prints nothing, never-ran prints a warning,
-// and a warning produced by a failed lookup would be noise nobody can act on.
 func TestSimulatorEverRanUnknownWithoutHome(t *testing.T) {
 	env := sdk.Env{
 		FS:      fstest.MapFS{},
@@ -86,10 +80,7 @@ func TestSimulatorEverRanUnknownWithoutHome(t *testing.T) {
 	}
 }
 
-// Guards the fs.FS key conversion. An absolute OS path is not a valid fs.FS key
-// until its leading separator is trimmed, and getting that wrong fails open -
-// fs.Stat returns an error, which reads as "never ran" and produces a warning on
-// every Mac. Same trap internal/sdk documents with fsKey.
+// A rooted fs.FS key fails fs.Stat, which would read as "never ran" on every Mac.
 func TestSimulatorPrefsKeyIsRootless(t *testing.T) {
 	const home = "/Users/someone"
 	key := home[1:] + "/" + simulatorPrefs

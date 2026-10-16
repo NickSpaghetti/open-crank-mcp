@@ -31,9 +31,6 @@ func TestGetGameStateWhenRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getGameState: %v", err)
 	}
-	// The game's own state is passed through as the raw JSON it produced, so
-	// what comes back out is bytes rather than a decoded map. That is the point:
-	// its shape is game-defined and this server never had a schema for it.
 	raw, ok := out.(json.RawMessage)
 	if !ok {
 		t.Fatalf("getGameState() = %v (%T), want json.RawMessage", out, out)
@@ -89,14 +86,7 @@ func TestListEntitiesWhenRunning(t *testing.T) {
 	}
 }
 
-// A malformed entities array is now an error rather than a silently shortened
-// list, and that is a deliberate change of behaviour. The old hand-rolled decode
-// skipped anything that was not a map, so a harness whose entity shape drifted
-// would quietly return fewer sprites than the game has - the same class of silent
-// wrongness this whole change set exists to remove, and the one thing
-// list_entities must never do, since a caller cannot tell a missing sprite from
-// an absent one. Note that only a *type* change trips this: encoding/json ignores
-// fields it does not know, so a harness adding a field stays compatible.
+// A malformed entities array is an error, not a silently shortened list.
 func TestListEntitiesRejectsMalformedEntries(t *testing.T) {
 	s := newTestServer(t)
 	startFakeHarness(t, s.dataDir, map[string]any{
@@ -109,8 +99,6 @@ func TestListEntitiesRejectsMalformedEntries(t *testing.T) {
 	if err == nil {
 		t.Fatal("listEntities() succeeded on a malformed entities array, want an error")
 	}
-	// Not a harness-reported failure and not a missing simulator: a response this
-	// server could not decode is a genuine unexpected condition.
 	if errors.Is(err, errHarness) || errors.Is(err, errNotRunning) {
 		t.Fatalf("listEntities() error = %v, want a decode error", err)
 	}

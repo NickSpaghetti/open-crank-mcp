@@ -14,19 +14,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// TestRestartThenScreenshot answers one question: is the post-restart
-// screenshot failure seen on Windows CI actually specific to Windows.
-//
-// Nothing else in this repo drives restart followed by a real screenshot.
-// TestSDKContract screenshots but never restarts, and it hands the Simulator
-// the data directory as argv[2] rather than a scratch directory, so it misses
-// the mechanism entirely. mcp-auto-test skips both tools by name. The Windows
-// contract test is the first thing to try the sequence, which makes "it only
-// fails on Windows" an untested claim rather than a finding.
-//
-// Driven through the MCP tools rather than through raw harness round trips,
-// because restart_simulator is where the scratch directory is replaced and that
-// only happens inside the server.
+// TestRestartThenScreenshot drives restart then a real screenshot through the MCP
+// tools, since restart_simulator replaces the scratch directory inside the server.
 func TestRestartThenScreenshot(t *testing.T) {
 	if os.Getenv("OPEN_CRANK_SDK_CONTRACT") == "" {
 		t.Skip("OPEN_CRANK_SDK_CONTRACT not set - run `make sdk-contract-check`")
@@ -34,8 +23,6 @@ func TestRestartThenScreenshot(t *testing.T) {
 	paths := contractSDK(t)
 	repoRoot := findRepoRoot(t)
 
-	// Its own display number, matching the convention in the other contract
-	// tests: each is self-contained rather than relying on execution order.
 	startDisplay(t, ":97")
 	pdxPath := buildLuaFixture(t, repoRoot)
 
@@ -77,9 +64,8 @@ func TestRestartThenScreenshot(t *testing.T) {
 		_, _ = client.CallTool(context.Background(), &mcp.CallToolParams{Name: "stop_simulator"})
 	})
 
-	// A real round trip, not get_status. harness_reachable is a stat on the data
-	// directory, so after a restart it is true before the new game is up, and
-	// gating on it would make this test agree with a broken one.
+	// A real round trip, not get_status: harness_reachable is a directory stat and
+	// is true after a restart before the new game is up.
 	waitForHarness := func(stage string) {
 		t.Helper()
 		deadline := time.Now().Add(60 * time.Second)

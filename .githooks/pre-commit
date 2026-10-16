@@ -1,37 +1,7 @@
 #!/usr/bin/env bash
-# Runs the parts of the test suite that the staged changes could plausibly break.
-#
-# Enable with `make hooks`. This lives in the repo rather than in .git/hooks so it
-# is reviewable and shared; `make hooks` points core.hooksPath here rather than
-# copying, so there is never a stale copy.
-#
-# Bypass once with `git commit --no-verify`.
-#
-# Why it is scoped rather than just running `make test`. Measured, warm caches:
-#
-#   test-shared-browser  75s   \ 80% of the runtime, and neither can be affected
-#   mutation-test        33s   / by a change that does not touch their inputs
-#   sdk-contract-check   14s
-#   smoke-check          10s
-#   test-c-harness        3s
-#   go-test, shared-unit ~0s
-#
-# Running all of it on a Go-only commit spends 75 seconds proving that a browser
-# test which reads no Go is still fine. The filters below mirror the paths-filter
-# blocks in .github/workflows/ci.yml, for the same reasons and with the same
-# groupings; keep them in step.
-#
-# The tradeoff, stated plainly: scoping means a commit can pass here and fail CI,
-# because CI always runs everything. That is the correct division. This is a fast
-# local check on the way past, not the gate. Run `make test` when you want the
-# gate, and CI runs it regardless.
-#
-# Known limitation, unchanged: this tests the WORKING TREE, not the staged
-# snapshot. Stage some changes and leave others unstaged and what runs is not
-# exactly what you are committing. `git stash --keep-index` is the usual fix and
-# is not worth it here, since the suite bind-mounts this directory into
-# containers and a failure partway through would leave a stash to reconcile on
-# top of a failed commit.
+# Runs the parts of the test suite the staged changes could break; CI runs all of it.
+# Enable with `make hooks`, bypass with --no-verify. Tests the working tree, not the
+# staged snapshot.
 set -uo pipefail
 
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
@@ -41,14 +11,7 @@ if [ -z "$staged" ]; then
   exit 0
 fi
 
-# Markdown-only commits run the doc link check and nothing else. It is a grep over
-# seventeen files, so it costs nothing on a typo fix, and the hook stays cheap enough not
-# to get bypassed out of habit - a hook that is always bypassed being worse than no hook.
-#
-# This used to run *nothing at all* for a Markdown-only commit, on the grounds that no
-# suite read a .md file. That was true and it was the gap the README split fell into:
-# guides were extracted, several cross-references were left pointing at nothing, and no
-# check anywhere had an opinion about it.
+# Markdown-only commits run the doc link check and nothing else.
 if ! printf '%s\n' "$staged" | grep -qv '\.md$'; then
   echo "pre-commit: only Markdown staged"
   if ! make check-doc-links; then
@@ -66,21 +29,12 @@ want_sim=false       # anything that changes what a real Simulator does
 want_shared=false    # the shared/VNC profile and its browser tests
 
 matches '\.go$|^go\.(mod|sum)$'                              && want_go=true
-# internal/plugincontract reads the manifests, so a plugin.json edit can break a Go
-# test with no .go file staged: the version every manifest repeats, the portable
-# pair against the vendored 1.0.0 schemas, and the rules a schema cannot express.
+# internal/plugincontract reads the manifests, so a plugin/ edit can break a Go test.
 matches '^plugin/'                                           && want_go=true
 matches '^c-harness/'                                        && want_c=true
 matches '\.go$|^lua/|^c-harness/|^internal/(harness|simulator|build|screenshot|contracttest)/' && want_sim=true
-# The shared/VNC profile's own files, named rather than caught by a `^scripts/`
-# wildcard. That wildcard fired the 75-second browser suite for any script in the
-# repo - deleting an unrelated test harness was enough.
-#
-# It was a wildcard for a real reason, recorded in ci.yml: a named list went stale
-# once, when `byos` was renamed to `shared`, and quietly stopped matching. A filter
-# naming a path that no longer exists matches nothing and passes while testing
-# nothing. So the names are checked against the tree here, and a missing one stops
-# the commit instead of narrowing the filter in silence.
+# Named rather than `^scripts/`, so unrelated scripts don't fire the browser suite.
+# Each name is checked against the tree, since a stale name would silently match nothing.
 shared_paths='scripts/shared-check.sh
 scripts/shared-lib.sh
 scripts/shared-watch.sh
@@ -103,9 +57,7 @@ SHARED_PATHS
 
 matches "^($(printf '%s' "$shared_paths" | sed 's/\./\\./g' | paste -sd'|' -))(\$|/)" && want_shared=true
 
-# Docker is needed by everything except the two host-only suites, so check for it
-# once, up front, rather than letting the first container-dependent stage fail
-# several seconds in with whatever the daemon socket produces.
+# Checked once up front, rather than failing mid-run with a daemon socket error.
 if $want_c || $want_sim || $want_shared; then
   if ! docker info >/dev/null 2>&1; then
     echo "pre-commit: Docker is not running, and the staged changes need it." >&2
@@ -122,18 +74,13 @@ run() {
   fi
 }
 
-# Cheapest first, so an obvious break fails in seconds rather than after a
-# container boot. no-regex leads: it is a git ls-files and a grep, and a rule
-# with no allowlist is worth enforcing before the commit rather than after.
-#
-# check-doc-links is unconditional rather than gated on a want_* flag: a link breaks when
-# a *target* moves, and a commit that renames a heading or deletes a file need not touch
-# any .md itself.
+# Cheapest first. check-doc-links is unconditional: a link breaks when its target
+# moves, which needn't touch any .md.
 run check-doc-links
 $want_go     && run no-regex
 $want_go     && run go-test
 $want_shared && run test-shared-unit
-# Diff-scoped: seconds instead of 33, and the full run happens in CI anyway.
+# Diff-scoped; the full run happens in CI.
 $want_go     && run mutation-test-diff
 $want_c      && run test-c-harness
 $want_sim    && run smoke-check

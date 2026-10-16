@@ -40,8 +40,7 @@ func TestIdentifier(t *testing.T) {
 	}{
 		{content: "pd->system", at: 0, wantName: "pd", wantEnd: 2},
 		{content: "g_pd2 = 0", at: 0, wantName: "g_pd2", wantEnd: 5},
-		// Identifiers are read as the patterns did, so a leading digit is not
-		// rejected here - callers that care check it themselves.
+		// A leading digit is not rejected here; callers check it.
 		{content: "2fast", at: 0, wantName: "2fast", wantEnd: 5},
 		{content: "->pd", at: 0, wantName: "", wantEnd: 0},
 		{content: "pd", at: 2, wantName: "", wantEnd: 2},
@@ -74,8 +73,6 @@ func TestLiteral(t *testing.T) {
 	if end, ok := Literal(content, 2, "->"); !ok || end != 4 {
 		t.Errorf("Literal() = %d, %v, want 4, true", end, ok)
 	}
-	// Offset zero is a valid place to match, and so is a literal that ends
-	// exactly at the end of the content.
 	if end, ok := Literal(content, 0, "pd"); !ok || end != 2 {
 		t.Errorf("Literal() at offset 0 = %d, %v, want 2, true", end, ok)
 	}
@@ -85,8 +82,7 @@ func TestLiteral(t *testing.T) {
 	if _, ok := Literal(content, 2, "=="); ok {
 		t.Error("Literal() matched the wrong bytes")
 	}
-	// Past the end and before the start both report no match rather than
-	// panicking - callers chain these without checking bounds first.
+	// Out of range reports no match rather than panicking.
 	if _, ok := Literal(content, len(content)-1, "->"); ok {
 		t.Error("Literal() matched past the end of the content")
 	}
@@ -105,8 +101,6 @@ func TestTokenIndex(t *testing.T) {
 	}{
 		{name: "plain", content: "if (event == kEventInit)", token: "kEventInit", want: 13},
 		{
-			// The trap a hand-written search gets wrong first, in both
-			// directions.
 			name:    "inside_a_longer_identifier_before",
 			content: "kEventInitDone; kEventInit;",
 			token:   "kEventInit",
@@ -120,8 +114,6 @@ func TestTokenIndex(t *testing.T) {
 		},
 		{name: "from_skips_earlier_matches", content: "kEventInit kEventInit", token: "kEventInit", from: 1, want: 11},
 		{
-			// The token is the entire content, so the search has to consider
-			// the offset where content length and token length are equal.
 			name:    "token_is_the_whole_content",
 			content: "kEventInit",
 			token:   "kEventInit",
@@ -158,7 +150,6 @@ func TestBalancedParens(t *testing.T) {
 	}{
 		{name: "simple", content: "(void)", at: 0, want: 5, wantOK: true},
 		{
-			// The case the "no parens inside" character class could not do.
 			name:    "nested",
 			content: "(int (*tick)(void), void *ud)",
 			at:      0,
@@ -167,8 +158,6 @@ func TestBalancedParens(t *testing.T) {
 		},
 		{name: "not_at_a_paren", content: "f(void)", at: 0},
 		{name: "unterminated", content: "(void", at: 0},
-		// Exactly at the end, and past it: neither may read a byte that is not
-		// there.
 		{name: "at_the_end", content: "()", at: 2},
 		{name: "past_the_end", content: "()", at: 5},
 		{name: "negative", content: "()", at: -1},
@@ -206,8 +195,6 @@ func TestBlockOpenAfter(t *testing.T) {
 		{name: "compound_condition", content: " == kEventInit && !inited) {", want: 27, wantOK: true},
 		{name: "brace_on_the_next_line", content: ")\n{\n", want: 2, wantOK: true},
 		{
-			// A braceless branch, and an expression using the token: both end
-			// at a ";" with no block to insert into.
 			name:    "semicolon_first",
 			content: ")\n\t\tsetup();\n",
 			wantOK:  false,

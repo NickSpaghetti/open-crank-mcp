@@ -7,16 +7,14 @@ import (
 	"testing"
 )
 
-// The only frontmatter fields the Agent Skills spec allows. Everything else is a
-// client extension, and a conforming client skips the whole skill rather than
-// ignoring the field - measured on Cursor, which dropped four of these five.
+// The only frontmatter fields the Agent Skills spec allows. Conforming clients
+// (e.g. Cursor) skip a skill with any other field rather than ignoring it.
 var agentSkillsFields = map[string]bool{
 	"name": true, "description": true, "license": true,
 	"compatibility": true, "metadata": true, "allowed-tools": true,
 }
 
-// skillFiles returns every plugin/skills/*/SKILL.md, which is the fixed location
-// the 1.0.0 spec discovers skills from.
+// skillFiles returns every plugin/skills/*/SKILL.md.
 func skillFiles(t *testing.T) []string {
 	t.Helper()
 	dir := filepath.Join(repoRoot, "plugin", "skills")
@@ -41,10 +39,7 @@ func skillFiles(t *testing.T) []string {
 }
 
 // readSkill splits a SKILL.md into its top-level frontmatter keys and its body.
-//
-// Hand-parsed rather than with a YAML library, because the repo has no YAML
-// dependency and this needs only the keys at column zero: an indented line
-// belongs to whatever key opened the block, and `metadata` is allowed to nest.
+// Only column-zero keys matter, so it is hand-parsed rather than adding YAML.
 func readSkill(t *testing.T, path string) (keys []string, body string) {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -59,7 +54,6 @@ func readSkill(t *testing.T, path string) (keys []string, body string) {
 		if strings.TrimSpace(line) == "---" {
 			return keys, strings.Join(lines[i+2:], "\n")
 		}
-		// Indented lines are values inside the key above them, not keys.
 		if line == "" || line[0] == ' ' || line[0] == '\t' || line[0] == '#' || line[0] == '-' {
 			continue
 		}
@@ -71,10 +65,7 @@ func readSkill(t *testing.T, path string) (keys []string, body string) {
 	return nil, ""
 }
 
-// The check that would have caught the shipped bug: four skills carried
-// disable-model-invocation, so every client but Claude Code silently loaded one
-// skill out of five. `claude plugin validate --strict` does not look at skill
-// frontmatter, so nothing else in the toolchain sees this.
+// `claude plugin validate --strict` does not check skill frontmatter.
 func TestSkillsCarryOnlyAgentSkillsFields(t *testing.T) {
 	for _, path := range skillFiles(t) {
 		keys, _ := readSkill(t, path)
@@ -91,9 +82,7 @@ func TestSkillsCarryOnlyAgentSkillsFields(t *testing.T) {
 	}
 }
 
-// The spec requires `name` to match the directory, and a rename is where the two
-// drift: the directory moves, the frontmatter does not, and the skill loads under
-// a name nothing references.
+// The spec requires `name` to match the directory.
 func TestSkillNamesMatchTheirDirectories(t *testing.T) {
 	for _, path := range skillFiles(t) {
 		dir := filepath.Base(filepath.Dir(path))
@@ -115,9 +104,7 @@ func TestSkillNamesMatchTheirDirectories(t *testing.T) {
 	}
 }
 
-// $ARGUMENTS is a Claude Code substitution with no Agent Skills equivalent, so a
-// body using it loads on a conforming client and then shows the model a literal
-// dollar sign. Loading is not the same as working.
+// $ARGUMENTS is a Claude Code substitution other Agent Skills clients show literally.
 func TestSkillBodiesUseNoClaudeSubstitutions(t *testing.T) {
 	for _, path := range skillFiles(t) {
 		_, body := readSkill(t, path)

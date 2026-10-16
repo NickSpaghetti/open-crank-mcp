@@ -1,45 +1,17 @@
 # Five services, differing only in how a human sees and hears the Simulator.
-# Every one of them runs the same server against the same SDK.
 #
-#   simulator             no profile. Headless under Xvfb. What the MCP tools
-#                         need and nothing more, and what `docker compose run`
-#                         uses when an MCP client starts the server itself.
-#   simulator-visual      profile: visual. Forwards the host's X11 socket and
-#                         PulseAudio. Linux only.
-#   simulator-visual-wsl  profile: wsl. The same idea through WSLg's display
-#                         and audio. Untested against a real Windows machine.
-#   simulator-vnc         profile: vnc. Browser fallback, any OS. Occupies the
-#                         terminal.
-#   simulator-shared      profile: shared. The only long-lived one: started
-#                         detached so an agent and a human can drive the same
-#                         Simulator process at once. See its own comment below.
+#   simulator             no profile. Headless under Xvfb; what an MCP client's
+#                         `docker compose run` uses.
+#   simulator-visual      profile: visual. Host X11 and PulseAudio. Linux only.
+#   simulator-visual-wsl  profile: wsl. WSLg's display and audio. Untested on
+#                         real Windows.
+#   simulator-vnc         profile: vnc. Browser fallback, any OS.
+#   simulator-shared      profile: shared. Long-lived, so an agent and a human
+#                         drive the same Simulator.
 #
-# The `shared` profile was called `byos` ("bring your own simulator") until
-# Checkpoint 6. It runs its own Simulator and shares it, so the name described
-# something it never did.
-#
-# Every service pins `platform: linux/amd64`, because the SDK these images carry is
-# Panic's *Linux* SDK, and Panic ships that one for x86_64 only - its `pdc` and
-# `PlaydateSimulator` are EM_X86_64 ELF binaries with no ARM64 counterpart to
-# install. So there is nothing for an arm64 image to drive, the same reason the
-# release matrix has no `linux/arm64` entry (see docs/ROADMAP.md).
-#
-# This is about the Linux SDK in the container and nothing else. It says nothing
-# about the macOS SDK a Mac user installs for native mode: Panic ships that one as a
-# universal binary (`lipo -archs` reports `x86_64 arm64`), so native mode on Apple
-# Silicon runs the Simulator natively and never involves Rosetta. Container mode on
-# the same machine emulates; native mode on the same machine does not.
-#
-# Without the pin, Docker on an Apple Silicon Mac or an arm64 Linux host builds an
-# arm64 image, while the Dockerfile installs the amd64 Go toolchain unconditionally.
-# The two only meet at the cgo step, where the amd64 `go` hands `-m64` to the image's
-# arm64 gcc:
-#
-#     gcc: error: unrecognized command-line option '-m64'
-#
-# which is what `make build` failed with on macOS. Emulating the whole container
-# covers the gap: Rosetta (Docker Desktop, General tab) on an Apple Silicon Mac,
-# qemu-user binfmt on arm64 Linux. On an amd64 host the pin is a no-op.
+# platform: linux/amd64 because Panic ships the Linux SDK for x86_64 only. Without
+# it an arm64 host builds an arm64 image around the amd64 Go toolchain, and cgo
+# fails with "gcc: unrecognized command-line option '-m64'".
 services:
   simulator:
     platform: linux/amd64
@@ -73,9 +45,8 @@ services:
     stdin_open: true
     tty: true
 
-  # Windows 11 + WSL2 + Docker Desktop. Run from inside a WSL2 distro's shell.
-  # WSLg exports DISPLAY/WAYLAND_DISPLAY/PULSE_SERVER there already. Untested
-  # against a real Windows machine, see README.
+  # Run from inside a WSL2 distro's shell, where WSLg exports DISPLAY,
+  # WAYLAND_DISPLAY and PULSE_SERVER.
   simulator-visual-wsl:
     platform: linux/amd64
     build:
@@ -95,9 +66,7 @@ services:
     stdin_open: true
     tty: true
 
-  # Universal fallback. No host display or audio integration. Works the same
-  # on Linux, Windows, and macOS through Docker Desktop's normal port
-  # publishing. Video over noVNC in a browser, audio as an MP3 stream.
+  # No host display or audio integration: video over noVNC, audio as an MP3 stream.
   simulator-vnc:
     platform: linux/amd64
     build:
@@ -106,32 +75,16 @@ services:
         PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["vnc"]
     command: ["bash", "/workspace/scripts/run-vnc.sh"]
-    # Loopback by default. x11vnc runs with -nopw -shared (see run-vnc.sh),
-    # so whoever reaches 6080 gets an unauthenticated interactive session on
-    # the same display - able to drive the Simulator and the container's
-    # window manager, not just watch. A bare "6080:6080" would publish on
-    # 0.0.0.0, and Docker's iptables rules land ahead of the filter table,
-    # so a host ufw/firewalld rule you'd expect to cover that port doesn't.
-    # Reaching this from another machine is still supported (pd-audio.js
-    # builds its stream URL from location.hostname for exactly that case):
-    # set BIND_ADDR=0.0.0.0 to opt in, or leave this alone and forward the
-    # ports over SSH, which is the better answer given -nopw.
+    # Loopback by default: x11vnc runs -nopw, and Docker's published ports bypass
+    # ufw/firewalld. BIND_ADDR=0.0.0.0 opts in to remote access; SSH forwarding is safer.
     ports:
       - "${BIND_ADDR:-127.0.0.1}:6080:6080"
       - "${BIND_ADDR:-127.0.0.1}:8000:8000"
     stdin_open: true
     tty: true
 
-  # A persistent, shared session: unlike every profile above, this one
-  # stays running in the background (`make up-shared` starts it detached),
-  # so an MCP client can `docker compose exec` a real open-crank-mcp
-  # process into the *same* container a human is watching via the VNC
-  # video/audio URLs below - both looking at, and both able to drive, the
-  # exact same live Simulator process. Every other profile only gives you
-  # one or the other: `docker compose run` (what an MCP client normally
-  # uses) always creates a brand new container per connection, so it was
-  # never the same container/display/filesystem as whatever `up-vnc`
-  # separately started.
+  # Runs detached so an MCP client can `docker compose exec` into the same
+  # container a human watches over VNC; `docker compose run` would make a new one.
   simulator-shared:
     platform: linux/amd64
     build:
@@ -140,43 +93,19 @@ services:
         PLAYDATE_SDK_VERSION: ${PLAYDATE_SDK_VERSION:-3.1.2}
     profiles: ["shared"]
     environment:
-      # Set at the container level, not just inside run-vnc.sh's own
-      # process tree - a later `docker compose exec`'d open-crank-mcp
-      # process (and the Simulator it launches) is a sibling process, not
-      # a child of run-vnc.sh, so it only inherits the container's own
-      # environment. Without this, the agent-launched Simulator's audio
-      # wouldn't reach the same pulseaudio sink the VNC audio stream reads
-      # from. This value must stay in sync with the PULSE_SERVER that
-      # run-vnc.sh exports for its own children. DISPLAY and
-      # PLAYDATE_SDK_PATH are already image-level ENV in the Dockerfile.
+      # Container-level, because an exec'd server isn't a child of run-vnc.sh and
+      # its Simulator's audio must reach the same sink the VNC stream reads.
       - PULSE_SERVER=unix:/tmp/pulse-vnc/native
       - SDL_AUDIODRIVER=pulseaudio
     volumes:
-      # A long-lived service defined once, not a per-connection `docker
-      # compose run -v`. The game directory is configured via an env var at
-      # start time instead: GAME_DIR=/absolute/path/to/your-game make
-      # up-shared. Changing games means `make down` and starting over, since
-      # this is fixed when the container starts.
+      # Fixed at container start; changing games means recreating the container.
       - ${GAME_DIR:-.}:/your-game
-      # Exposes the Simulator's sandboxed Data directory on the host, which
-      # is where a running game's mcp/game_logs.jsonl lands (launch.go builds
-      # dataDir as $PLAYDATE_SDK_PATH/Disk/Data/<bundleID>, inside the image,
-      # not under /your-game). Without this the human watching the VNC view
-      # has no way to read the same Lua print()/traceback output the agent
-      # sees through get_game_logs. Empty in the image, so this shadows
-      # nothing.
-      # SHARED_DATA_DIR so a test run can keep its save data and logs away from
-      # yours - two containers sharing this directory would collide on the same
-      # bundle ID.
+      # The Simulator's Data directory, where saves and mcp/game_logs.jsonl land, so a
+      # human can read them. SHARED_DATA_DIR keeps a test run's bundle IDs apart from yours.
       - ${SHARED_DATA_DIR:-./.shared-data}:/opt/playdate-sdk/Disk/Data
     command: ["bash", "/workspace/scripts/run-vnc.sh"]
-    # Same loopback default and same BIND_ADDR override as simulator-vnc
-    # above, for the same reason. It matters more here: this is the one
-    # service that runs detached, so an unauthenticated session published
-    # on 0.0.0.0 would sit there reachable in the background rather than
-    # only for as long as a terminal is occupied.
+    # Same loopback default as simulator-vnc, which matters more on a detached service.
     ports:
-      # VNC_PORT and AUDIO_PORT are overridable so a test run can publish
-      # elsewhere and leave a session you are using alone. See shared-check.sh.
+      # Overridable so shared-check.sh can run beside a session you're using.
       - "${BIND_ADDR:-127.0.0.1}:${VNC_PORT:-6080}:6080"
       - "${BIND_ADDR:-127.0.0.1}:${AUDIO_PORT:-8000}:8000"

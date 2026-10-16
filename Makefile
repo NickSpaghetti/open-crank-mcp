@@ -1,6 +1,6 @@
 PLAYDATE_SDK_VERSION ?= 3.1.2
 
-.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit plugin-check plugin-upstream-check sdk-pin-check shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mcp-schema mcp-schema-check mcp-auto-test check-doc-links no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native
+.PHONY: build up up-visual up-visual-wsl up-vnc up-shared shared-load shared-watch check-game-dir down shell smoke-check test-c-harness sdk-contract-check test-shared-unit plugin-check plugin-upstream-check sdk-pin-check shared-check test-shared-types test-shared-browser go-build go-build-cross go-test mcp-schema mcp-schema-check mcp-auto-test check-doc-links no-regex mutation-test mutation-test-scan mutation-test-rest mutation-test-diff test hooks sdk-path smoke-check-native sdk-contract-check-native playwright-version-check
 
 build:
 	PLAYDATE_SDK_VERSION=$(PLAYDATE_SDK_VERSION) docker compose build
@@ -89,26 +89,27 @@ sdk-pin-check:
 shared-check:
 	bash scripts/shared-check.sh
 
-# Tag must match @playwright/test in tests/browser/package.json: the image
-# carries the browsers, the package drives them. Node because the runner needs
-# it - Bun and Deno drive playwright-core but not this runner.
+# The image carries the browsers that tests/browser's @playwright/test drives.
 PLAYWRIGHT_IMAGE ?= mcr.microsoft.com/playwright:v1.62.0-noble
-# Must match the default in scripts/shared-check.sh.
 CHECK_VNC_PORT ?= 6180
 BROWSER_TESTS = docker run --rm --network host \
 	-v "$(CURDIR)/tests/browser:/work" -w /work $(PLAYWRIGHT_IMAGE) \
 	sh -c "npm install --no-audit --no-fund --loglevel=error >/dev/null &&
 
+# PLAYWRIGHT_IMAGE carries browsers for one @playwright/test version.
+playwright-version-check:
+	@want=$$(sed -n 's/.*"@playwright\/test": "\([^"]*\)".*/\1/p' tests/browser/package.json); \
+	case "$(PLAYWRIGHT_IMAGE)" in *:v$$want-*) ;; *) echo "PLAYWRIGHT_IMAGE $(PLAYWRIGHT_IMAGE) does not match @playwright/test $$want" >&2; exit 1 ;; esac
+
 # Typechecks the browser tests with tsgo. Playwright transpiles TypeScript
 # itself, so this is a check rather than a build step.
-test-shared-types:
+test-shared-types: playwright-version-check
 	$(BROWSER_TESTS) npx tsgo --noEmit"
 
-# Browser behaviour for the VNC pages. Host networking reaches port 6080, and
-# SHARED_URL points at the isolated container shared-check starts, so a shared
-# container of your own survives the run.
+# Browser behaviour for the VNC pages, against the isolated container shared-check
+# starts, so a shared container of your own survives the run.
 test-shared-browser: test-shared-types
-	bash scripts/shared-check.sh --keep
+	VNC_PORT=$(CHECK_VNC_PORT) bash scripts/shared-check.sh --keep
 	$(BROWSER_TESTS) SHARED_URL=http://localhost:$(CHECK_VNC_PORT) npx playwright test"
 	COMPOSE_PROJECT_NAME=open-crank-mcp-check docker compose --profile shared down
 
@@ -171,18 +172,15 @@ go-build-cross:
 		echo 'build + vet ok'; \
 	done
 
-# gremlins changes the code and checks the tests notice, catching lines that run
-# without being asserted on. Pinned via `go run` so a local run cannot drift from
-# CI - keep in step with ci.yml. Thresholds and excludes in .gremlins.yaml.
+# Mutation testing: lines that run without being asserted on. CI runs these same
+# targets. Thresholds and excludes in .gremlins.yaml.
 GREMLINS_VERSION ?= v0.6.0
 
 mutation-test:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash
 
-# Split in two for CI, not for speed: gremlins sizes its per-mutant timeout from
-# the scope's baseline, so internal/scan's hanging byte-loop mutants cost ~60s
-# each whole-module and ~3s scoped. mutation-test-rest derives its config from
-# .gremlins.yaml so the excludes cannot drift.
+# Split for CI: gremlins sizes its per-mutant timeout from the scope's baseline, so
+# internal/scan's hanging mutants cost far less scoped. -rest derives its config from .gremlins.yaml.
 mutation-test-scan:
 	go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) unleash ./internal/scan
 
@@ -195,10 +193,13 @@ mutation-test-rest:
 # Only the lines changed against a ref, for the pre-commit hook. Not a
 # replacement for the full run, which sees tests weakened for untouched code.
 # An all-skipped run is a pass: gremlins reports "no mutants" as 0% efficacy.
+# diff.context=0 because gremlins v0.6.0 treats each hunk's added lines as one
+# contiguous range, which sweeps in unchanged code between separate edits.
 MUTATION_DIFF_REF ?= HEAD
 
 mutation-test-diff:
-	@out=$$(go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) \
+	@out=$$(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.context GIT_CONFIG_VALUE_0=0 \
+		go run github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION) \
 		unleash --diff $(MUTATION_DIFF_REF) 2>&1); rc=$$?; \
 	echo "$$out" | tail -4; \
 	if echo "$$out" | grep -q "Killed: 0, Lived: 0, Not covered: 0"; then \

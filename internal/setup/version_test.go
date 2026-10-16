@@ -11,14 +11,8 @@ import (
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 )
 
-// The guard that keeps the whole drift-detection mechanism honest.
-//
-// If a harness source ever loses its version placeholder - renamed, refactored
-// away, lost in a merge - then every copy setup writes is unidentifiable, the
-// drift check silently answers "fine" forever, and the next breaking harness
-// change lands exactly as quietly as the one that prompted building this. That is
-// worth a test against the *real* embedded sources rather than a stand-in, because
-// the stand-ins are the one thing that cannot regress here.
+// Against the real embedded sources: a lost placeholder makes every copy
+// unidentifiable and silences the drift check.
 func TestEmbeddedHarnessSourcesCarryExactlyOnePlaceholder(t *testing.T) {
 	for _, name := range []string{harness.LuaSourcePath, harness.CHeaderPath} {
 		b, err := readEmbedded(name)
@@ -32,9 +26,7 @@ func TestEmbeddedHarnessSourcesCarryExactlyOnePlaceholder(t *testing.T) {
 	}
 }
 
-// The C source deliberately has no placeholder - the pair's stamp lives in the
-// header. Asserted so that adding one there (and thereby stamping the same
-// fingerprint into two files that must agree) is a deliberate act.
+// The C pair's stamp lives in the header only.
 func TestEmbeddedCSourceCarriesNoPlaceholder(t *testing.T) {
 	b, err := readEmbedded(harness.CSourcePath)
 	if err != nil {
@@ -58,9 +50,6 @@ func readEmbedded(name string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// A stamped copy must carry a real fingerprint and no leftover placeholder -
-// otherwise the server would compare against a literal and report every game as
-// drifted.
 func TestCopyHarnessFileStampsTheFingerprint(t *testing.T) {
 	dst := t.TempDir() + "/mcp_harness.lua"
 	if err := CopyHarnessFile(opencrank.HarnessFS, harness.LuaSourcePath, dst); err != nil {
@@ -98,15 +87,11 @@ func TestCopyHarnessFileStampsCHeaderWithThePairFingerprint(t *testing.T) {
 	if header := readFileString(t, dir+"/mcp_harness.h"); !strings.Contains(header, want) {
 		t.Fatalf("the written header does not contain the pair fingerprint %q", want)
 	}
-	// The .c file is copied through unchanged; it has nothing to stamp.
 	if source := readFileString(t, dir+"/mcp_harness.c"); strings.Contains(source, harness.VersionPlaceholder) {
 		t.Fatal("mcp_harness.c came out containing a placeholder")
 	}
 }
 
-// A source that should carry a placeholder but does not must fail loudly rather
-// than write an unidentifiable copy. This is the failure mode the mechanism has,
-// so it gets its own test rather than relying on the embedded-source guard above.
 func TestCopyHarnessFileRefusesASourceWithNoPlaceholder(t *testing.T) {
 	fsys := fstest.MapFS{
 		harness.LuaSourcePath: {Data: []byte("-- no placeholder here\n")},

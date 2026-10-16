@@ -1,16 +1,5 @@
-// Package plugincontract asserts the things about the plugin's own files that
-// nothing else can: the shape a client parses before it will run anything, and
-// the agreement between files that each carry a copy of the same fact.
-//
-// Test-only, with no production files, deliberately following
-// internal/mcpcontract. There is no runtime behaviour here to export - these
-// files have real readers elsewhere (a client, the launcher), and a second
-// parser living in the binary would be a second opinion about them.
-//
-// The division of labour with schema validation is the one docs/GOTCHAS.md
-// already draws for tool inputs: declare what a schema can express in the
-// schema, and keep here only what it cannot - agreement between files, the
-// absence of a key, whether a path on disk exists.
+// Package plugincontract checks the plugin's manifest files: their spec shape and
+// agreement between files that each carry a copy of the same fact.
 package plugincontract
 
 import (
@@ -36,20 +25,13 @@ func readJSON(t *testing.T, path string) map[string]any {
 	return m
 }
 
-// Every manifest that carries a version, and there is more than one because each
-// client insists on its own file.
+// Every manifest that carries a version; each client wants its own file.
 var versionedManifests = []string{
 	"plugin/plugin.json",
 	"plugin/.claude-plugin/plugin.json",
 	"plugin/.cursor-plugin/plugin.json",
 }
 
-// Three files carrying one fact is three chances to drift, and the launcher
-// reads the first of them to decide which release asset to fetch - so a stale
-// version in it is an install that downloads the wrong thing, or nothing.
-//
-// Written over the list rather than comparing two named files, so adding a
-// fourth client's manifest to the slice is the whole change.
 func TestEveryManifestDeclaresTheSameVersion(t *testing.T) {
 	want, _ := readJSON(t, versionedManifests[0])["version"].(string)
 	if want == "" {
@@ -65,10 +47,7 @@ func TestEveryManifestDeclaresTheSameVersion(t *testing.T) {
 }
 
 // The portable manifest's schema is closed (additionalProperties: false), so a
-// Claude Code field landing in it is a validation failure rather than a harmless
-// extra. Asserted here as well as by the schema because the failure mode is
-// silent at authoring time: copying userConfig or mcpServers across is an easy
-// and plausible edit.
+// Claude Code field in it fails validation.
 func TestPortableManifestCarriesNoClientSpecificFields(t *testing.T) {
 	allowed := map[string]bool{
 		"$schema": true, "name": true, "version": true, "description": true,
@@ -98,16 +77,9 @@ func mcpCommand(t *testing.T, path string) map[string]any {
 	return entry
 }
 
-// The single most expensive mistake available in these files, and the one an
-// earlier draft of the plan actually made: writing ${CLAUDE_PLUGIN_ROOT} into
-// the portable config. The 1.0.0 spec does not interpolate `command` at all, so
-// it would reach a conforming client as a literal path containing a dollar sign
-// and fail with something unrecognisable.
-//
-// Also guards the other direction, because Cursor's own documented example adds
-// "cwd": "${CURSOR_PLUGIN_ROOT}" - which fails the spec's cwd pattern outright.
-// Someone following those docs to "fix" this file is the expected way it breaks,
-// so the failure message says why rather than only what.
+// The 1.0.0 spec does not interpolate `command`, so ${CLAUDE_PLUGIN_ROOT} would
+// reach a client literally. Cursor's documented "cwd": "${CURSOR_PLUGIN_ROOT}"
+// fails the spec's cwd pattern.
 func TestPortableMCPConfigIsSpecShaped(t *testing.T) {
 	entry := mcpCommand(t, "plugin/mcp.json")
 
@@ -116,10 +88,8 @@ func TestPortableMCPConfigIsSpecShaped(t *testing.T) {
 			"stdio servers in the 1.0.0 schema, got %v", entry["type"])
 	}
 
-	// A bare executable name, resolved on PATH. The spec allows that or a
-	// plugin-relative "./" path; there is no file inside the plugin to point at
-	// since the server is downloaded by /open-crank-mcp:ocm-install-server, so the
-	// bare form is the only one that can work here.
+	// A bare name resolved on PATH: the server binary is installed separately, not
+	// shipped inside the plugin.
 	command, _ := entry["command"].(string)
 	if strings.ContainsAny(command, "/\\") {
 		t.Errorf("plugin/mcp.json command is %q; it must be a bare executable name "+
@@ -138,9 +108,8 @@ func TestPortableMCPConfigIsSpecShaped(t *testing.T) {
 	}
 }
 
-// Claude Code does interpolate `command`, and the spike measured the server
-// being started with cwd set to the user's working directory - so a ./-relative
-// command here would resolve against the wrong place.
+// Claude Code interpolates `command` but starts the server in the user's working
+// directory, so a ./-relative command would resolve wrongly.
 func TestClaudeMCPConfigUsesAnAbsoluteInterpolatedCommand(t *testing.T) {
 	command, _ := mcpCommand(t, "plugin/.claude-plugin/mcp.json")["command"].(string)
 	if !strings.HasPrefix(command, "${CLAUDE_PLUGIN_DATA}/") {
@@ -150,9 +119,7 @@ func TestClaudeMCPConfigUsesAnAbsoluteInterpolatedCommand(t *testing.T) {
 	}
 }
 
-// Every config must name the same binary, spelled for its client. A release that
-// updated one and not the other would leave a client starting something the
-// install skill never put there.
+// Every config must name the same binary, spelled for its client.
 func TestEveryMCPConfigNamesTheSameBinary(t *testing.T) {
 	const want = "open-crank-mcp"
 	for _, path := range []string{
@@ -168,11 +135,8 @@ func TestEveryMCPConfigNamesTheSameBinary(t *testing.T) {
 	}
 }
 
-// The spike installed a plugin whose manifest declared "hooks":
-// "./hooks/hooks.json", and it installed fine and then failed to load with
-// "Duplicate hooks file detected ... The standard hooks/hooks.json is loaded
-// automatically". `claude plugin validate` passed it, --strict included, so only
-// a real install caught it - which is why it is asserted here.
+// Claude Code loads hooks/hooks.json automatically and fails on a manifest that
+// also declares it, which `claude plugin validate --strict` does not catch.
 func TestClaudeManifestDeclaresNoDefaultComponentPaths(t *testing.T) {
 	manifest := readJSON(t, "plugin/.claude-plugin/plugin.json")
 	for _, field := range []string{"hooks", "skills", "commands", "agents"} {
@@ -185,9 +149,7 @@ func TestClaudeManifestDeclaresNoDefaultComponentPaths(t *testing.T) {
 	}
 }
 
-// userConfig entries need a title. --strict rejected the first attempt at this
-// with "userConfig.playdate_sdk_path.title: Invalid input", which is not a thing
-// the documentation says in so many words.
+// userConfig entries need a title; `--strict` requires it though the docs don't say so.
 func TestUserConfigEntriesAreComplete(t *testing.T) {
 	manifest := readJSON(t, "plugin/.claude-plugin/plugin.json")
 	userConfig, ok := manifest["userConfig"].(map[string]any)
@@ -232,18 +194,8 @@ func TestMarketplacePointsAtTheRealPlugin(t *testing.T) {
 	}
 }
 
-// A declared logo must exist, and it must resolve from the *plugin* root.
-//
-// Cursor turns a relative logo path into a raw.githubusercontent.com URL built
-// from the repository and commit SHA, so a path that is wrong or missing does not
-// fail at install - it produces a listing with a broken image, discovered by
-// whoever looks at the marketplace. Its submission checklist requires "all paths
-// in manifest are relative and valid (no `..`, no absolute paths)".
-//
-// The base is the plugin directory, not the repository root, which is the detail
-// worth pinning: this plugin lives in a subdirectory, so `assets/logo.png` means
-// plugin/assets/logo.png. An earlier plan put it at the repository root, where it
-// would have resolved to a URL with nothing behind it.
+// A declared logo must exist under the *plugin* root. Cursor builds a URL from the
+// path, so a bad one shows as a broken image rather than failing install.
 func TestDeclaredLogoExistsUnderThePluginRoot(t *testing.T) {
 	for _, manifest := range []string{
 		"plugin/.cursor-plugin/plugin.json",
@@ -270,13 +222,8 @@ func TestDeclaredLogoExistsUnderThePluginRoot(t *testing.T) {
 	}
 }
 
-// The command must carry no file extension. That is what lets one token work on
-// both platforms: Windows appends .com/.exe/.cmd/.bat when the named file has
-// none, so this resolves open-crank-mcp on Unix and open-crank-mcp.exe on
-// Windows, which the config format cannot otherwise express.
-//
-// Writing ".exe" here to "fix" Windows is the plausible edit and it breaks Unix
-// outright, so the failure says where the extension belongs instead.
+// No file extension, so one token works everywhere: Windows appends .exe itself
+// when the named file has none.
 func TestClaudeMCPCommandStaysExtensionless(t *testing.T) {
 	command, _ := mcpCommand(t, "plugin/.claude-plugin/mcp.json")["command"].(string)
 	if ext := filepath.Ext(command); ext != "" {

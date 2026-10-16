@@ -19,8 +19,6 @@ func (s *Server) getGameState(_ context.Context, _ *mcp.CallToolRequest, _ GetGa
 	if len(resp.State) == 0 {
 		return nil, nil, nil
 	}
-	// Passed through as the raw JSON the game produced, so the shape stays the
-	// game's own. json.RawMessage marshals back out verbatim.
 	return nil, json.RawMessage(resp.State), nil
 }
 
@@ -28,10 +26,8 @@ type ListEntitiesInput struct{}
 
 type ListEntitiesOutput struct {
 	Entities []harness.Entity `json:"entities"`
-	// Complete is true for Lua games (getAllSprites is a real, complete
-	// enumeration) and false for C games (querySpritesInRect only matches
-	// sprites with a collision rect set - decorative/visual sprites are
-	// commonly missed).
+	// Complete is false for C games, where only sprites with a collision rect
+	// are found.
 	Complete bool `json:"complete"`
 }
 
@@ -42,8 +38,7 @@ func (s *Server) listEntities(_ context.Context, _ *mcp.CallToolRequest, _ ListE
 		return result, ListEntitiesOutput{}, wrapErr
 	}
 
-	// Never nil, so the output is an empty array rather than null: a caller
-	// distinguishing "no sprites" from "field missing" should not have to.
+	// Empty array rather than JSON null.
 	entities := resp.Entities
 	if entities == nil {
 		entities = []harness.Entity{}

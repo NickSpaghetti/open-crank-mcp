@@ -14,11 +14,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// buildServer compiles cmd/open-crank-mcp into a temp directory and returns its path.
-//
-// Building rather than reusing whatever `make go-build` left in the tree, so this cannot
-// pass against a stale binary from before the change under test - which is the failure
-// mode that would make the whole test worthless.
+// buildServer compiles cmd/open-crank-mcp into a temp directory and returns its path,
+// so the test never runs a stale binary.
 func buildServer(t *testing.T) string {
 	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
@@ -36,23 +33,9 @@ func buildServer(t *testing.T) string {
 	return bin
 }
 
-// TestHandshakeSucceedsWithNoSDK is main.go's central claim, tested where it is made.
-//
-// SDK resolution failing is deliberately not fatal. It used to exit(1), which was
-// harmless while the only way to run this was a container that always set
-// PLAYDATE_SDK_PATH - and wrong the moment it ran natively, where an unset variable is
-// the ordinary first-time case. A process that exits before the handshake is reported by
-// a client as "server failed to start" and nothing else, with the message explaining
-// what to do going to a stderr nobody reads.
-//
-// So: a real subprocess, over the real stdio transport a client uses, with the
-// environment stripped of every way to find an SDK and HOME pointed at an empty
-// directory so ~/.Playdate/config and the per-OS default cannot resolve either. The
-// handshake has to complete and tools/list has to answer.
-//
-// Nothing else covers this. internal/mcpcontract's other tests build the server
-// in-process and never run main; internal/tools tests handlers directly. This is the
-// only test in the repo that starts the actual binary.
+// TestHandshakeSucceedsWithNoSDK runs the real binary over stdio with no way to find
+// an SDK. Clients report an early exit only as "server failed to start", so the
+// handshake must still complete.
 func TestHandshakeSucceedsWithNoSDK(t *testing.T) {
 	bin := buildServer(t)
 
@@ -60,10 +43,7 @@ func TestHandshakeSucceedsWithNoSDK(t *testing.T) {
 	defer cancel()
 
 	cmd := exec.Command(bin)
-	// A deliberately empty environment except for HOME and PATH. Inheriting the
-	// developer's environment would let a real installed SDK resolve, and the test
-	// would then prove the opposite of what it says - that startup works *with* an
-	// SDK, which every other path already shows.
+	// Empty except HOME and PATH, so an installed SDK can't resolve.
 	emptyHome := t.TempDir()
 	cmd.Env = []string{
 		"HOME=" + emptyHome,
@@ -71,17 +51,13 @@ func TestHandshakeSucceedsWithNoSDK(t *testing.T) {
 		"PATH=" + os.Getenv("PATH"),
 	}
 	if runtime.GOOS == "windows" {
-		// Windows child processes need their system and temp roots even when the
-		// user environment is intentionally stripped. These do not reveal an SDK,
-		// but omitting them can make process startup depend on the runner image.
+		// Windows child processes need their system and temp roots to start.
 		for _, key := range []string{"SYSTEMROOT", "WINDIR", "TEMP", "TMP", "COMSPEC"} {
 			if value := os.Getenv(key); value != "" {
 				cmd.Env = append(cmd.Env, key+"="+value)
 			}
 		}
 	}
-	// Not silenced: main writes the resolution failure to stderr, and a test that
-	// discarded it would hide a crash loop behind a timeout.
 	cmd.Stderr = os.Stderr
 
 	client := mcp.NewClient(&mcp.Implementation{Name: "mcpcontract", Version: "v0"}, nil)
@@ -103,14 +79,8 @@ func TestHandshakeSucceedsWithNoSDK(t *testing.T) {
 	}
 }
 
-// TestSDKlessToolsExplainThemselves - the point of staying up without an SDK is that a
-// tool can say what is wrong, so this checks the message is actually actionable rather
-// than just non-fatal. It has to name the environment variable, because on a machine
-// where detection found nothing that is the one thing the user can do about it.
-//
-// In-process rather than through the subprocess: the message comes from
-// tools.Server.requireSDK, and injecting the failure is both faster and not dependent on
-// the test machine genuinely lacking an SDK.
+// TestSDKlessToolsExplainThemselves - without an SDK, a tool's error must name the
+// environment variable the user can set.
 func TestSDKlessToolsExplainThemselves(t *testing.T) {
 	res := callTool(t, connect(t), "build_game", map[string]any{"source_dir": "/tmp/nonexistent"})
 	if !res.IsError {

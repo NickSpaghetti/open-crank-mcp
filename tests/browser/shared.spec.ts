@@ -1,15 +1,9 @@
-// Browser behaviour for the shared VNC pages. These cover the parts that only
-// exist in the browser, so nothing else can check them: the scaling redirect,
-// whether the audio player is in the way, and the mapping from a click on the
-// Playdate's volume slider to the player's volume.
-//
-// Needs a running shared container with a launched Simulator:
+// Browser behaviour for the shared VNC pages: the scaling redirect, the hidden
+// player, and the player following the published slider volume. Needs:
 //   bash scripts/shared-check.sh --keep
 import { test, expect, type Page, type APIRequestContext } from '@playwright/test';
 
-// What the container publishes to pd-layout.json, in framebuffer pixels. It
-// republishes on every Simulator launch, and writes {} when there's no window,
-// which is why every field is optional here.
+// pd-layout.json, in framebuffer pixels. {} when there's no Simulator window.
 interface Layout {
   window?: { x: number; y: number; w: number; h: number };
   troughX?: number;
@@ -18,8 +12,6 @@ interface Layout {
   muteY?: number;
 }
 
-// Narrowed once, so the tests aren't threading non-null assertions through
-// every coordinate.
 interface KnownLayout {
   window: { x: number; y: number; w: number; h: number };
   troughX: number;
@@ -46,9 +38,7 @@ async function readLayout(request: APIRequestContext): Promise<Layout> {
   return (await response.json()) as Layout;
 }
 
-// Skips rather than fails when no Simulator is running: the workspace tests are
-// still meaningful without one, and a missing Simulator is a setup problem
-// rather than a regression in the page.
+// Skips rather than fails with no Simulator running: that's setup, not a regression.
 async function requireLayout(request: APIRequestContext): Promise<KnownLayout> {
   const layout = await readLayout(request);
   test.skip(
@@ -58,9 +48,7 @@ async function requireLayout(request: APIRequestContext): Promise<KnownLayout> {
   return layout as KnownLayout;
 }
 
-// Converts a framebuffer pixel to a page coordinate, inverting what the page
-// itself does. noVNC scales the canvas with CSS, so the two only agree after
-// accounting for that ratio.
+// Framebuffer pixel to page coordinate; noVNC scales the canvas with CSS.
 async function pagePoint(page: Page, x: number, y: number): Promise<Point> {
   return page.evaluate(
     ([fx, fy]): Point => {
@@ -78,9 +66,7 @@ async function pagePoint(page: Page, x: number, y: number): Promise<Point> {
 
 async function audioState(page: Page): Promise<AudioState | null> {
   return page.evaluate((): AudioState | null => {
-    // Not just "audio": noVNC's own page ships an <audio id="noVNC_bell">, and
-    // an unqualified query finds that one, whose default volume of 1 looks
-    // convincingly like a working player.
+    // noVNC ships an <audio id="noVNC_bell"> that a bare "audio" query would find.
     const el = document.querySelector<HTMLAudioElement>('#pd-audio');
     if (!el) return null;
     const container = el.parentElement;
@@ -110,8 +96,6 @@ async function openWorkspace(page: Page): Promise<void> {
 
 test.describe('the workspace page', () => {
   test('a bare vnc.html redirects itself to add scaling', async ({ page }) => {
-    // noVNC ships with scaling off, which renders the display 1:1 and gives
-    // scrollbars instead of a display that fits the tab.
     await page.goto('/vnc.html');
     await expect(page).toHaveURL(/resize=scale/);
     await expect(page).toHaveURL(/autoconnect=true/);
@@ -123,10 +107,7 @@ test.describe('the workspace page', () => {
   });
 
   test('the audio player exists but is out of the way', async ({ page }) => {
-    // The element has to be in the document to play at all, and it has to be
-    // invisible so it isn't covering the workspace. The stream is stubbed
-    // because the player deliberately reveals itself when the stream fails, and
-    // the container's encoder serves only one listener.
+    // Stubbed, because the player reveals itself when the stream fails.
     await page.route('**/stream.mp3', async (route) => {
       await route.fulfill({ status: 200, contentType: 'audio/mpeg', path: 'fixtures/silence.mp3' });
     });
@@ -141,10 +122,7 @@ test.describe('the workspace page', () => {
 });
 
 test.describe('the player follows the Playdate volume slider', () => {
-  // The container reads the slider off the framebuffer and publishes it, so the
-  // page's whole job is to follow that number. These serve it directly rather
-  // than moving a real slider: a browser can't reach into the Simulator, and the
-  // container side is covered by shared-check.
+  // Serves the published volume directly; shared-check covers the container side.
   async function serveVolume(page: Page, volume: () => number): Promise<void> {
     await page.route('**/pd-volume.json', async (route) => {
       await route.fulfill({
@@ -154,10 +132,7 @@ test.describe('the player follows the Playdate volume slider', () => {
       });
     });
 
-    // The stream is served locally too, from a silent fixture. The container's
-    // encoder hands out one listener at a time, so a browser tab someone left
-    // open would otherwise make these fail for a reason that has nothing to do
-    // with the logic under test. The real stream is covered by shared-check.
+    // A silent fixture, so these don't depend on the real stream.
     await page.route('**/stream.mp3', async (route) => {
       await route.fulfill({
         status: 200,
@@ -181,8 +156,7 @@ test.describe('the player follows the Playdate volume slider', () => {
     await page.waitForTimeout(1200);
     expect((await requireAudioState(page)).paused).toBe(true);
 
-    // A gesture, because browsers refuse to start audio without one. It is not
-    // a request for sound: the slider is.
+    // Browsers refuse to start audio without a gesture.
     await page.mouse.click(5, 5);
     level = 0.8;
 
@@ -223,8 +197,7 @@ test.describe('the player follows the Playdate volume slider', () => {
   });
 
   test('an unreadable slider leaves the audio alone', async ({ page }) => {
-    // -1 is the container saying the scan failed. Acting on it would silence
-    // working audio, and a failed read looks exactly like silence.
+    // -1 is a failed scan, which must not silence working audio.
     let level = 0.7;
     await serveVolume(page, () => level);
     await openWorkspace(page);
@@ -241,8 +214,7 @@ test.describe('the player follows the Playdate volume slider', () => {
   });
 
   test('clicking the game does not start audio on its own', async ({ page, request }) => {
-    // The regression that started all of this: playback used to begin on any
-    // click, so aiming a crank made noise. A gesture only unlocks the browser.
+    // A gesture only unlocks the browser; it isn't a request for sound.
     const layout = await requireLayout(request);
     await serveVolume(page, () => 0);
     await openWorkspace(page);

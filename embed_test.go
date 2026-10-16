@@ -5,15 +5,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 )
 
-// Asserts the embed patterns actually matched, and matched the real harnesses
-// rather than something empty or truncated. Without this a broken pattern is a
-// clean build that fails at a user's first `setup` call, which is a long way
-// from the mistake.
-//
-// The markers are each harness's own entry point, the one symbol a game is
-// wired to call. A file that does not contain it is not a harness.
+// A broken embed pattern still builds cleanly; this catches it before a user's
+// first `setup` call. Each marker is the harness entry point a game calls.
 func TestHarnessFSContainsRealHarnesses(t *testing.T) {
 	for _, tc := range []struct {
 		path   string
@@ -35,29 +32,16 @@ func TestHarnessFSContainsRealHarnesses(t *testing.T) {
 	}
 }
 
-// embeddedFiles is every path the binary is allowed to carry. Exhaustive, and
-// the exhaustiveness is the point - see TestHarnessFSCarriesNothingExtra. Sorted
-// by the test rather than by hand, so an entry added in the wrong place fails
-// with a useful diff instead of two identical-looking lists in a different order.
+// embeddedFiles is every path the binary is allowed to carry, exhaustively.
 var embeddedFiles = []string{
 	"c-harness/mcp_harness.c",
 	"c-harness/mcp_harness.h",
 	"lua/mcp_harness.lua",
 }
 
-// The embed patterns name three files individually rather than globbing
-// c-harness/*, so that the C test suite and the fixture game stay out of the
-// binary. This is what notices if someone widens them to a glob.
-//
-// It compares the exact path set rather than counting, and that distinction is
-// load-bearing rather than fastidious. This test is half of the licence guard:
-// the Playdate SDK License bans redistributing the SDK, and published release
-// binaries are licence-clean only because everything go:embed carries is this
-// repo's own MIT code. A count of three passes just as happily if one harness
-// source is swapped for an SDK header - same number of files, different
-// contents, and a published artifact that redistributes Panic's work. The other
-// half of the guard is in .github/workflows/release.yml, which asserts the
-// uploaded artifact list; this half asserts what is inside the artifact.
+// Licence guard: the Playdate SDK License bans redistribution, so the binary may
+// embed only this repo's own code. Compares exact paths, since a count would pass
+// if a harness were swapped for an SDK header.
 func TestHarnessFSCarriesNothingExtra(t *testing.T) {
 	var got []string
 	err := fs.WalkDir(HarnessFS, ".", func(p string, d fs.DirEntry, err error) error {
@@ -83,5 +67,30 @@ func TestHarnessFSCarriesNothingExtra(t *testing.T) {
 			"guard in .github/workflows/release.yml and the SDK-redistribution reasoning "+
 			"in README.md.",
 			strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+// internal/harness names these paths for fingerprinting; they must be the embedded ones.
+func TestHarnessPathConstantsAreEmbedded(t *testing.T) {
+	for _, p := range []string{harness.LuaSourcePath, harness.CHeaderPath, harness.CSourcePath} {
+		if _, err := fs.Stat(HarnessFS, p); err != nil {
+			t.Errorf("harness path %s is not in HarnessFS: %v", p, err)
+		}
+	}
+}
+
+// The Lua and C harnesses must agree on the no-expiry sentinel.
+func TestNoExpirySentinelsMatch(t *testing.T) {
+	for _, tc := range []struct{ path, decl string }{
+		{harness.LuaSourcePath, "local NO_EXPIRY = -1\n"},
+		{harness.CHeaderPath, "#define MCP_NO_EXPIRY (-1L)\n"},
+	} {
+		b, err := fs.ReadFile(HarnessFS, tc.path)
+		if err != nil {
+			t.Fatalf("reading %s: %v", tc.path, err)
+		}
+		if !strings.Contains(strings.ReplaceAll(string(b), "\r\n", "\n"), tc.decl) {
+			t.Errorf("%s does not declare %q", tc.path, tc.decl)
+		}
 	}
 }

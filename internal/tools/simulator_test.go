@@ -97,9 +97,7 @@ func TestGetStatusWhenRunning(t *testing.T) {
 	}
 }
 
-// harnessFS whose fingerprints the tests below compare against. The same
-// stand-in shape setup_test uses, so a fingerprint computed here is stable and
-// does not depend on the real harness content.
+// statusTestServer uses a stand-in harnessFS so fingerprints are stable.
 func statusTestServer(t *testing.T) *Server {
 	t.Helper()
 	s := newTestServer(t)
@@ -107,9 +105,7 @@ func statusTestServer(t *testing.T) *Server {
 	return s
 }
 
-// Nothing observed yet must produce no warning. get_status is called before
-// anything else touches the harness, and inventing a verdict from no evidence
-// would be a false alarm on every fresh server.
+// Nothing observed yet must produce no warning.
 func TestGetStatusNoHarnessWarningBeforeAnyRoundTrip(t *testing.T) {
 	s := statusTestServer(t)
 	_, out, err := s.getStatus(context.Background(), nil, GetStatusInput{})
@@ -121,8 +117,6 @@ func TestGetStatusNoHarnessWarningBeforeAnyRoundTrip(t *testing.T) {
 	}
 }
 
-// A harness reporting the fingerprint this server ships is current, and must not
-// be warned about.
 func TestGetStatusNoHarnessWarningForCurrentHarness(t *testing.T) {
 	s := statusTestServer(t)
 	current, err := harness.LuaFingerprint(s.harnessFS)
@@ -140,9 +134,7 @@ func TestGetStatusNoHarnessWarningForCurrentHarness(t *testing.T) {
 	}
 }
 
-// The case that would have caught this entire class of bug: a game carrying a
-// harness copy from before version reporting existed. Both real vendored games
-// were in exactly this state.
+// A harness copy from before version reporting existed.
 func TestGetStatusWarnsAboutPreVersioningHarness(t *testing.T) {
 	s := statusTestServer(t)
 	s.harnessVersion, s.harnessVersionSeen = "", true
@@ -176,9 +168,7 @@ func TestGetStatusWarnsAboutForeignFingerprint(t *testing.T) {
 	}
 }
 
-// A copy that was never stamped at all - hand-copied rather than installed by
-// setup. Distinguished from the stale cases because the remedy reads differently:
-// the file was never processed, rather than processed by an older version.
+// A copy never stamped by setup (hand-copied) gets a different remedy message.
 func TestGetStatusWarnsAboutUnstampedHarness(t *testing.T) {
 	s := statusTestServer(t)
 	s.harnessVersion, s.harnessVersionSeen = harness.VersionPlaceholder, true
@@ -192,8 +182,7 @@ func TestGetStatusWarnsAboutUnstampedHarness(t *testing.T) {
 	}
 }
 
-// A broken binary must not be reported as a stale game. If the embedded harness
-// cannot be read, the fault is here, and the message has to say so.
+// An unreadable embedded harness is a broken binary, not a stale game.
 func TestGetStatusReportsAnUnreadableEmbeddedHarness(t *testing.T) {
 	s := newTestServer(t)
 	s.harnessFS = fstest.MapFS{} // no harness sources at all
@@ -208,8 +197,6 @@ func TestGetStatusReportsAnUnreadableEmbeddedHarness(t *testing.T) {
 	}
 }
 
-// Every successful round trip records what answered, so get_status can report it
-// without a round trip of its own.
 func TestRoundTripRecordsTheHarnessVersion(t *testing.T) {
 	s := statusTestServer(t)
 	startFakeHarness(t, s.dataDir, map[string]any{"status": "ok", "harness_version": "abc123abc123"})
@@ -225,8 +212,6 @@ func TestRoundTripRecordsTheHarnessVersion(t *testing.T) {
 	}
 }
 
-// Recorded even when the harness reported a failure: which harness answered is
-// true regardless of what it said, and a stale one is a plausible cause.
 func TestRoundTripRecordsTheHarnessVersionOnFailure(t *testing.T) {
 	s := statusTestServer(t)
 	startFakeHarness(t, s.dataDir, map[string]any{
@@ -241,8 +226,7 @@ func TestRoundTripRecordsTheHarnessVersionOnFailure(t *testing.T) {
 	}
 }
 
-// Restart must mint its own scratch directory. It used to clear the old one and
-// pass the data directory to the game in its place.
+// Restart must mint its own scratch directory.
 func TestRestartSimulatorCreatesAUsableScratchDir(t *testing.T) {
 	s := newTestServer(t)
 	s.scratchDir = t.TempDir()

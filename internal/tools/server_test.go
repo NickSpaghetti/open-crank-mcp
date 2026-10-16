@@ -22,10 +22,8 @@ func TestHandleRoundTripErrNotRunning(t *testing.T) {
 	}
 }
 
-// A harness-reported failure has to come back as a model-visible tool error,
-// not as a transport error and not as a success. Before this it came back as a
-// success: every tool discarded the status and error fields the harnesses were
-// setting.
+// A harness-reported failure must be a model-visible tool error, not a
+// transport error or a success.
 func TestHandleRoundTripErrHarnessError(t *testing.T) {
 	result, err := handleRoundTripErr(errHarness)
 	if err != nil {
@@ -83,10 +81,6 @@ func TestRoundTripAssignsIncrementingIDs(t *testing.T) {
 	}
 }
 
-// The harness reporting a failure must reach the caller as errHarness, carrying
-// the harness's own message. Both harnesses really do produce this shape - a
-// bogus command type comes back as status "error" with "failed to parse command"
-// (C) or "unknown command type" (Lua), verified on the wire.
 func TestRoundTripSurfacesHarnessError(t *testing.T) {
 	s := newTestServer(t)
 	startFakeHarness(t, s.dataDir, map[string]any{
@@ -102,10 +96,7 @@ func TestRoundTripSurfacesHarnessError(t *testing.T) {
 	}
 }
 
-// A response already on disk when the call starts is the stale-response bug:
-// against a real game a planted file came back as get_game_state's answer in
-// 2ms, with the previous caller's payload. SendCommand clears it, so this call
-// waits for its own answer instead.
+// A stale response already on disk must not be returned as this call's answer.
 func TestRoundTripIgnoresStaleResponseAlreadyOnDisk(t *testing.T) {
 	s := newTestServer(t)
 	respPath := filepath.Join(s.dataDir, "mcp", "response.json")
@@ -131,9 +122,6 @@ func TestRoundTripIgnoresStaleResponseAlreadyOnDisk(t *testing.T) {
 	}
 }
 
-// requireSDK's error path is the reason it exists: without an SDK the server
-// still has to complete the MCP handshake and then explain itself through a tool
-// result, rather than exiting before a client can read anything.
 func TestRequireSDKReportsResolutionFailure(t *testing.T) {
 	resolveErr := errors.New("could not find a Playdate SDK. Looked at:\n  /home/u/PlaydateSDK")
 	s := NewServer(sdk.Paths{}, resolveErr, fstest.MapFS{})
@@ -150,8 +138,6 @@ func TestRequireSDKReportsResolutionFailure(t *testing.T) {
 	}
 
 	text := renderContent(t, result)
-	// The resolution error carries every path that was tried; dropping it here
-	// would throw away the only actionable part.
 	if !strings.Contains(text, "/home/u/PlaydateSDK") {
 		t.Errorf("the message loses what resolution had already worked out:\n%s", text)
 	}
@@ -161,7 +147,6 @@ func TestRequireSDKReportsResolutionFailure(t *testing.T) {
 	}
 }
 
-// The success path must hand back the SDK and nothing else.
 func TestRequireSDKPassesThroughWhenResolved(t *testing.T) {
 	want := sdk.Paths{Root: "/opt/sdk", SimulatorBin: "/opt/sdk/bin/PlaydateSimulator"}
 	s := NewServer(want, nil, fstest.MapFS{})

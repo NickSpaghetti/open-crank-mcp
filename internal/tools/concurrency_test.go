@@ -7,13 +7,8 @@ import (
 	"github.com/NickSpaghetti/open-crank-mcp/internal/harness"
 )
 
-// TestRoundTripConcurrentCallsDoNotCrossTalk exercises the race the MCP
-// go-sdk's default concurrent tool-call dispatch (jsonrpc2.Async in
-// mcp/server.go, called for every request but "initialize") exposes: the
-// harness protocol is a single fixed mcp/command.json/response.json pair,
-// not per-request files, so two roundTrip calls in flight at once can read
-// back the wrong response. roundTrip fills in cmd.ID, so each goroutine can
-// compare what it sent against what it got back.
+// The go-sdk dispatches tool calls concurrently, but the harness IPC is one
+// fixed command/response pair, so concurrent roundTrips must not cross-talk.
 func TestRoundTripConcurrentCallsDoNotCrossTalk(t *testing.T) {
 	s := newTestServer(t)
 	startEchoingFakeHarness(t, s.dataDir)
@@ -35,14 +30,8 @@ func TestRoundTripConcurrentCallsDoNotCrossTalk(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Two things are asserted, and the id check in WaitForResponse is why the
-	// first one is now worth stating this way rather than comparing each call's
-	// sent id to its received one: a response carrying someone else's id is
-	// discarded and waited past, so a swap (A reading B's answer while B reads
-	// A's) can no longer be represented - it would surface as a timeout, i.e. as
-	// r.err, not as a mismatch. What remains observable is that no two callers
-	// came back with the same response, and that every caller got one at all.
-	// See TestWaitForResponseSkipsMismatchedID for the correlation itself.
+	// A swapped answer would be discarded by the id check and surface as a
+	// timeout, so assert every caller got a distinct response.
 	seen := make(map[string]bool, n)
 	for _, r := range results {
 		if r.err != nil {

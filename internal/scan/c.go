@@ -1,10 +1,7 @@
 package scan
 
-// The byte-level readers the C patching in internal/setup is built from. They
-// are deliberately small and offset-based rather than producing a token stream:
-// every caller needs to splice text back into the file at an exact position, so
-// what they want from a scan is offsets into the original bytes, not a
-// re-rendered form of it.
+// Readers return offsets rather than tokens because callers splice text back
+// into the original bytes.
 
 // SkipSpace returns the offset of the first non-whitespace byte at or after i.
 func SkipSpace(content string, i int) int {
@@ -34,8 +31,7 @@ func Identifier(content string, i int) (name string, end int) {
 }
 
 // IdentifierBefore reads the identifier ending just before i, returning it and
-// the offset it starts at. Used to walk a member-access chain leftward from the
-// arrow that anchors it.
+// the offset it starts at.
 func IdentifierBefore(content string, i int) (name string, start int) {
 	start = i
 	for start > 0 && IsWord(content[start-1]) {
@@ -53,21 +49,14 @@ func Literal(content string, i int, lit string) (end int, ok bool) {
 	return i + len(lit), true
 }
 
-// TokenIndex finds the next occurrence of token at or after from that is a whole
-// identifier rather than part of a longer one, or -1.
-//
-// This searches the file as flat text. Code.TokenIndex is the same search
-// restricted to code, which is what a caller that must not match inside a
-// comment wants.
+// TokenIndex finds the next whole-identifier occurrence of token at or after
+// from, or -1. It searches flat text; Code.TokenIndex skips comments.
 func TokenIndex(content, token string, from int) int {
 	return Code(nil).TokenIndex(content, token, from)
 }
 
 // BalancedParens takes an offset pointing at "(" and returns the offset of its
-// matching ")". Counting depth is the whole point: the patterns this replaced
-// used a "no parens allowed inside" character class, which silently skipped any
-// argument list containing a nested call, a parenthesized comment or a quoted
-// path with a paren in it.
+// matching ")", counting nesting depth.
 func BalancedParens(content string, i int) (closeAt int, ok bool) {
 	if i < 0 || i >= len(content) || content[i] != '(' {
 		return 0, false
@@ -96,20 +85,14 @@ func CallParens(content string, afterName int) (openAt, closeAt int, ok bool) {
 }
 
 // BlockOpenAfter finds the "{" that opens the block following i, and reports
-// whether one was reached before the statement ended at a ";".
-//
-// This is how the kEventInit branch is located. Looking for the brace rather
-// than for a particular condition shape is what lets a switch/case, a compound
-// condition, a reversed comparison and redundant parens all work, none of which
-// the pattern it replaced accepted.
+// whether one was reached before the statement ended at a ";". Searching for the
+// brace, not a condition shape, accepts any form of the condition.
 func BlockOpenAfter(content string, i int) (offset int, ok bool) {
 	return Code(nil).BlockOpenAfter(content, i)
 }
 
-// BlockOpenAfter is the same search restricted to code, so a "{" or a ";" inside
-// a comment between the token and the real brace is stepped over rather than
-// mistaken for the end of the search. A commented-out branch sitting above a
-// live one puts both there.
+// BlockOpenAfter is the same search restricted to code, so braces and
+// semicolons inside comments are skipped.
 func (c Code) BlockOpenAfter(content string, i int) (offset int, ok bool) {
 	for ; i < len(content); i++ {
 		if !c.IsCode(i) {

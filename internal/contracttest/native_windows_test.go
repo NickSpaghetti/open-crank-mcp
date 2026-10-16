@@ -61,8 +61,7 @@ func TestWindowsNativeMCP(t *testing.T) {
 	})
 }
 
-// Deliberately not a t.Helper: this drives a dozen tool calls, and the line
-// number of the one that failed is most of the diagnosis.
+// Not a t.Helper, so failures report the line of the failing tool call.
 func runWindowsNativeGame(t *testing.T, ctx context.Context, client *mcp.ClientSession, paths sdk.Paths, project, wantType string) {
 	buildResult := callWindowsTool(t, ctx, client, "build_game", map[string]any{"source_dir": project})
 	buildOutput := windowsStructured(t, buildResult)
@@ -177,20 +176,8 @@ func callWindowsTool(t *testing.T, ctx context.Context, client *mcp.ClientSessio
 	return result
 }
 
-// windowsDiagnostics reports what a failing tool call cannot say for itself:
-// whether the Simulator is still running, and what it printed on the way down.
-//
-// A harness timeout is the motivating case. "timed out waiting for
-// response.json" is true of a Simulator that crashed, one that is wedged, and
-// one that never got the command, and those want different fixes.
-//
-// get_logs comes before get_game_logs on purpose. It reads the Simulator's own
-// captured output from this process, so it still answers when the harness is
-// gone, which is exactly when this runs. get_game_logs needs a round trip and
-// will spend its timeout if the harness is dead, so it goes last.
-//
-// Best-effort throughout: this runs on a path where something already failed,
-// and a diagnostic that fails the test itself would bury the real error.
+// windowsDiagnostics best-effort reports whether the Simulator is running and what
+// it printed. get_game_logs goes last since it needs a live harness round trip.
 func windowsDiagnostics(ctx context.Context, client *mcp.ClientSession) string {
 	var b strings.Builder
 	report := func(name string, args map[string]any) {
@@ -284,8 +271,7 @@ func copyNativeFile(t *testing.T, source, destination string) {
 	}
 }
 
-// clampDiagnostic bounds one diagnostic line. A wedged game can hold thousands
-// of log entries, and burying the real failure under them defeats the purpose.
+// clampDiagnostic bounds one diagnostic line so log floods don't bury the failure.
 func clampDiagnostic(s string) string {
 	const max = 2000
 	if len(s) <= max {
@@ -294,18 +280,8 @@ func clampDiagnostic(s string) string {
 	return s[:max] + " ... (truncated)"
 }
 
-// waitForLiveHarness blocks until the game answers a real round trip.
-//
-// get_status cannot do this job. harness_reachable is a stat on the data
-// directory, and the run before the restart already created it, so after a
-// restart it reports true before the new game has started its update loop. It
-// gates correctly after a launch only because the test deletes that directory
-// first.
-//
-// Before this existed, the post-restart get_screenshot was the first call that
-// needed a live game, so it absorbed the whole relaunch and timed out at five
-// seconds. That reads as a broken screenshot rather than a test that did not
-// wait, which is what it was.
+// waitForLiveHarness blocks until the game answers a real round trip. get_status's
+// harness_reachable is a directory stat, already true after a restart.
 func waitForLiveHarness(t *testing.T, ctx context.Context, client *mcp.ClientSession, stage string) {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)

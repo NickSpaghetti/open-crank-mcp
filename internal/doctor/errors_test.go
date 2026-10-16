@@ -21,8 +21,7 @@ func TestCheckForErrorsCatchesNotFound(t *testing.T) {
 }
 
 func TestCheckForErrorsCatchesInitalizedTypo(t *testing.T) {
-	// SDL2 itself uses the misspelling "initalized". Matched directly, not
-	// just the correctly-spelled form.
+	// SDL2 itself uses the misspelling "initalized".
 	if err := checkForErrors("audio device could not be initalized\n"); err == nil {
 		t.Fatal("checkForErrors: expected an error, got nil")
 	}
@@ -40,9 +39,7 @@ func TestCheckForErrorsIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-// The exact output that failed `make smoke-check` on a healthy machine: the
-// Simulator started, and libEGL mentioned "error" inside a line it had already
-// labelled a warning.
+// A healthy container's libEGL output says "error" inside a warning line.
 func TestCheckForErrorsIgnoresLibEGLWarnings(t *testing.T) {
 	const output = `
 (PlaydateSimulator:94): Gtk-WARNING **: 19:03:51.504: Could not load a pixbuf from /org/gtk/libgtk/theme/Adwaita/assets/bullet-symbolic.svg.

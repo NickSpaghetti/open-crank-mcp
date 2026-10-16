@@ -5,14 +5,8 @@
 static PlaydateAPI *g_pd;
 static char g_state_buf[256];
 
-/* Persistent counters rather than reporting the raw pushed/released bits
-   alone: those are one-frame-only signals, and a "state" query is a
-   separate round trip from the "press" that caused them, so it usually
-   lands several frames later - long after a transient bit would have
-   cleared. A monotonic count proves the edge fired at all regardless of
-   exactly which frame the query catches. Field names match the Lua
-   fixture's a_down_count/a_up_count so the same contract-test assertions
-   apply to both languages. */
+/* Counters, because pushed/released last one frame and a state query lands
+   several frames after the press. */
 static int g_a_down_count = 0;
 static int g_a_up_count = 0;
 
@@ -54,10 +48,7 @@ int eventHandler(PlaydateAPI *pd, PDSystemEvent event, uint32_t arg)
         mcp_harness_register_state(report_state);
         pd->system->setUpdateCallback(update, NULL);
 
-        /* One sprite with a collide rect, one without - so the entities
-           command's querySpritesInRect approximation has something real
-           to differ on: the collidable one should show up, the decorative
-           one should not. */
+        /* Only the sprite with a collide rect should appear in entities. */
         LCDSprite *collidable = pd->sprite->newSprite();
         pd->sprite->setSize(collidable, 16, 16);
         pd->sprite->moveTo(collidable, 50, 60);

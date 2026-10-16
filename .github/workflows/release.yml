@@ -10,16 +10,8 @@ permissions:
   attestations: write # recording that attestation against this repository
 
 jobs:
-  # The published platforms, and the only place they are listed.
-  #
-  # Derived from the SDKs Panic ships rather than from what Go can cross-compile: a
-  # server binary is useless where there is no Simulator to drive. Panic offers macOS (a
-  # universal .zip), Windows (.exe) and Linux (.tar.gz, x86-64 only).
-  #
-  # Two exclusions that look alike and are not:
-  #   - No linux/arm64, because Panic ships no ARM64 Linux SDK. Not our choice.
-  #   - Windows is published: its native SDK and MCP contract run on windows-latest.
-  #     ARM64 Windows remains out until there is a Playdate ARM64 Simulator SDK.
+  # The published platforms: wherever Panic ships a Simulator. No linux/arm64 or
+  # windows/arm64, because Panic ships no ARM64 SDK for either.
   build:
     runs-on: ubuntu-latest
     strategy:
@@ -39,13 +31,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The tag and the manifest must agree, and the manifest wins the argument: it is
-      # what the install skill reads to decide which asset to fetch, so a release
-      # tagged v0.2.0 carrying a manifest that says 0.1.0 would publish assets named
-      # after a version nothing will ever ask for.
-      #
-      # Checked in every matrix job rather than once, because the version is what names
-      # the file each job produces.
+      # The install skill picks assets by the manifest's version, so the tag must match it.
       - name: the tag matches plugin/plugin.json
         id: version
         run: |
@@ -77,12 +63,8 @@ jobs:
             -o "dist/${name}" ./cmd/open-crank-mcp || exit 1
           echo "built ${name}"
 
-      # Licence guard, half one: what goes *inside* the artifact.
-      #
-      # The Playdate SDK License bans redistributing the SDK. These binaries are
-      # licence-clean only because everything go:embed carries is this repo's own MIT
-      # Lua and C harness source. The test asserts the exact embedded path set rather
-      # than a count, so swapping a harness file for an SDK header fails here.
+      # The Playdate SDK License bans redistributing the SDK, so the embedded files
+      # must be only our own harness source.
       - name: nothing but our own code is embedded
         run: go test -count=1 -run 'TestHarnessFS' .
 
@@ -98,31 +80,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Licence guard, half two: what the release is made *of*.
-      #
-      # Only the build jobs' uploads land here, and each uploads exactly the one binary
-      # it compiled. There is no step between building and publishing that could
-      # introduce an SDK tarball, an extracted C_API or a saved Docker image, so the
-      # payload is constrained by construction rather than by an allow-list checking
-      # afterwards.
-      #
-      # Scope, stated honestly: this covers the release. It is not a claim that SDK
-      # bytes never leave a developer's machine - ci.yml's docker-build uses
-      # `cache-to: type=gha,mode=max`, so image layers containing the SDK already
-      # persist in the repo-scoped Actions cache. That is not redistribution, but a
-      # comment implying otherwise would be false. What is absolute is that no image is
-      # ever pushed: see README.md, and note that this workflow builds none.
+      # Only the build jobs' binaries land here, so no SDK file can reach the release.
       - uses: actions/download-artifact@v7
         with:
           path: dist
           pattern: binary-*
           merge-multiple: true
 
-      # sha256sum's own format, so a user can check a download with `sha256sum -c` on
-      # Linux or `shasum -a 256 -c` on macOS without parsing anything.
-      #
-      # This proves a download arrived intact. It is not evidence of origin - it travels
-      # the same channel as the binaries it describes. That claim is the attestation.
+      # Checkable with `sha256sum -c` or `shasum -a 256 -c`. Integrity only; origin is the attestation.
       - name: checksums
         run: |
           set -uo pipefail
@@ -130,16 +95,8 @@ jobs:
           sha256sum -- open-crank-mcp_* > checksums.txt || exit 1
           cat checksums.txt
 
-      # Keyless Sigstore, signed by this workflow in this repository, so there is no key
-      # to hold or rotate. A user verifies with:
-      #
-      #   gh attestation verify --owner NickSpaghetti <file>
-      #
-      # Subjects come from the checksums file rather than a glob, which is what
-      # goreleaser recommends: the signature then covers exactly the name-and-digest
-      # list users check their downloads against, instead of being a second,
-      # independently computed claim about the same bytes. Only the binaries are listed
-      # in it, so LICENSE and checksums.txt are not subjects - neither is executed.
+      # Keyless Sigstore; verify with `gh attestation verify --owner NickSpaghetti <file>`.
+      # Subjects from checksums.txt, so the signature covers the list users check against.
       - name: attest the binaries
         uses: actions/attest-build-provenance@v4
         with:
@@ -159,9 +116,8 @@ jobs:
           esac
           echo "publishing $GITHUB_REF_NAME ${prerelease:-as a full release}"
 
-          # Publishing a release in the UI creates the tag, which triggers this
-          # workflow - so the release can already exist. `view` rather than
-          # `create || upload`, so a bad token does not look like "already exists".
+          # A release published in the UI creates the tag, so the release may already
+          # exist. `view` first, so a bad token doesn't look like "already exists".
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "release $GITHUB_REF_NAME already exists; uploading assets to it"
             gh release upload "$GITHUB_REF_NAME" dist/* --clobber

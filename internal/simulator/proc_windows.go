@@ -2,9 +2,7 @@
 
 package simulator
 
-// Process control on Windows. The Simulator can start a child process that
-// outlives the initial executable, so a Windows job object keeps the full
-// process tree under the server's control.
+// The Simulator can start a child that outlives it, so a job object holds the whole tree.
 
 import (
 	"fmt"
@@ -15,8 +13,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Start suspended so the Simulator cannot spawn any children before it has been
-// assigned to the job object in attachProcess.
+// Start suspended so the Simulator cannot spawn children before attachProcess
+// assigns it to the job object.
 func setProcAttr(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.CREATE_SUSPENDED}
 }
@@ -58,8 +56,7 @@ func attachProcess(cmd *exec.Cmd) (*processControl, error) {
 	}, nil
 }
 
-// resumePrimaryThread finds the sole thread created with CREATE_SUSPENDED and
-// lets it run only after the process is attached to its job object.
+// resumePrimaryThread resumes the sole thread created with CREATE_SUSPENDED.
 func resumePrimaryThread(pid uint32) error {
 	snapshot, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPTHREAD, 0)
 	if err != nil {
@@ -90,20 +87,13 @@ func resumePrimaryThread(pid uint32) error {
 	return fmt.Errorf("could not find the suspended Simulator thread for process %d", pid)
 }
 
-// killProcess kills the single child process.
-//
-// The job object in attachProcess takes care of descendants as well.
+// killProcess kills the child alone; descendants are the job object's job.
 func killProcess(cmd *exec.Cmd) error {
 	return cmd.Process.Kill()
 }
 
-// hasExited reports whether the child is gone, without blocking.
-//
-// Deliberately not the Unix signal-0 probe. os.Process.Signal on Windows
-// returns an error for every signal except Kill, so a signal-0 check would
-// always report "gone" - and because it compiles, that wrong answer would
-// survive the cross-compile gate silently. ProcessState is set only once Wait
-// has reaped the child, which is exactly "has finished".
+// hasExited reports whether the child is gone, without blocking. Not a signal-0
+// probe: os.Process.Signal on Windows errors for every signal but Kill.
 func hasExited(cmd *exec.Cmd) bool {
 	if cmd.ProcessState != nil {
 		return true

@@ -1,17 +1,5 @@
-// Package clientconfig renders the MCP configuration block a client needs, for
-// clients that cannot install this server themselves.
-//
-// It exists for OpenCode. OpenCode has plugins - TS/JS modules from
-// @opencode-ai/plugin - but its v1 plugin API has no config or MCP hook, so a
-// plugin cannot register a server there. Its config is written by hand, and a
-// binary that prints the exact block to paste is the thing that helps. Claude
-// Code and Cursor are rendered too, because once the shapes are data the extra
-// two cost nothing and the guides then have one source for all three.
-//
-// Rendering is separated from detecting for the reason cmd/sdk-path/main.go
-// gives about sdk.Paths.Describe: the rendering is the part worth testing, and
-// it is pure, so every client's shape is a table entry rather than something
-// only reproducible on a machine in the right state.
+// Package clientconfig renders the MCP configuration block to paste into a client.
+// OpenCode's v1 plugin API has no MCP hook, so its config must be written by hand.
 package clientconfig
 
 import (
@@ -51,8 +39,7 @@ func Render(client string, argv []string) (string, error) {
 	return render(argv)
 }
 
-// encode renders a config as indented JSON with a trailing newline, so the
-// output is paste-ready rather than something to reformat.
+// encode renders a config as paste-ready indented JSON with a trailing newline.
 func encode(v any) (string, error) {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -61,18 +48,9 @@ func encode(v any) (string, error) {
 	return string(b) + "\n", nil
 }
 
-// OpenCode's shape differs from the other two in four ways at once: the command
-// is a single argv array rather than a command plus args, the environment map is
-// called `environment` rather than `env`, it is declared `type: "local"`, and it
-// has a timeout that has to be raised. Each one is an easy thing to get subtly
-// right-looking and wrong.
+// OpenCode wants a single argv array, `environment` rather than `env`, and
+// `type: "local"`. Its default 5000ms timeout suffices for a binary that starts immediately.
 func renderOpenCode(argv []string) (string, error) {
-	// No `timeout`. OpenCode defaults it to 5000ms, and the command here is a
-	// server binary that starts immediately - the ocm-install-server skill has already
-	// put it in place. An earlier design had the MCP command resolve and download
-	// a binary on first use, which did not fit in that default and so needed the
-	// timeout raised; nothing resolves at start-up now, and emitting a number whose
-	// reason no longer applies would be cargo cult.
 	server := map[string]any{
 		"type":        "local",
 		"command":     argv,

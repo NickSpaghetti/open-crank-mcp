@@ -25,13 +25,7 @@ void mcp_override_init(McpOverrideState *ov)
     memset(ov, 0, sizeof(*ov));
 }
 
-/* duration_ms <= 0 holds the button down until something replaces it, the same rule
-   mcp_override_apply_crank uses. See MCP_NO_EXPIRY.
-
-   This used to be now_ms + duration_ms unconditionally, and the asymmetry with the
-   crank was deliberate and documented: nothing exposed a release, so a button held
-   with no expiry could never be let go. The release_button and reset_input tools
-   removed that constraint, so the mechanism is one rule again. */
+/* duration_ms <= 0 holds the button until something replaces it. */
 void mcp_override_apply_press(McpOverrideState *ov, PDButtons button, int duration_ms, long now_ms)
 {
     int idx = mcp_button_index(button);
@@ -46,36 +40,16 @@ void mcp_override_apply_release(McpOverrideState *ov, PDButtons button, int dura
 {
     int idx = mcp_button_index(button);
     if (idx < 0) return;
-    /* Actively forces not-pressed for the duration, symmetric with press -
-       not just clearing the override to passthrough. A passthrough-only
-       release wouldn't actually force the button up if something else was
-       also driving real input (e.g. a human using the visual profile) at
-       the same time.
-
-       Same no-expiry rule as press, so a hand-written command.json means the same
-       thing for both. Nothing in Go sends it: release_button substitutes a real
-       duration, because forcing a button up forever would leave it permanently deaf
-       to the player, and mcp_override_reset is the call that means "hand everything
-       back". */
+    /* Forces not-pressed rather than passthrough, so it wins even while a human
+       is also pressing real buttons. */
     ov->button_override_active[idx] = 1;
     ov->button_override_value[idx] = 0;
     ov->button_override_expires_at_ms[idx] =
         duration_ms > 0 ? now_ms + duration_ms : MCP_NO_EXPIRY;
 }
 
-/* duration_ms <= 0 holds the crank until something else moves it, rather than
-   expiring it immediately.
-
-   The crank is a position, not an event: "set the crank to 123 degrees" means
-   leave it there, the way a real crank stays where it was left. Treating an
-   omitted duration as a zero-length one made set_crank report success and do
-   nothing at all, because mcp_override_expire runs at the top of every frame
-   and now_ms >= now_ms + 0 is immediately true - so the override was created and
-   destroyed before the game ever read it.
-
-   Buttons now take the same rule, and did not when this was written; see
-   mcp_override_apply_press. What the crank still has no equivalent of is a release,
-   so mcp_override_reset is the only way to give a held crank back to the game. */
+/* duration_ms <= 0 holds the crank where it was set, like a real crank;
+   a zero-length expiry would fire before the game ever read it. */
 void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
                               int docked_set, int docked, int duration_ms, long now_ms)
 {
@@ -88,9 +62,7 @@ void mcp_override_apply_crank(McpOverrideState *ov, float angle, float delta,
         duration_ms > 0 ? now_ms + duration_ms : MCP_NO_EXPIRY;
 }
 
-/* Clears the override flags and nothing else. See the header for why this is not
-   mcp_override_init: the edge-tracking fields have to survive so the next
-   mcp_override_update_edges reports the release a held button just had. */
+/* Clears only the override flags; see the header. */
 void mcp_override_reset(McpOverrideState *ov)
 {
     for (int i = 0; i < 6; i++) {
@@ -152,11 +124,8 @@ void mcp_override_get_button_state(const McpOverrideState *ov,
                 current &= ~kButtonBits[i];
             }
         }
-        /* An overridden (or just-was-overridden) button's real
-           pushed/released bit is meaningless - no real hardware edge
-           caused it - so use the synthetic edge from
-           mcp_override_update_edges instead. Untouched buttons pass
-           their real bits through unchanged. */
+        /* Overridden (or just-released-from-override) buttons use the
+           synthetic edges instead of the real ones. */
         if (ov->button_override_active[i] || ov->override_was_active_last_frame[i]) {
             pushed &= ~kButtonBits[i];
             released &= ~kButtonBits[i];
@@ -182,8 +151,6 @@ float mcp_override_get_crank_change(const McpOverrideState *ov, float real_chang
 
 int mcp_override_get_crank_docked(const McpOverrideState *ov, int real_docked)
 {
-    /* Both flags: an active crank override that was not asked to touch the dock
-       must pass the real reading through. */
     return (ov->crank_override_active && ov->crank_override_docked_active)
         ? ov->crank_override_docked : real_docked;
 }
@@ -261,13 +228,6 @@ static int mcp_json_extract_number(const char *value_start, double *out)
     return 0;
 }
 
-/* There is deliberately no mcp_json_extract_bool. There was one, for
-   crank_docked, and it went with that field: the command protocol now has no
-   boolean values at all, because the one place that wanted a bool needed three
-   states (see crank_dock). Under -Wall -Wextra -Werror an unused static function
-   is a build failure, so leaving it "for later" was not an option, and re-adding
-   it is a few lines if a genuinely two-state field ever turns up. */
-
 static McpCommandType mcp_command_type_from_string(const char *s)
 {
     if (strcmp(s, "screenshot") == 0) return MCP_CMD_SCREENSHOT;
@@ -327,10 +287,8 @@ int mcp_parse_command(const char *json, size_t len, McpCommand *out)
     v = mcp_json_find_value(json, "crank_delta");
     if (v && mcp_json_extract_number(v, &num) == 0) out->crank_delta = (float)num;
 
-    /* crank_dock is a three-valued string, not a bool: "docked"/"undocked" ask
-       for an override, anything else (including absent or "unchanged") leaves the
-       game's real dock reading alone. memset above already set both ints to 0,
-       which is the leave-alone case, so an unrecognised value needs no branch. */
+    /* Anything other than "docked"/"undocked" leaves the real dock reading alone
+       (the memset zeros above). */
     char dock_str[16] = {0};
     v = mcp_json_find_value(json, "crank_dock");
     if (v && mcp_json_extract_string(v, dock_str, sizeof(dock_str)) >= 0) {
@@ -357,9 +315,6 @@ int mcp_format_response(const McpResponse *r, char *buf, size_t buflen)
     const char *state_json = (r->state[0] == '\0') ? "null" : r->state;
     const char *entities_json = (r->entities[0] == '\0') ? "null" : r->entities;
 
-    /* harness_version comes from the #define rather than from McpResponse: it is
-       the same for every response this build ever writes, so putting it in the
-       struct would grow the fat struct to carry a constant. */
     int n = snprintf(buf, buflen,
         "{\"id\":\"%s\",\"status\":\"%s\",\"error\":\"%s\",\"format\":\"%s\","
         "\"path\":\"%s\",\"width\":%d,\"height\":%d,\"row_bytes\":%d,\"state\":%s,"
@@ -460,9 +415,8 @@ void mcp_harness_update(PlaydateAPI *pd)
         return;
     }
 
-    /* kFileRead alone only searches the read-only pdx bundle; our files
-       live in the data folder (same place kFileWrite/kFileAppend always
-       write to), which needs kFileReadData. */
+    /* kFileRead alone only searches the read-only pdx bundle; the data folder
+       needs kFileReadData. */
     SDFile *f = pd->file->open(MCP_COMMAND_PATH, kFileReadData);
     if (!f) return;
 
@@ -475,17 +429,8 @@ void mcp_harness_update(PlaydateAPI *pd)
     }
     buf[n] = '\0';
 
-    /* static, not automatic. McpResponse is ~12.9KB (state[4096] +
-       entities[8192] + the fixed fields) and out_buf below is another 13KB, so
-       as locals they put ~25.6KB of automatic storage in a function the game
-       calls every frame. Nothing is given up by making them static: the harness
-       is already single-instance and single-threaded (see g_override above),
-       mcp_harness_update is never reentrant, and neither buffer outlives the
-       call. This is where the fat-struct trade actually costs something, and
-       moving the storage is what keeps the payoff without the cost. No
-       measurable effect in the Simulator, which is the only supported target -
-       it matters for anyone who builds a harnessed game for the device, where
-       the stack is not this generous. */
+    /* static: resp and out_buf are ~26KB together, too much for the device's
+       stack. The harness is single-threaded and never reentrant. */
     McpCommand cmd;
     static McpResponse resp;
     memset(&resp, 0, sizeof(resp));
@@ -531,9 +476,7 @@ void mcp_harness_update(PlaydateAPI *pd)
                 } else {
                     resp.ok = 1;
                 }
-                /* Always false: querySpritesInRect only matches sprites
-                   with a collide rect set, so this is never a complete
-                   list the way Lua's getAllSprites() is. */
+                /* Always false; see McpResponse. */
                 resp.entities_complete = 0;
                 break;
             }
@@ -560,17 +503,8 @@ void mcp_harness_update(PlaydateAPI *pd)
                 }
                 break;
             }
-            /* Unreachable in practice, and kept anyway: mcp_parse_command
-               returns 0 for a type it does not recognise, so an unknown type
-               never gets here - it is answered above with "failed to parse
-               command" instead. Verified on the wire against a real Simulator,
-               which is also the divergence to know about if you are comparing
-               the two harnesses: Lua reports "unknown command type" for the same
-               input, because its dispatch is a chain of string comparisons with
-               a real else branch. Left in place because it is the correct answer
-               for a McpCommandType that exists but has no arm here, which is
-               what a future command type looks like on the day it is added to
-               the enum and not to this switch. */
+            /* Unknown types fail parsing above ("failed to parse command", unlike
+               Lua); this catches an enum value with no arm here. */
             default:
                 resp.ok = 0;
                 strncpy(resp.error, "unknown command type", sizeof(resp.error) - 1);
@@ -580,23 +514,11 @@ void mcp_harness_update(PlaydateAPI *pd)
 
     pd->file->unlink(MCP_COMMAND_PATH, 0);
 
-    /* static for the same reason as resp above. */
-    static char out_buf[13312]; /* room for the fixed fields plus state[4096] and entities[8192] */
+    static char out_buf[13312]; /* fixed fields plus state[4096] and entities[8192] */
     int len = mcp_format_response(&resp, out_buf, sizeof(out_buf));
     if (len > 0) {
-        /* Published by rename, so response.json only ever exists complete. Written
-           in place, a reader can catch it just after the truncating open (zero
-           length) or part-written, with no way to tell short from finished.
-
-           Not a bug anyone hit - 240 calls against a 512KB response on
-           Linux/overlayfs found no partial reads - but it costs one rename, the Go
-           reader's handling of a short read used to be actively destructive, and
-           native mode will run on filesystems nobody has measured.
-
-           The useful side effect: the response becomes a commit point, so the
-           screenshot written earlier in this same dispatch is guaranteed finished
-           before response.json exists, by construction rather than by the order of
-           statements above. */
+        /* Published by rename so a reader never sees it truncated or part-written.
+           It also makes the response a commit point for the screenshot above. */
         SDFile *rf = pd->file->open(MCP_RESPONSE_TMP_PATH, kFileWrite);
         if (rf) {
             pd->file->write(rf, out_buf, (unsigned int)len);

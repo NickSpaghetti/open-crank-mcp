@@ -100,9 +100,6 @@ func TestSendCommandWritesValidJSON(t *testing.T) {
 	}
 }
 
-// A response.json left over from an earlier round trip is what made one slow
-// call desync every later one, so SendCommand clears it before writing the
-// command rather than leaving it for the next WaitForResponse to find.
 func TestSendCommandClearsStaleResponse(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
@@ -153,8 +150,7 @@ func TestWaitForResponseToleratesEmptyFileMidWrite(t *testing.T) {
 	}
 	responsePath := filepath.Join(mcpDir, "response.json")
 
-	// Simulate a non-atomic writer (as every real harness is): the file
-	// exists but is empty for a moment before its content lands.
+	// An older vendored harness writes in place, so the file can exist empty.
 	if err := os.WriteFile(responsePath, nil, 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -172,17 +168,7 @@ func TestWaitForResponseToleratesEmptyFileMidWrite(t *testing.T) {
 	}
 }
 
-// Content that never becomes valid JSON has to be reported, and reported with the
-// content - a bare timeout would say only that nothing arrived, when in fact
-// something did and could not be read.
-//
-// This test replaced one asserting the opposite shape: that a parse failure returns
-// immediately and deletes the file. Both halves of that were wrong. Returning
-// immediately spent none of the deadline the function already had, and deleting
-// unlinked a file a writer might still have open, so a completing write could never
-// land under its own name. The deletion's stated reason - stopping a leftover from
-// wedging the next call - is handled by SendCommand, which clears response.json
-// before every command.
+// Content that never parses is reported with the content, not as a bare timeout.
 func TestWaitForResponseReportsUnparseableContentAfterTheDeadline(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
@@ -194,7 +180,6 @@ func TestWaitForResponseReportsUnparseableContentAfterTheDeadline(t *testing.T) 
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Short, because this path now waits the deadline out on purpose.
 	_, err := WaitForResponse(dir, "1", 200*time.Millisecond)
 	if err == nil {
 		t.Fatal("WaitForResponse: expected an error, got nil")
@@ -204,10 +189,6 @@ func TestWaitForResponseReportsUnparseableContentAfterTheDeadline(t *testing.T) 
 	}
 }
 
-// A short read is content that is about to be finished, so the wait has to survive
-// it. Same shape as TestWaitForResponseToleratesEmptyFileMidWrite, one line
-// different - that test proves the zero-length case was thought about, and this is
-// the case it missed.
 func TestWaitForResponseToleratesPartialFileMidWrite(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
@@ -216,7 +197,6 @@ func TestWaitForResponseToleratesPartialFileMidWrite(t *testing.T) {
 	}
 	responsePath := filepath.Join(mcpDir, "response.json")
 
-	// Non-empty but truncated: valid JSON is coming, it just is not all here.
 	if err := os.WriteFile(responsePath, []byte(`{"id":"1","stat`), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -234,10 +214,8 @@ func TestWaitForResponseToleratesPartialFileMidWrite(t *testing.T) {
 	}
 }
 
-// The destructive half, asserted on its own: a partial read must leave the file
-// alone. Deleting it unlinks a file the writer still has open, so the completing
-// write goes to an orphaned inode and the response never appears - unrecoverable,
-// since the harness has already consumed command.json.
+// Deleting a partial file would send the writer's completing write to an
+// orphaned inode; the harness has already consumed command.json.
 func TestWaitForResponseDoesNotDeleteAPartialFile(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
@@ -258,9 +236,6 @@ func TestWaitForResponseDoesNotDeleteAPartialFile(t *testing.T) {
 	}
 }
 
-// A complete response belonging to someone else is removed, because it will never
-// become ours and leaving it would mean re-reading it until the deadline. This is
-// the case that genuinely needs the removal the parse-failure path gave up.
 func TestWaitForResponseRemovesAMismatchedResponse(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
@@ -280,9 +255,8 @@ func TestWaitForResponseRemovesAMismatchedResponse(t *testing.T) {
 	}
 }
 
-// Unparseable content followed by a valid response for a *different* id: the parse
-// error must not survive as the reported failure once real content has been read
-// and rejected on its merits.
+// A parse error superseded by content that parsed (but mismatched) must not be
+// the reported failure.
 func TestWaitForResponseClearsAStaleParseErrorOnceContentParses(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
@@ -308,10 +282,6 @@ func TestWaitForResponseClearsAStaleParseErrorOnceContentParses(t *testing.T) {
 	}
 }
 
-// A response carrying another call's id must be discarded and waited past, not
-// returned. This is the correlation docs/ROADMAP.md always described and that had
-// never been implemented: against a real game, set_crank timed out at 5.005s and
-// the following press_button consumed its answer in 3ms.
 func TestWaitForResponseSkipsMismatchedID(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
@@ -320,7 +290,6 @@ func TestWaitForResponseSkipsMismatchedID(t *testing.T) {
 	}
 	responsePath := filepath.Join(mcpDir, "response.json")
 
-	// Someone else's answer is already sitting there when the wait starts.
 	if err := os.WriteFile(responsePath, []byte(`{"id":"7","status":"ok","error":"wrong one"}`), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -338,11 +307,8 @@ func TestWaitForResponseSkipsMismatchedID(t *testing.T) {
 	}
 }
 
-// An empty id is accepted rather than rejected, and this is load-bearing: when
-// the C harness fails to parse a command it answers with an empty id, because
-// mcp_parse_command bails before the id is copied. Treating that as a mismatch
-// would turn every C-side parse failure into a five-second timeout instead of the
-// error message it is trying to return.
+// The C harness answers parse failures with an empty id because it bails
+// before reading one.
 func TestWaitForResponseAcceptsEmptyID(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")
@@ -363,9 +329,6 @@ func TestWaitForResponseAcceptsEmptyID(t *testing.T) {
 	}
 }
 
-// A response whose id never matches must time out rather than return the wrong
-// answer. This is the case the old code got wrong in the most damaging way: it
-// returned it, immediately, as if it were the right one.
 func TestWaitForResponseTimesOutRatherThanReturnWrongID(t *testing.T) {
 	dir := t.TempDir()
 	mcpDir := filepath.Join(dir, "mcp")

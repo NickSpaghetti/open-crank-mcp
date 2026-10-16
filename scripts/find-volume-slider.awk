@@ -1,15 +1,9 @@
-# Locates the Simulator's volume slider in a one-pixel-wide column of
-# greyscale pixels taken down its device frame, one value per line.
+# Locates the Simulator's volume slider in a one-pixel greyscale column down its
+# device frame. Against the yellow frame every widget reads dark or light; the
+# longest such run is the trough.
 #
-# The column crosses the LOCK button, the MENU button, the volume trough, the
-# trough's knob and the mute icon. Against the yellow frame every one of those
-# reads as either dark or light, so the runs of non-yellow pixels are the
-# widgets. The trough is the longest of them.
-#
-# Prints "top bottom mute" as row offsets, or nothing at all when the column
-# doesn't look like a device frame. Printing nothing matters: callers treat it
-# as "don't know" and leave the slider alone, which is better than aiming a
-# click at a guess.
+# Prints "top bottom mute volume", or nothing when the column doesn't look like a
+# device frame, so callers leave the slider alone rather than act on a guess.
 #
 # Tunables, all overridable with -v:
 #   skip      rows to ignore at the top, past the LOCK and MENU buttons
@@ -68,10 +62,8 @@ END {
     }
   }
 
-  # The knob is the light run inside the track, and where it sits along the
-  # track is the Simulator's volume. Reading it here is what lets the browser
-  # follow the slider instead of being told about it: the slider is the only
-  # place that volume exists, since the SDK exposes no way to read it.
+  # The knob's position along the track is the Simulator's volume; the SDK
+  # exposes no other way to read it.
   knob_first = 0
   knob_last = 0
   for (row = first[trough]; row <= last[trough]; row++) {
@@ -80,15 +72,13 @@ END {
     knob_last = row
   }
 
-  # -1 rather than 0 for "no knob found": 0 is a legitimate volume, and a
-  # caller that can't tell the two apart would silence the audio on a bad read.
+  # -1 for "no knob found": 0 is a real volume, and acting on it would silence
+  # the audio on a bad read.
   volume = -1
   if (knob_first > 0) {
     knob_height = knob_last - knob_first
-    # The knob's centre can only travel between half its own height from each
-    # end of the track, so those are the ends of the scale rather than the
-    # track's own edges. Without this the reading tops out around 0.93 and
-    # bottoms out around 0.07.
+    # The knob's centre only travels to within half its height of each end, so
+    # those are the ends of the scale, not the track's edges.
     lowest = last[trough] - knob_height / 2
     highest = first[trough] + knob_height / 2
     centre = (knob_first + knob_last) / 2

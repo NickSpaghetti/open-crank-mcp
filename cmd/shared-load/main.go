@@ -1,14 +1,5 @@
 // Command shared-load builds and launches a game in an already-running shared
-// container, by driving the MCP server the same way a client would.
-//
-// It exists because starting the container and loading a game are two separate
-// things, and only the first one had a command. `make up-shared` gets you a
-// container with a display; something still has to call setup, build_game and
-// launch_simulator, and without this that meant either connecting a real MCP
-// client or hand-rolling JSON-RPC.
-//
-// The transport is the same one a client uses: stdio, over
-// `docker compose exec -T simulator-shared open-crank-mcp`. No ports, no HTTP.
+// container, by driving the MCP server over stdio via `docker compose exec`.
 package main
 
 import (
@@ -25,14 +16,10 @@ import (
 	"time"
 )
 
-// Where docker-compose.yml mounts GAME_DIR. Fixed by the shared service, not
-// something the caller chooses.
+// Where docker-compose.yml mounts GAME_DIR.
 const gameDir = "/your-game"
 
-// The compose service and profile this drives. Named once rather than repeated
-// at each `docker compose` call site: they appeared eight times as bare
-// literals across three functions before, which is how a rename leaves a
-// half-finished one behind.
+// The compose service and profile this drives.
 const (
 	service = "simulator-shared"
 	profile = "shared"
@@ -53,8 +40,7 @@ type response struct {
 	} `json:"error"`
 }
 
-// The subset of each tool's output this needs. Everything else is passed
-// through to the caller as the raw JSON it came in as.
+// The subset of each tool's output this needs.
 type buildOutput struct {
 	PdxPath     string `json:"pdx_path"`
 	ProjectType string `json:"project_type"`
@@ -88,8 +74,7 @@ func (c *client) send(method string, params any, wantReply bool) (json.RawMessag
 		return nil, nil
 	}
 
-	// Skipping anything that isn't the reply we're waiting for: the server is
-	// free to emit notifications, and a mismatched id is not an error.
+	// Skip notifications and other ids.
 	for {
 		raw, err := c.stdout.ReadBytes('\n')
 		if err != nil {
@@ -137,16 +122,8 @@ func (c *client) callTool(name string, args map[string]any) (json.RawMessage, er
 // clearRunningSimulators kills any Simulator already running in the container,
 // for the -keep-container path where the container is not being replaced.
 //
-// launch_simulator has no already-running guard, and it can't have a useful one:
-// server state lives in the connection, so a fresh one has no idea a previous
-// session left a Simulator behind. Launching anyway gives two Simulators on one
-// display, both running the same .pdx, so both harnesses poll the same
-// mcp/command.json and a tool response can come back from either.
-//
-// SIGKILL because the Simulator ignores SIGTERM, which is also why the server's
-// own stop_simulator uses it. Server processes are deliberately left alone:
-// killing every open-crank-mcp would disconnect an agent that is connected right
-// now, and an idle server owns nothing once its Simulator is gone.
+// A fresh server session can't see a previous session's Simulator, and two would
+// poll the same mcp/command.json. SIGKILL because the Simulator ignores SIGTERM.
 func clearRunningSimulators(composeFile string) {
 	// pkill exits 0 when it killed something, 1 when there was nothing to kill.
 	cmd := exec.Command("docker", "compose", "-f", composeFile,
@@ -157,17 +134,8 @@ func clearRunningSimulators(composeFile string) {
 }
 
 // recreateContainer tears the shared container down and brings it back up against
-// the current GAME_DIR.
-//
-// Replacing it rather than reusing it, because GAME_DIR is fixed when the
-// container starts: a container left over from a different game keeps serving
-// that game, and every tool then reports confidently about the wrong thing.
-// The failure is quiet and confusing - either "no Playdate project in
-// /your-game" or, worse, a successful build of a game you weren't asking about.
-//
-// The image is rebuilt too. Plain `docker compose build` skips services that
-// declare a profile, so an edit to run-vnc.sh or the Dockerfile would otherwise
-// be silently absent from the container this just started.
+// the current GAME_DIR, which is fixed at container start. The service is built by
+// name because plain `docker compose build` skips services with a profile.
 func recreateContainer(composeFile, gameDir string) error {
 	sdkVersion := os.Getenv("PLAYDATE_SDK_VERSION")
 	if sdkVersion == "" {
@@ -178,8 +146,7 @@ func recreateContainer(composeFile, gameDir string) error {
 		"PLAYDATE_SDK_VERSION="+sdkVersion,
 	)
 
-	// --remove-orphans also clears containers left behind by `docker compose
-	// run`, which hold the project's network open and make `down` complain.
+	// --remove-orphans clears `docker compose run` leftovers that hold the network open.
 	steps := [][]string{
 		{"compose", "-f", composeFile, "--profile", profile, "down", "--remove-orphans"},
 		{"compose", "-f", composeFile, "--profile", profile, "build", service},
@@ -200,24 +167,13 @@ func recreateContainer(composeFile, gameDir string) error {
 }
 
 // waitForServer retries until the container is accepting execs *and* PulseAudio
-// inside it is accepting connections.
-//
-// Both halves matter. A container reports as started before it can be exec'd,
-// and it can be exec'd well before run-vnc.sh has PulseAudio up. The Simulator
-// runs with SDL_AUDIODRIVER=pulseaudio and refuses to start at all without it:
-//
-//	SDL2 could not be initalized (-1 - Could not setup connection to PulseAudio).
-//	SDL2 is required for the Playdate Simulator to run and it will now quit.
-//
-// That is a game that never appears on a freshly started container and works
-// perfectly on a warm one, which reads as flakiness rather than as a missing
-// dependency.
+// inside it is accepting connections. The Simulator, with
+// SDL_AUDIODRIVER=pulseaudio, quits at startup without it.
 func waitForServer(composeFile string) error {
 	deadline := time.Now().Add(90 * time.Second)
 	warned := false
 	for {
-		// pactl talks to the same socket SDL will, so this is the real check
-		// rather than a proxy for it.
+		// pactl talks to the same socket SDL will.
 		cmd := exec.Command("docker", "compose", "-f", composeFile,
 			"exec", "-T", service, "pactl", "info")
 		if err := cmd.Run(); err == nil {
@@ -235,19 +191,12 @@ func waitForServer(composeFile string) error {
 	}
 }
 
-// harnessTimeout is generous on purpose. A cold container has Xvfb, openbox and
-// pulseaudio starting, a first-time build, and a game loading its assets, all at
-// once. 20 seconds was enough on a warm container and not on a cold one, which
-// is the difference between "your game works" and a warning that reads like a
-// broken harness.
+// harnessTimeout is generous because a cold container starts everything at once.
 const harnessTimeout = 45 * time.Second
 
-// waitForHarness polls get_status until the game's harness answers. Returns
-// whether it answered; a game with no harness wired in is not an error.
+// waitForHarness polls get_status until it reports the harness reachable. A game
+// with no harness wired in is not an error.
 func waitForHarness(c *client) (bool, error) {
-	// A floor as well as a poll. get_status can report the harness reachable
-	// immediately, because the IPC it checks is a file in the data directory and
-	// a previous run's response can still be sitting there.
 	start := time.Now()
 	const minimum = 5 * time.Second
 	nextNote := 15 * time.Second
@@ -331,14 +280,8 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("starting the server: %w", err)
 	}
-	// Closed, then waited for. Both halves matter, and it took measuring to
-	// find out: killing the docker client instead tears down the exec session
-	// and takes the Simulator with it, so the game dies about a second after
-	// this command reports it running. Letting the client exit on its own
-	// leaves the Simulator parented to the container's init, which is what
-	// keeps it alive and on screen afterwards.
-	//
-	// The server itself has no shutdown hook, so an EOF on stdin just ends it.
+	// Close stdin and wait rather than kill: killing the docker client tears down
+	// the exec session and takes the Simulator with it.
 	defer func() {
 		_ = stdin.Close()
 		_, _ = cmd.Process.Wait()
@@ -351,8 +294,7 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 		"capabilities":    map[string]any{},
 		"clientInfo":      map[string]any{"name": "shared-load", "version": "1"},
 	}, true); err != nil {
-		// A container that isn't running fails here, and the docker error is
-		// more useful than the read error that surfaces it.
+		// Prefer docker's error, e.g. for a container that isn't running.
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			return fmt.Errorf("%w\n%s", err, msg)
 		}
@@ -362,8 +304,6 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 		return err
 	}
 
-	// Skippable because it rewrites the harness file in your game's source
-	// tree. Worth doing once per game, less welcome on every load.
 	if !skipSetup {
 		out, err := c.callTool("setup", map[string]any{"source_dir": gameDir})
 		if err != nil {
@@ -399,9 +339,7 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 		return err
 	}
 
-	// One relaunch if it never answered. On a cold container the first launch
-	// competes with everything else starting up, and a second attempt usually
-	// answers immediately.
+	// One relaunch: a cold container's first launch often loses the startup race.
 	if !reachable {
 		fmt.Println("harness did not answer, relaunching once")
 		if _, err := c.callTool("restart_simulator", map[string]any{}); err != nil {
@@ -413,9 +351,6 @@ func run(composeFile string, skipSetup, keepContainer bool) error {
 		}
 	}
 
-	// Never report a game as running when its process is gone. That is the
-	// failure that sent someone looking at harness wiring for a game whose
-	// harness was fine.
 	status, err := readStatus(c)
 	if err != nil {
 		return err

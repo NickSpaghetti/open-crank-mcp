@@ -36,10 +36,7 @@ static void test_parse_crank(void)
     assert(cmd.crank_docked == 1);
 }
 
-/* reset carries no fields at all, so the only thing to get wrong is the dispatch
-   string - and getting it wrong is silent, because an unrecognised type is answered
-   with an error the caller sees as "unknown command type" rather than a stuck
-   override. */
+/* reset has no fields, so the dispatch string is all there is to get wrong. */
 static void test_parse_reset(void)
 {
     const char *json = "{\"id\":\"z\",\"type\":\"reset\"}";
@@ -336,7 +333,6 @@ static void test_override_crank(void)
 {
     McpOverrideState ov;
     mcp_override_init(&ov);
-    /* docked_set=1, docked=1: the caller asked for the dock to be forced. */
     mcp_override_apply_crank(&ov, 45.0f, 2.0f, 1, 1, 500, 0);
 
     assert(mcp_override_get_crank_angle(&ov, 999.0f) == 45.0f);
@@ -349,9 +345,7 @@ static void test_override_crank(void)
     assert(mcp_override_get_crank_docked(&ov, 0) == 0);
 }
 
-/* The point of splitting docked_set out: an active crank override that was not
-   asked to touch the dock must leave the game's real reading alone, in both
-   directions. Angle and delta are still overridden. */
+/* A crank override not asked to touch the dock leaves the real reading alone. */
 static void test_override_crank_leaves_dock_alone(void)
 {
     McpOverrideState ov;
@@ -360,14 +354,11 @@ static void test_override_crank_leaves_dock_alone(void)
 
     assert(mcp_override_get_crank_angle(&ov, 999.0f) == 45.0f);
     assert(mcp_override_get_crank_change(&ov, 999.0f) == 2.0f);
-    /* Real value passes straight through, whichever it is. */
     assert(mcp_override_get_crank_docked(&ov, 0) == 0);
     assert(mcp_override_get_crank_docked(&ov, 1) == 1);
 }
 
-/* Forcing undocked has to be distinguishable from not asking. Both leave
-   crank_override_docked at 0, so only docked_set separates them - which is
-   exactly the bug this replaced: a bool could not say "leave it". */
+/* Forcing undocked must differ from not asking; only docked_set separates them. */
 static void test_override_crank_forces_undocked(void)
 {
     McpOverrideState ov;
@@ -378,8 +369,6 @@ static void test_override_crank_forces_undocked(void)
     assert(mcp_override_get_crank_docked(&ov, 0) == 0);
 }
 
-/* Expiry has to clear the dock override too, or a crank command with a dock
-   would keep forcing it after the rest of the override lapsed. */
 static void test_override_crank_expiry_releases_dock(void)
 {
     McpOverrideState ov;
@@ -391,11 +380,8 @@ static void test_override_crank_expiry_releases_dock(void)
     assert(mcp_override_get_crank_docked(&ov, 1) == 1);
 }
 
-/* A crank set with no duration is the case that omitting duration_ms produces,
-   and it used to be the case that quietly did nothing: the override was created
-   and destroyed before any frame could read it, because expire runs at the top
-   of every frame and now_ms >= now_ms + 0. Held forever now. The clock is walked
-   far out to prove it is a sentinel and not just a long deadline. */
+/* No duration holds the crank. The clock is walked far out to prove it is a
+   sentinel and not just a long deadline. */
 static void test_override_crank_zero_duration_holds(void)
 {
     McpOverrideState ov;
@@ -411,9 +397,8 @@ static void test_override_crank_zero_duration_holds(void)
     assert(mcp_override_get_crank_docked(&ov, 0) == 1);
 }
 
-/* A negative duration is the same request as zero. Nothing in the Go layer sends
-   one, but the harness parses whatever is on disk, and "-1" reaching a naive
-   now_ms + duration_ms would expire in the past. */
+/* A negative duration is the same request as zero; the harness parses
+   whatever is on disk, not only what Go sends. */
 static void test_override_crank_negative_duration_holds(void)
 {
     McpOverrideState ov;
@@ -424,8 +409,7 @@ static void test_override_crank_negative_duration_holds(void)
     assert(mcp_override_get_crank_angle(&ov, 999.0f) == 45.0f);
 }
 
-/* A held crank is not permanent, it is just not on a timer. The next crank
-   command replaces it, including one that does have a duration. */
+/* A held crank is replaced by the next crank command, timed or not. */
 static void test_override_crank_held_is_replaceable(void)
 {
     McpOverrideState ov;
@@ -438,13 +422,8 @@ static void test_override_crank_held_is_replaceable(void)
     assert(mcp_override_get_crank_angle(&ov, 999.0f) == 999.0f);
 }
 
-/* Buttons take the crank's no-expiry rule, which is a reversal: this test used to
-   assert the opposite, and the asymmetry was on purpose because nothing exposed a
-   release. release_button and reset_input do now, so a held button can be let go.
-
-   The clock is walked absurdly far past the press, not just one tick, so this cannot
-   pass against a merely long deadline - same shape as
-   test_override_crank_negative_duration_holds below. */
+/* Buttons share the crank's no-expiry rule. The clock is walked far out so a
+   merely long deadline can't pass. */
 static void test_override_press_zero_duration_holds(void)
 {
     McpOverrideState ov;
@@ -461,9 +440,7 @@ static void test_override_press_zero_duration_holds(void)
     assert((cur & kButtonA) != 0);
 }
 
-/* A negative duration is the same request as zero, for the same reason it is for the
-   crank: nothing in Go sends one, but the harness parses whatever is on disk, and a
-   naive now_ms + duration_ms would expire in the past. */
+/* Negative means zero, as for the crank. */
 static void test_override_press_negative_duration_holds(void)
 {
     McpOverrideState ov;
@@ -476,10 +453,8 @@ static void test_override_press_negative_duration_holds(void)
     assert((cur & kButtonA) != 0);
 }
 
-/* A held button is not stuck: a release with a real duration ends it, and that
-   release then expires back to passthrough on its own. This is the whole
-   hold_button -> release_button sequence, which is what makes holding safe to
-   expose at all. */
+/* hold_button -> release_button: a timed release ends a hold, then expires
+   back to passthrough. */
 static void test_override_held_press_is_releasable(void)
 {
     McpOverrideState ov;
@@ -501,9 +476,7 @@ static void test_override_held_press_is_releasable(void)
     assert((cur & kButtonA) != 0); /* and back to what the player is doing */
 }
 
-/* Reset drops every override at once - the point being the crank, which has no
-   release of its own, so before mcp_override_reset a held crank could not be given
-   back to the game at all. */
+/* Reset drops every override, including a held crank, which has no release. */
 static void test_override_reset_clears_buttons_and_crank(void)
 {
     McpOverrideState ov;
@@ -524,10 +497,8 @@ static void test_override_reset_clears_buttons_and_crank(void)
     assert(mcp_override_get_crank_docked(&ov, 1) == 1);
 }
 
-/* The reason mcp_override_reset is not mcp_override_init. A memset would also clear
-   last_effective_pressed/override_was_active_last_frame, and a game holding A would
-   see it stop being pressed with no released edge and no ButtonUp callback. Reverting
-   mcp_override_reset to a memset makes this fail. */
+/* Why reset is not init: a memset would drop edge tracking, so a held A would
+   stop being pressed with no released edge. */
 static void test_override_reset_still_produces_released_edge(void)
 {
     McpOverrideState ov;
@@ -549,9 +520,7 @@ static void test_override_reset_still_produces_released_edge(void)
     assert((released & kButtonA) == 0);
 }
 
-/* crank_dock parsing, all three values plus the absent case. The wire carries a
-   string precisely so these are three distinct states rather than two booleans
-   with one nonsense combination. */
+/* crank_dock parsing: all three values plus the absent case. */
 static void test_parse_crank_dock_modes(void)
 {
     McpCommand cmd;
@@ -567,8 +536,7 @@ static void test_parse_crank_dock_modes(void)
     assert(mcp_parse_command("{\"id\":\"1\",\"type\":\"crank\",\"crank_dock\":\"unchanged\"}", 50, &cmd) == 1);
     assert(cmd.crank_docked_set == 0);
 
-    /* Absent entirely, and an unrecognised value: both leave the dock alone,
-       which is what makes a zeroed command safe. */
+    /* Absent or unrecognised: leave the dock alone. */
     assert(mcp_parse_command("{\"id\":\"1\",\"type\":\"crank\"}", 26, &cmd) == 1);
     assert(cmd.crank_docked_set == 0);
 
@@ -579,10 +547,8 @@ static void test_parse_crank_dock_modes(void)
     assert(cmd.crank_docked_set == 0);
 }
 
-/* A full command, the way the Go server actually writes one: every field
-   present, including the ones this command type does not use. mcp_json_find_value
-   matches on a quoted key, so neighbouring keys that share a prefix must not
-   confuse it. */
+/* A full command as Go writes it, every field present; keys sharing a prefix
+   must not confuse the quoted-key lookup. */
 static void test_parse_full_command_shape(void)
 {
     McpCommand cmd;

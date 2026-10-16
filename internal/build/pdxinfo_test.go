@@ -46,9 +46,7 @@ func TestReadBundleIDMissingKeyIsAnError(t *testing.T) {
 
 func TestReadBundleIDScanErrorIsAnError(t *testing.T) {
 	dir := t.TempDir()
-	// A line longer than bufio.Scanner's default max token size makes
-	// Scan() stop with bufio.ErrTooLong - a real scan error, distinct from
-	// simply reaching EOF without finding bundleID.
+	// A line over bufio.Scanner's max token size yields bufio.ErrTooLong, not EOF.
 	longLine := strings.Repeat("x", bufio.MaxScanTokenSize+1)
 	if err := os.WriteFile(filepath.Join(dir, "pdxinfo"), []byte(longLine), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
@@ -63,13 +61,8 @@ func TestReadBundleIDScanErrorIsAnError(t *testing.T) {
 	}
 }
 
-// pdc builds a project whose pdxinfo has no bundleID, and synthesises one
-// carrying only pdxversion and buildtime. Several of the SDK's own Lua examples
-// ship with no pdxinfo at all, so this is an ordinary thing for a user to hit
-// rather than a corrupt build - and it fails at launch_simulator, two successful
-// tool calls after the actual cause.
-//
-// So the error has to name the remedy, not just the absence.
+// pdc synthesises a pdxinfo with no bundleID for projects without one, so the
+// error has to name the remedy, not just the absence.
 func TestReadBundleIDMissingBundleIDExplainsItself(t *testing.T) {
 	dir := t.TempDir()
 	pdx := filepath.Join(dir, "game.pdx")
